@@ -1,0 +1,4 @@
+# Dependencies for the offline regression suite.
+-r requirements-metric.txt
+-r requirements-imagery.txt
+-r requirements-lidar.txt
