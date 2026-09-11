@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);
-let data=null,view=null,busy=false,animationFrame=0,lastFrame=0,rotation=0;
+let data=null,view=null,busy=false,animationFrame=0,lastFrame=0,rotation=0,initialOrientation=false;
 const motionQuery=window.matchMedia?.('(prefers-reduced-motion: reduce)');
 let reducedMotion=motionQuery?.matches??false;
 const number=value=>Number(value||0).toLocaleString();
@@ -86,6 +86,7 @@ function scheduleDraw(){
 
 function render(){
   const rollup=data.rollup||{},local=data.local||{},performance=data.performance||{};
+  if(!initialOrientation&&data.regions?.length){rotation=Number(data.regions[0].longitude)*Math.PI/180;initialOrientation=true;}
   $('phase').textContent=`${stateLabel(rollup.state)} · ${data.scope?.label||'Earth'}`;
   $('connection').textContent=data.source==='local'?'Local data':'Public snapshot · GitHub Pages';
   $('updated').textContent=data.updated_utc?`Updated ${new Date(data.updated_utc).toLocaleString()}`:'';
