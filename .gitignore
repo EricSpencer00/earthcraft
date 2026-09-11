@@ -26,6 +26,7 @@ __pycache__/
 /runtime/
 /configs/local.json
 /configs/*.local.json
+/configs/atlas-regions.json
 
 /earthcraft.local.code-workspace
 
