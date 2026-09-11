@@ -24,7 +24,7 @@ function updateControls(){
 
 function resizeGlobe(){
   if(!globe)return;
-  const map=$('map');globe.width(map.clientWidth).height(map.clientHeight);
+  const frame=$('map').parentElement;globe.width(frame.clientWidth).height(frame.clientHeight);
 }
 
 function showCoordinate(event){
