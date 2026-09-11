@@ -3,17 +3,17 @@ const EARTH_IMAGE='https://cdn.jsdelivr.net/npm/three-globe@2.45.0/example/img/e
 const TERRAIN_IMAGE='https://cdn.jsdelivr.net/npm/three-globe@2.45.0/example/img/earth-topology.png';
 const number=value=>Number(value||0).toLocaleString();
 const stateLabel=value=>String(value||'unknown').replaceAll('_',' ').replaceAll('-',' ');
-const motionQuery=window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const CELL_COLORS={
-  queued:'rgba(255, 211, 116, .78)',
-  running:'rgba(212, 139, 55, .95)',
-  sourced:'rgba(181, 190, 181, .9)',
-  generated:'rgba(100, 159, 113, .95)',
-  styled:'rgba(53, 113, 76, .98)',
-  verified:'rgba(25, 78, 47, 1)',
-  failed:'rgba(190, 75, 58, .98)'
+  queued:'#d6a649',
+  running:'#c5812c',
+  sourced:'#aeb7ae',
+  generated:'#5d9468',
+  styled:'#35714c',
+  verified:'#194e2f',
+  failed:'#be4b3a'
 };
-let data=null,busy=false,globe=null,hoveredItem=null,reducedMotion=motionQuery?.matches??false;
+const CELL_OPACITY={queued:.12,running:.16,sourced:.09,generated:.14,styled:.18,verified:.22,failed:.18};
+let data=null,busy=false,globe=null,hoveredItem=null;
 
 function setMapMessage(message){$('mapnote').textContent=message}
 
@@ -22,6 +22,7 @@ function formatCoordinate(latitude,longitude){
 }
 
 function cellColor(cell){return CELL_COLORS[cell?.state]||CELL_COLORS.queued}
+function cellOpacity(cell){return CELL_OPACITY[cell?.state]||.12}
 
 function cellLabel(cell){
   const generated=number(cell?.chunks_generated),total=number(cell?.chunks_total);
@@ -31,8 +32,11 @@ function cellLabel(cell){
 function updateControls(){
   if(!globe)return;
   const controls=globe.controls();
-  controls.autoRotate=!reducedMotion&&!document.hidden;
-  controls.autoRotateSpeed=.22;
+  controls.autoRotate=false;
+  controls.enableDamping=true;
+  controls.dampingFactor=.08;
+  controls.rotateSpeed=.55;
+  controls.zoomSpeed=.7;
   controls.enablePan=false;
   controls.minDistance=110;
   controls.maxDistance=380;
@@ -71,7 +75,7 @@ function updateGlobeLayer(){
   globe.tilesData(cellView?cells:[]);
   globe.pointsData(cellView?cells:regions);
   globe.labelsData(view==='regions'?regions:[]);
-  globe.pointRadius(cellView?.65:.6);
+  globe.pointRadius(cellView ? .14 : .6);
   globe.pointColor(cellView?cellColor:()=> 'rgb(45, 96, 65)');
   updateWorkstreamList();
   const generated=cells.reduce((sum,cell)=>sum+Number(cell.chunks_generated||0),0);
@@ -92,15 +96,15 @@ function initGlobe(){
     .backgroundColor('rgba(0,0,0,0)')
     .globeImageUrl(EARTH_IMAGE)
     .bumpImageUrl(TERRAIN_IMAGE)
-    .showGraticules(true)
+    .showGraticules(false)
     .showAtmosphere(true)
     .atmosphereColor('rgb(97, 145, 150)')
     .atmosphereAltitude(.08)
     .pointLat('latitude')
     .pointLng('longitude')
     .pointColor(cellColor)
-    .pointAltitude(.022)
-    .pointRadius(.65)
+    .pointAltitude(.012)
+    .pointRadius(.14)
     .pointResolution(8)
     .pointsMerge(true)
     .pointLabel(cellLabel)
@@ -109,8 +113,8 @@ function initGlobe(){
     .tileWidth('width_deg')
     .tileHeight('height_deg')
     .tileUseGlobeProjection(true)
-    .tileAltitude(.012)
-    .tileMaterial(cell=>new THREE.MeshLambertMaterial({color:cellColor(cell),transparent:true,opacity:.78,side:THREE.DoubleSide}))
+    .tileAltitude(.002)
+    .tileMaterial(cell=>new THREE.MeshBasicMaterial({color:cellColor(cell),transparent:true,opacity:cellOpacity(cell),depthWrite:false,side:THREE.DoubleSide}))
     .tileLabel(cellLabel)
     .tileCurvatureResolution(1)
     .tilesTransitionDuration(0)
@@ -192,7 +196,6 @@ $('auto').onchange=()=>{if($('auto').checked)refresh()};
 $('map').addEventListener('pointermove',showCoordinate);
 $('map').addEventListener('pointerleave',()=>{hoveredItem=null;$('cell').textContent='Move over the globe to inspect a cell.'});
 window.addEventListener('resize',resizeGlobe);
-document.addEventListener('visibilitychange',()=>{if(document.hidden)globe?.pauseAnimation();else{globe?.resumeAnimation();updateControls()}});
-motionQuery?.addEventListener?.('change',event=>{reducedMotion=event.matches;updateControls()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)globe?.pauseAnimation();else globe?.resumeAnimation()});
 refresh();
 setInterval(()=>{if($('auto').checked&&!document.hidden)refresh()},10000);
