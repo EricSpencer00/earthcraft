@@ -1,10 +1,13 @@
 {
-  "schema_version": "design-0",
+  "schema_version": "design-1",
   "status": "planning_only",
   "project": "earthcraft",
   "area": {
     "center_wgs84_lon_lat": null,
-    "size_m": [256, 256],
+    "size_m": [
+      256,
+      256
+    ],
     "context_halo_m": 32,
     "projected_crs": null,
     "target_capture_date": null
@@ -14,18 +17,30 @@
     "target_version": "1.21.10",
     "version_reason": "Installed local release; exporter compatibility remains untested",
     "metres_per_block": 1.0,
-    "axis_mapping": {"x": "east", "z": "south", "y": "up"},
+    "axis_mapping": {
+      "x": "east",
+      "z": "south",
+      "y": "up"
+    },
     "vertical_offset_m": null,
     "vertical_datum": null,
     "height_overflow": "fail_with_extent_report",
-    "output_root": "worlds",
+    "output_root": "external:worlds",
     "appearance_mode": "faithful",
     "interiors": "unknown_empty_shell",
     "manual_overlay": true
   },
   "acquisition": {
-    "preferred": ["osm_vectors", "public_lidar_or_dem", "licensed_orthophoto", "user_owned_street_photos"],
-    "optional": ["overture_buildings", "mapillary_after_access_review"],
+    "preferred": [
+      "osm_vectors",
+      "public_lidar_or_dem",
+      "licensed_orthophoto",
+      "user_owned_street_photos"
+    ],
+    "optional": [
+      "overture_buildings",
+      "mapillary_after_access_review"
+    ],
     "google_content": "not_enabled_under_standard_terms",
     "network_mode_after_fetch": "offline",
     "max_images": 100
@@ -39,15 +54,31 @@
     "max_concurrent_models": 1,
     "depth_candidate": "apple/ml-depth-pro",
     "depth_backend": "pytorch_mps_if_smoke_test_passes",
-    "cloud_fallback": false
+    "cloud_fallback": false,
+    "image_batch_size": 1,
+    "max_output_tokens_per_crop": 1024
   },
   "budgets": {
-    "total_project_disk_gib": 15,
-    "minimum_free_disk_gib": 20,
-    "model_cache_gib": 6,
-    "source_cache_gib": 4,
-    "derived_and_output_gib": 5,
-    "process_memory_target_gib": 24,
+    "internal_project_disk_gib": 12,
+    "internal_minimum_free_gib": 20,
+    "internal_allocations_gib": {
+      "dependencies_and_build_cache": 4,
+      "active_model_cache": 6,
+      "state_scratch_and_playtest": 2
+    },
+    "external_project_disk_gib": 100,
+    "external_minimum_free_gib": 100,
+    "external_allocations_gib": {
+      "raw_sources": 40,
+      "derived_and_world_archives": 30,
+      "model_archives": 20,
+      "transfer_staging": 10
+    },
+    "process_tree_memory_target_gib": 24,
+    "process_tree_memory_stop_gib": 32,
+    "swap_growth_pause_gib": 2,
+    "cpu_preprocessing_workers": 4,
+    "world_writer_workers": 1,
     "pilot_walltime_target_minutes": 60,
     "status": "proposed_caps_and_targets_not_measurements"
   },
@@ -56,5 +87,17 @@
     "freeze_raw_inputs": true,
     "freeze_inference_outputs": true,
     "compare_canonical_scene_and_blocks": true
+  },
+  "storage": {
+    "profile": "internal_apfs_external_bulk",
+    "local_override": "configs/local.json",
+    "internal_root": "./runtime",
+    "external_root": null,
+    "external_root_required": true,
+    "missing_external_volume": "stop_without_internal_fallback",
+    "active_state_location": "internal",
+    "active_model_location": "internal",
+    "bulk_assets_and_archives_location": "external",
+    "completion_policy": "checksum_then_complete_manifest"
   }
 }
