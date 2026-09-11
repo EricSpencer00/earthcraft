@@ -71,7 +71,7 @@ function updateGlobeLayer(){
   globe.tilesData(cellView?cells:[]);
   globe.pointsData(cellView?cells:regions);
   globe.labelsData(view==='regions'?regions:[]);
-  globe.pointRadius(cellView?.22:.6);
+  globe.pointRadius(cellView?.65:.6);
   globe.pointColor(cellView?cellColor:()=> 'rgb(45, 96, 65)');
   updateWorkstreamList();
   const generated=cells.reduce((sum,cell)=>sum+Number(cell.chunks_generated||0),0);
@@ -100,7 +100,7 @@ function initGlobe(){
     .pointLng('longitude')
     .pointColor(cellColor)
     .pointAltitude(.022)
-    .pointRadius(.22)
+    .pointRadius(.65)
     .pointResolution(8)
     .pointsMerge(true)
     .pointLabel(cellLabel)
@@ -132,6 +132,8 @@ function initGlobe(){
       map.style.cursor=item?'pointer':'grab';
       if(item)$('cell').textContent=cellLabel(item).replace('<br>',' · ');
     })
+    .onPointClick(item=>globe.pointOfView({lat:item.latitude,lng:item.longitude,altitude:.42},700))
+    .onTileClick(item=>globe.pointOfView({lat:item.latitude,lng:item.longitude,altitude:.42},700))
     .onGlobeClick(({lat,lng})=>{$('cell').textContent=`Approximate coordinate ${formatCoordinate(lat,lng)}.`})
     .showPointerCursor(true);
   }catch(error){
