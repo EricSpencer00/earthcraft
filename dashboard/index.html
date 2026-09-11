@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Earthcraft · Global observatory</title>
   <link rel="stylesheet" href="./style.css">
-  <script src="./app.js?v=orientation-1" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js" defer></script>
+  <script src="./app.js?v=globe-gl-1" defer></script>
 </head>
 <body>
   <header>
@@ -29,7 +30,7 @@
     <div class="workspace">
       <section class="atlas">
         <div class="maphead"><h2>Measured regions</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
-        <div class="mapwrap"><canvas id="map" aria-label="Rotating globe showing known Earthcraft regions and workstream state"></canvas><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
+        <div class="mapwrap"><div id="map" role="img" aria-label="Interactive Earth globe showing known Earthcraft regions and workstream state"></div><div id="workstream-list" class="globe-list" hidden></div><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
         <div class="legend"><span><i class="known"></i>Measured region</span><span><i class="planned"></i>Planned foundation</span><span>No mark means no evidence yet</span></div>
         <p class="caption">Blank means not measured.</p>
         <p id="cell" aria-live="polite">Move over the globe to inspect a coordinate.</p>
