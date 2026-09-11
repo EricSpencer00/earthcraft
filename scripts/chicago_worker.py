@@ -108,7 +108,7 @@ def promote_styled_shell(observed,source,world,compile_fn=compile_layer,verify_f
 
 
 def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_points=False,assembly=None,way_index=None,
-        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,styled_buildings=False):
+        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,retry_tiles=(),styled_buildings=False):
     plan=json.loads((plan_dir/'plan.json').read_text());catalog=json.loads(catalog_path.read_text())
     if catalog['world_plan_sha256']!=digest(plan):raise ValueError('Source catalog does not match city plan')
     tiles={t['id']:t for t in plan['tiles']};jobs={j['tile']:j for j in catalog['jobs']}
@@ -126,8 +126,10 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
     source_order={tile: min((str(value) for value in jobs[tile]['source_tiles']), default='~')
                   for tile in jobs}
     journal=Journal(plan_dir/'jobs.sqlite',plan,source_order=source_order)
-    if retry_failed:
-        retried=journal.requeue_failed(('sources','geometry'))
+    if retry_failed or retry_tiles:
+        # A targeted retry never revives unrelated historical validation
+        # failures. Broad retry remains an explicit recovery tool only.
+        retried=journal.requeue_failed(('sources','geometry'),tiles=retry_tiles or None)
         print(f'REQUEUED FAILED JOBS: {retried}',flush=True)
     processed=0;failures=0;geometry_failures=0
     point_cache=PointCache(point_cache_bytes)
@@ -314,6 +316,8 @@ if __name__=='__main__':
                    help='Keep near tiles priority-ordered, then batch by shared LAS member (default 200)')
     p.add_argument('--retry-failed',action='store_true',
                    help='Explicitly return failed source/geometry jobs to pending; failure receipts remain audited')
+    p.add_argument('--retry-tile',action='append',default=[],metavar='TILE',
+                   help='Retry one recorded failed tile only; repeat for another tile without reviving unrelated failures')
     p.add_argument('--styled-buildings',action='store_true',
                    help='Preserve raw observations and assemble a verified deterministic shell sibling for new tiles')
     a=p.parse_args()
@@ -336,7 +340,8 @@ if __name__=='__main__':
             if not 0 <= a.source_locality_after <= 1e9:
                 raise ValueError('--source-locality-after must be between 0 and 1e9')
             run(a.plan,a.catalog,a.output,a.limit,a.source_parent,a.bulk,a.release_derived_points,
-                a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,a.retry_failed,a.styled_buildings)
+                a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,
+                a.retry_failed,a.retry_tile,a.styled_buildings)
         finally:
             if index:index.close()
             sys.stdout=sys.stdout.original;sys.stderr=sys.stderr.original

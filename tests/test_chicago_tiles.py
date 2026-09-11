@@ -133,6 +133,21 @@ class ChicagoTileTests(unittest.TestCase):
             self.assertEqual(journal.requeue_failed(('sources',)),0)
             journal.close()
 
+    def test_targeted_retry_leaves_other_failed_tiles_fenced(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); plan=fixture_plan(); journal=Journal(root/'jobs.sqlite',plan)
+            failed=[]
+            for sequence in range(2):
+                job=journal.claim('sources','worker',now=sequence+1)
+                failure=root/f'failure-{sequence}.json'
+                failure.write_text(json.dumps(dict(job,result='failed',error='independent validation')))
+                journal.fail(job,failure); failed.append(job['tile'])
+            self.assertEqual(journal.requeue_failed(('sources',),tiles=(failed[0],)),1)
+            states=dict(journal.db.execute('SELECT tile,state FROM jobs WHERE stage=0'))
+            self.assertEqual(states[failed[0]],'pending')
+            self.assertEqual(states[failed[1]],'failed')
+            journal.close()
+
     def test_named_route_precedes_locality_but_keeps_running_jobs(self):
         with tempfile.TemporaryDirectory() as folder:
             plan=fixture_plan();path=Path(folder)/'jobs.sqlite';journal=Journal(path,plan)
