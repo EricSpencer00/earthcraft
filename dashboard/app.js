@@ -99,7 +99,7 @@ function render(){
   if(globe){
     const regions=data.regions||[];
     globe.pointsData(regions);
-    if(regions[0]&&!globe.__positioned){globe.pointOfView({lat:regions[0].latitude,lng:regions[0].longitude,altitude:3.2},0);globe.__positioned=true;}
+    if(regions[0]&&!globe.__positioned){globe.pointOfView({lat:regions[0].latitude,lng:regions[0].longitude,altitude:4.5},0);globe.__positioned=true;}
     setMapMessage(regions.length?`${number(regions.length)} region${regions.length===1?'':'s'} indexed · interactive globe`:'No measured regions yet');
     updateControls();resizeGlobe();
   }
