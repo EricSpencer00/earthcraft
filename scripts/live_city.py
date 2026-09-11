@@ -38,7 +38,7 @@ def allowed(name,mode):
     if not name.startswith('minecraft:'):return False
     local=name[10:]
     concrete=local.endswith('_concrete') and local[:-9] in COLORS
-    return concrete if mode=='pavement' else concrete or local in BASE or local in STAINED_GLASS
+    return concrete if mode=='pavement' else concrete or local in BASE or local in STAINED_GLASS or (mode=='building_delta' and local=='air')
 
 
 def encode_chunk(tag,frame,provenance):
@@ -69,14 +69,17 @@ def encode_chunk(tag,frame,provenance):
 
 
 def validate(p):
-    if p['version']!=1 or p['mode'] not in ('new_chunk','pavement'):raise ValueError('Version/mode')
+    if p['version']!=1 or p['mode'] not in ('new_chunk','pavement','building_delta'):raise ValueError('Version/mode')
     if len(p['palette'])>64 or not all(allowed(s,p['mode']) for s in p['palette']):raise ValueError('Palette')
     if any(type(p[k]) is not int or abs(p[k])>10000 for k in ('cx','cz')):raise ValueError('Chunk coordinate')
     end=0;total=0
+    delta=p['mode']=='building_delta'
+    if len(p['runs'])>262144:raise ValueError('Run count')
     for r in p['runs']:
-        if len(r)!=3 or not all(type(x) is int for x in r):raise ValueError('Run shape')
-        start,n,v=r
-        if start<end or n<1 or start+n>262144 or not 0<=v<len(p['palette']):raise ValueError('Run range')
+        if len(r)!=(4 if delta else 3) or not all(type(x) is int for x in r):raise ValueError('Run shape')
+        start,n,*codes=r
+        if start<end or n<1 or start+n>262144 or any(not 0<=v<len(p['palette']) for v in codes):raise ValueError('Run range')
+        if delta and (p['palette'][codes[1]]=='minecraft:air' or codes[0]==codes[1]):raise ValueError('Delta must add or recolor; no removals or no-op runs')
         end=start+n;total+=n
     if total!=p['cells']:raise ValueError('Cell count')
     return p
@@ -84,11 +87,21 @@ def validate(p):
 
 def publish(exchange,patch):
     validate(patch)
-    raw=gzip.compress(json.dumps(patch,sort_keys=True,separators=(',',':')).encode(),mtime=0)
+    encoded=json.dumps(patch,sort_keys=True,separators=(',',':')).encode()
+    if len(encoded)>8_000_000:raise ValueError('Expanded patch cap')
+    raw=gzip.compress(encoded,mtime=0)
     if len(raw)>2_000_000:raise ValueError('Compressed patch cap')
     identity=digest(raw);path=exchange/'inbox'/f'{identity}.json.gz'
     if not path.exists() and not (exchange/'receipts'/f'{identity}.json').exists():atomic(path,raw)
     return identity
+
+
+def archive_receipted(exchange):
+    # The inbox is bounded; the receipt history is not. Inspect at most the
+    # pending files instead of rescanning every historic city patch each tick.
+    for source in (exchange/'inbox').glob('*.json.gz'):
+        if (exchange/'receipts'/source.name[:-3]).exists():
+            source.rename(exchange/'archive'/source.name)
 
 
 def initialize(exchange,world,config):
@@ -133,22 +146,42 @@ def paint_patches(painted,frame):
                             'sha256':sha(painted/'ground-appearance.json'),'geometry_changed':False,'llm_used':False}))
 
 
+def cached_region(region,expected,checked,cache):
+    """Verify a source region before returning its one-entry decoded cache."""
+    key=str(region)
+    stamp=(region.stat().st_size,region.stat().st_mtime_ns)
+    if key not in checked:
+        if sha(region)!=expected:raise ValueError('Verified region changed')
+        checked[key]=stamp
+    if checked[key]!=stamp:raise ValueError('Immutable region changed since admission')
+    if cache.get('key')==key:
+        return cache['chunks']
+    chunks=read_region(region)
+    if (region.stat().st_size,region.stat().st_mtime_ns)!=stamp:raise ValueError('Source changed during read')
+    cache.clear();cache.update(key=key,chunks=chunks)
+    return chunks
+
+
 def feed(exchange,journal,once=False):
     lock=(exchange/'publisher.lock').open('a+')
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     binding=json.loads((exchange/'binding.json').read_text());protected=set(binding['protected_chunks'])
-    frame=binding['frame'];seen=set();checked={};processed=set()
+    frame=binding['frame'];seen=set();checked={};processed=set();cache={};complete_regions={}
     state=exchange/'published.json'
-    if state.exists():seen=set(json.loads(state.read_text())['chunks'])
+    if state.exists():
+        previous=json.loads(state.read_text());seen=set(previous['chunks'])
+        complete_regions=dict(previous.get('complete_regions',{}))
+
+    def save_state():
+        atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,'time':time.time()}).encode())
     # Archived content is bounded to 1 GiB. Originals remain at their immutable source paths.
     while True:
         if (exchange/'pause').exists():
-            if once:return
+            if once:
+                lock.close();return
             time.sleep(1);continue
-        if shutil.disk_usage(ROOT).free<22*2**30:raise RuntimeError('Internal 22 GiB reserve reached')
-        for receipt in (exchange/'receipts').glob('*.json'):
-            source=exchange/'inbox'/(receipt.stem+'.json.gz')
-            if source.exists():source.rename(exchange/'archive'/source.name)
+        if shutil.disk_usage(ROOT).free<20*2**30:raise RuntimeError('Internal 20 GiB reserve reached')
+        archive_receipted(exchange)
         if sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
         room=128-len(list((exchange/'inbox').glob('*.gz')))
         with sqlite3.connect(f'file:{journal}?mode=ro',uri=True) as db:
@@ -168,13 +201,16 @@ def feed(exchange,journal,once=False):
             all_done=True
             for name,h in sorted(r['regions'].items()):
                 region=world/'region'/name
+                region_key=str(region)
+                # Even an already-complete region is admitted again on restart so a
+                # changed source cannot be silently hidden by saved progress.
                 stamp=(region.stat().st_size,region.stat().st_mtime_ns)
-                if str(region) not in checked:
+                if region_key not in checked:
                     if sha(region)!=h:raise ValueError('Verified region changed')
-                    checked[str(region)]=stamp
-                if checked[str(region)]!=stamp:raise ValueError('Immutable region changed since admission')
-                chunks=read_region(region)
-                if (region.stat().st_size,region.stat().st_mtime_ns)!=stamp:raise ValueError('Source changed during read')
+                    checked[region_key]=stamp
+                if checked[region_key]!=stamp:raise ValueError('Immutable region changed since admission')
+                if complete_regions.get(region_key)==h:continue
+                chunks=cached_region(region,h,checked,cache)
                 for (cx,cz),tag in chunks.items():
                     key=f'{cx},{cz}'
                     if key in protected or key in seen:continue
@@ -182,11 +218,14 @@ def feed(exchange,journal,once=False):
                     p=encode_chunk(tag,frame,{'tile':tile,'receipt':str(path),'receipt_sha256':expected,
                                             'region_sha256':h,'physical_accuracy_verified':False,'llm_used':False})
                     publish(exchange,p);seen.add(key);room-=1;published+=1
-                    atomic(state,json.dumps({'chunks':sorted(seen),'time':time.time()}).encode())
+                    save_state()
+                if all(f'{cx},{cz}' in protected or f'{cx},{cz}' in seen for cx,cz in chunks):
+                    complete_regions[region_key]=h;save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)
         if published:print(json.dumps({'queued_new_chunks':published,'total_published':len(seen),'time':time.time()}),flush=True)
-        if once:return
+        if once:
+            lock.close();return
         time.sleep(5)
 
 

@@ -32,7 +32,7 @@ public final class LiveImport implements ModInitializer {
     ExecutorService io;
     Future<Job> loading;
     Job active;
-    int runIndex, runOffset, written, skipped, ticks;
+    int runIndex, runOffset, written, skipped, already, conflicts, ticks;
     long maxBatchNanos;
     boolean enabled;
     static final class Job {
@@ -87,6 +87,8 @@ public final class LiveImport implements ModInitializer {
         if(error!=null)s.addProperty("error",error);
         if(active!=null){s.addProperty("chunk",active.key);s.addProperty("written",written);}
         s.addProperty("budget_ms",3);s.addProperty("max_batch_ms",maxBatchNanos/1e6);
+        s.addProperty("capability_version",1);JsonArray modes=new JsonArray();
+        for(String mode:List.of("new_chunk","pavement","building_delta"))modes.add(mode);s.add("modes",modes);
         atomic(root.resolve("status.json"),s);
     }
     static String sha(byte[] b)throws Exception{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(b));}
@@ -113,22 +115,24 @@ public final class LiveImport implements ModInitializer {
             Job j=new Job();j.path=p;j.id=id;j.data=d;j.cx=d.get("cx").getAsInt();j.cz=d.get("cz").getAsInt();
             if(Math.abs((long)j.cx)>10000||Math.abs((long)j.cz)>10000)throw new IOException("Outside Chicago importer envelope");
             j.key=j.cx+","+j.cz;j.mode=d.get("mode").getAsString();
-            if(!Set.of("new_chunk","pavement").contains(j.mode))throw new IOException("Invalid mode");
+            if(!Set.of("new_chunk","pavement","building_delta").contains(j.mode))throw new IOException("Invalid mode");
             JsonArray palette=d.getAsJsonArray("palette"), runs=d.getAsJsonArray("runs");
             if(palette.size()>64||runs.size()>262144)throw new IOException("Patch count limit");
             // Registry access remains on the server thread, not this I/O thread.
             for(JsonElement name:palette){String n=name.getAsString();
+                if(j.mode.equals("building_delta")&&n.equals("minecraft:air"))continue;
                 String local=n.replaceFirst("^minecraft:","");
                 boolean concrete=local.endsWith("_concrete")&&COLORS.contains(local.substring(0,local.length()-9));
                 if(!n.startsWith("minecraft:")||!(concrete||STAINED_GLASS.contains(local)||Arrays.asList(BASE.split(",")).contains(local)))throw new IOException("Unsupported block "+n);
                 if(j.mode.equals("pavement")&&!concrete)throw new IOException("Pavement accepts only concrete");
             }
-            j.runs=new int[runs.size()][3];int end=0,total=0;
+            j.runs=new int[runs.size()][j.mode.equals("building_delta")?4:3];int end=0,total=0;
             for(int k=0;k<runs.size();k++){
-                JsonArray r=runs.get(k).getAsJsonArray();if(r.size()!=3)throw new IOException("Run shape");
+                JsonArray r=runs.get(k).getAsJsonArray();int width=j.mode.equals("building_delta")?4:3;if(r.size()!=width)throw new IOException("Run shape");
                 int a=r.get(0).getAsInt(),n=r.get(1).getAsInt(),v=r.get(2).getAsInt();
                 if(a<end||n<1||a>262144-n||v<0||v>=palette.size())throw new IOException("Invalid/overlapping run");
-                j.runs[k]=new int[]{a,n,v};end=a+n;total+=n;
+                if(width==4){int target=r.get(3).getAsInt();if(target<0||target>=palette.size()||palette.get(target).getAsString().equals("minecraft:air"))throw new IOException("Invalid delta target");j.runs[k]=new int[]{a,n,v,target};}
+                else j.runs[k]=new int[]{a,n,v};end=a+n;total+=n;
             }
             if(total!=d.get("cells").getAsInt())throw new IOException("Cell count mismatch");
             return j;
@@ -144,16 +148,21 @@ public final class LiveImport implements ModInitializer {
     void receipt(Job j,String result)throws IOException{
         JsonObject r=new JsonObject();r.addProperty("patch",j.id);r.addProperty("chunk",j.key);r.addProperty("mode",j.mode);
         r.addProperty("result",result);r.addProperty("written",written);r.addProperty("skipped",skipped);
+        r.addProperty("already_target",already);r.addProperty("conflicts",conflicts);r.addProperty("capability_version",1);
+        JsonArray modes=new JsonArray();for(String mode:List.of("new_chunk","pavement","building_delta"))modes.add(mode);r.add("modes",modes);
         r.addProperty("max_batch_ms",maxBatchNanos/1e6);r.addProperty("time",java.time.Instant.now().toString());
         r.addProperty("saved_and_reloaded_verified",false);
+        r.addProperty("edit_history_preservation_verified",false);
+        r.addProperty("delta_cas_policy","Current default BlockState must equal expected; original air/history cannot be proven");
         atomic(receipts.resolve(j.id+".json"),r);
         System.out.println("[Earthcraft live] "+result+" "+j.key+" written="+written+" skipped="+skipped);
     }
     void begin(class_3218 world,Job j)throws Exception{
-        written=skipped=runIndex=runOffset=0;maxBatchNanos=0;
+        written=skipped=already=conflicts=runIndex=runOffset=0;maxBatchNanos=0;
         if(Files.exists(root.resolve("started-"+j.id+".json"))){receipt(j,"interrupted_requires_review");return;}
         if(j.mode.equals("new_chunk")&&protectedChunks.contains(j.key)){receipt(j,"protected_existing_chunk");return;}
         Path claim=root.resolve("claimed-"+j.key+".json");
+        if(j.mode.equals("building_delta")&&!protectedChunks.contains(j.key)&&!Files.exists(claim)){receipt(j,"unowned_chunk_preserved");return;}
         if(j.mode.equals("new_chunk")&&Files.exists(claim)){receipt(j,"previously_claimed_chunk_preserved");return;}
         var chunk=world.method_8497(j.cx,j.cz); // World.getChunk: load on server thread.
         if(j.mode.equals("new_chunk")){
@@ -179,7 +188,7 @@ public final class LiveImport implements ModInitializer {
                     Job j=loading.get();loading=null;
                     if(j!=null){
                         // Delay (not reject) while someone is close enough to edit new terrain.
-                        if(j.mode.equals("new_chunk")&&nearPlayer(world,j)){deferred.put(j.id,System.currentTimeMillis()+5000);return;}
+                        if((j.mode.equals("new_chunk")||j.mode.equals("building_delta"))&&nearPlayer(world,j)){deferred.put(j.id,System.currentTimeMillis()+5000);return;}
                         begin(world,j);
                     }
                 }
@@ -187,18 +196,20 @@ public final class LiveImport implements ModInitializer {
                 return;
             }
             Job j=active;
-            if(j.mode.equals("new_chunk")&&nearPlayer(world,j)){receipt(j,"player_approached_partial_preserved");active=null;return;}
+            if((j.mode.equals("new_chunk")||j.mode.equals("building_delta"))&&nearPlayer(world,j)){receipt(j,"player_approached_partial_preserved");active=null;return;}
             long start=System.nanoTime();int count=0;
             while(runIndex<j.runs.length&&count<16384&&System.nanoTime()-start<3_000_000){
                 int[] r=j.runs[runIndex];int index=r[0]+runOffset;
                 class_2338 pos=new class_2338(j.cx*16+(index&15),(index>>8)-64,j.cz*16+((index>>4)&15));
-                var old=world.method_8320(pos);var target=j.states[r[2]];
-                boolean allowed=j.mode.equals("new_chunk")?old.method_26215():old==j.pavement;
-                if(allowed&&old!=target){
+                var old=world.method_8320(pos);var target=j.states[j.mode.equals("building_delta")?r[3]:r[2]];
+                boolean entity=j.mode.equals("building_delta")&&world.method_8497(j.cx,j.cz).method_12021().contains(pos);
+                boolean allowed=j.mode.equals("new_chunk")?old.method_26215():j.mode.equals("pavement")?old==j.pavement:!entity&&old==j.states[r[2]];
+                if(j.mode.equals("building_delta")&&old==target){already++;skipped++;}
+                else if(allowed&&old!=target){
                     // Notify clients; force state, skip drops, no recursive neighbour physics.
                     if(!world.method_8652(pos,target,50)||world.method_8320(pos)!=target)throw new IOException("Block mutation/readback failed");
                     written++;
-                }else skipped++;
+                }else {skipped++;if(j.mode.equals("building_delta"))conflicts++;}
                 count++;runOffset++;if(runOffset==r[1]){runIndex++;runOffset=0;}
             }
             maxBatchNanos=Math.max(maxBatchNanos,System.nanoTime()-start);
