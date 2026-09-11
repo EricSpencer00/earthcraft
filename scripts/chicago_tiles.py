@@ -108,7 +108,20 @@ class Journal:
     def __init__(self,path,plan,source_order=None):
         self.db=sqlite3.connect(path,timeout=20,isolation_level=None)
         self.db.row_factory=sqlite3.Row
-        self.db.execute('PRAGMA journal_mode=WAL')
+        # Multiple tile workers can open the journal at the same instant.  WAL
+        # mode changes the database header, so SQLite may briefly report a
+        # startup lock even though the connection timeout is set.  Retry that
+        # one-time mode negotiation explicitly; later lease transactions keep
+        # using SQLite's normal busy timeout.
+        self.db.execute('PRAGMA busy_timeout=20000')
+        for attempt in range(8):
+            try:
+                self.db.execute('PRAGMA journal_mode=WAL')
+                break
+            except sqlite3.OperationalError as error:
+                if 'locked' not in str(error).lower() or attempt == 7:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs (

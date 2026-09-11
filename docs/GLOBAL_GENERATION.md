@@ -99,8 +99,18 @@ with the shared 1,024-block vertical envelope. The pre-change writer took
 0.1775 s and emitted 1,024 explicit sections. The sparse writer took 0.0272 s,
 emitted 176 sections, omitted 848 air sections, and expanded to the same block
 payload. That is a 6.53× synthetic writer speedup, not a city or planetary
-throughput claim. The multi-worker city path still needs a real frozen-tile
-1/2/4/8-worker benchmark before choosing its default count.
+throughput claim.
+
+The first frozen worker sweep used 64 independent 64 m terrain-only tiles,
+the real `chicago_worker.py` entry point, the same source parent, and no
+network or LAS work. Wall time was 3.980 s at one worker, 3.025 s at two,
+2.215 s at four, and 2.042 s at eight: 1.32×, 1.80×, and 1.95× speedups.
+The 16 m micro-tile sweep went the other way because process startup dominated
+the work. This supports a bounded default of four to eight workers for useful
+tile batches, while tiny or interactive jobs should remain single-worker.
+These are synthetic throughput measurements; a source-heavy urban benchmark
+still has to record cache hits, network bytes, memory, SQLite wait time, and
+replay hashes before changing production defaults.
 
 ## Progress surface
 
