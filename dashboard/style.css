@@ -43,10 +43,10 @@ h2{font:normal 27px var(--font-display);margin:0}
 .globe-list i.implemented{background:var(--green)}
 .legend{display:flex;gap:20px;flex-wrap:wrap;font-size:11px;margin-top:14px;color:var(--muted)}
 i{display:inline-block;width:9px;height:9px;margin-right:5px}
-.queued{background:var(--amber)}
 .sourced{background:#b5beb5}
 .generated{background:#649f71}
 .verified{background:#194e2f}
+.failed{background:#be4b3a}
 .caption,#cell{font-size:12px;color:var(--muted);margin:10px 0}
 aside{padding-top:3px}
 dl{margin:18px 0}

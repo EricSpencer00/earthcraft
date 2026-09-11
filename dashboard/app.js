@@ -13,6 +13,7 @@ const CELL_COLORS={
   failed:'#be4b3a'
 };
 const CELL_OPACITY={queued:.12,running:.16,sourced:.09,generated:.14,styled:.18,verified:.22,failed:.18};
+const EVIDENCE_STATES=new Set(['running','sourced','generated','styled','verified','failed']);
 let data=null,busy=false,globe=null,hoveredItem=null;
 
 function setMapMessage(message){$('mapnote').textContent=message}
@@ -23,10 +24,15 @@ function formatCoordinate(latitude,longitude){
 
 function cellColor(cell){return CELL_COLORS[cell?.state]||CELL_COLORS.queued}
 function cellOpacity(cell){return CELL_OPACITY[cell?.state]||.12}
+function observedCells(cells){return cells.filter(cell=>EVIDENCE_STATES.has(cell.state))}
 
 function cellLabel(cell){
   const generated=number(cell?.chunks_generated),total=number(cell?.chunks_total);
   return `${cell?.region_id||'Earth'} · ${cell?.tile_id||cell?.id}<br>${stateLabel(cell?.state)} · ${generated} / ${total} chunks`;
+}
+
+function regionLabel(region){
+  return `${region?.label||region?.id||'Earth'}<br>${formatCoordinate(region?.latitude,region?.longitude)}`;
 }
 
 function updateControls(){
@@ -70,18 +76,18 @@ function updateWorkstreamList(){
 function updateGlobeLayer(){
   if(!globe||!data)return;
   const view=$('layer').value;
-  const regions=data.regions||[],cells=data.cells||[];
+  const regions=data.regions||[],cells=data.cells||[],observed=observedCells(cells);
   const cellView=view==='cells';
-  globe.tilesData(cellView?cells:[]);
-  globe.pointsData(cellView?cells:regions);
-  globe.labelsData(view==='regions'?regions:[]);
-  globe.pointRadius(cellView ? .14 : .6);
-  globe.pointColor(cellView?cellColor:()=> 'rgb(45, 96, 65)');
+  globe.tilesData(cellView?observed:[]);
+  globe.pointsData(view==='regions'?regions:[]);
+  globe.labelsData(view==='workstreams'?[]:regions);
+  globe.pointRadius(.38);
+  globe.pointColor(()=> 'rgb(45, 96, 65)');
   updateWorkstreamList();
   const generated=cells.reduce((sum,cell)=>sum+Number(cell.chunks_generated||0),0);
   if(view==='workstreams')setMapMessage('Workstream state · select Cells to inspect the generation grid');
   else if(view==='regions')setMapMessage(`${number(regions.length)} region${regions.length===1?'':'s'} indexed · interactive globe`);
-  else setMapMessage(cells.length?`${number(cells.length)} cells · ${number(generated)} chunks generated · drag to inspect`:'No materialized cells yet');
+  else setMapMessage(observed.length?`${number(observed.length)} observed cells · ${number(generated)} chunks generated`:'No observed cells yet');
   updateControls();resizeGlobe();
 }
 
@@ -103,20 +109,20 @@ function initGlobe(){
     .pointLat('latitude')
     .pointLng('longitude')
     .pointColor(cellColor)
-    .pointAltitude(.012)
-    .pointRadius(.14)
+    .pointAltitude(.02)
+    .pointRadius(.38)
     .pointResolution(8)
     .pointsMerge(true)
-    .pointLabel(cellLabel)
+    .pointLabel(regionLabel)
     .tileLat('latitude')
     .tileLng('longitude')
     .tileWidth('width_deg')
     .tileHeight('height_deg')
     .tileUseGlobeProjection(true)
-    .tileAltitude(.002)
-    .tileMaterial(cell=>new THREE.MeshBasicMaterial({color:cellColor(cell),transparent:true,opacity:cellOpacity(cell),depthWrite:false,side:THREE.DoubleSide}))
+    .tileAltitude(.0001)
+    .tileMaterial(cell=>new THREE.MeshBasicMaterial({color:cellColor(cell),transparent:true,opacity:Math.max(.22,cellOpacity(cell)),depthWrite:false,side:THREE.DoubleSide}))
     .tileLabel(cellLabel)
-    .tileCurvatureResolution(1)
+    .tileCurvatureResolution(.25)
     .tilesTransitionDuration(0)
     .labelLat('latitude')
     .labelLng('longitude')
@@ -129,15 +135,15 @@ function initGlobe(){
     .onPointHover(item=>{
       hoveredItem=item;
       map.style.cursor=item?'pointer':'grab';
-      if(item)$('cell').textContent=cellLabel(item).replace('<br>',' · ');
+      if(item)$('cell').textContent=regionLabel(item).replace('<br>',' · ');
     })
     .onTileHover(item=>{
       hoveredItem=item;
       map.style.cursor=item?'pointer':'grab';
       if(item)$('cell').textContent=cellLabel(item).replace('<br>',' · ');
     })
-    .onPointClick(item=>globe.pointOfView({lat:item.latitude,lng:item.longitude,altitude:.42},700))
-    .onTileClick(item=>globe.pointOfView({lat:item.latitude,lng:item.longitude,altitude:.42},700))
+    .onPointClick(item=>globe.pointOfView({lat:item.latitude,lng:item.longitude,altitude:1.35},450))
+    .onTileClick(item=>{$('cell').textContent=cellLabel(item).replace('<br>',' · ')})
     .onGlobeClick(({lat,lng})=>{$('cell').textContent=`Approximate coordinate ${formatCoordinate(lat,lng)}.`})
     .showPointerCursor(true);
   }catch(error){

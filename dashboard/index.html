@@ -6,7 +6,7 @@
   <title>Earthcraft · Global cell progress</title>
   <link rel="stylesheet" href="./style.css">
   <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js" defer></script>
-  <script src="./app.js?v=cell-globe-5" defer></script>
+  <script src="./app.js?v=cell-globe-7" defer></script>
 </head>
 <body>
   <header>
@@ -31,8 +31,8 @@
       <section class="atlas">
         <div class="maphead"><div><p class="eyebrow">256 METRE CELLS / 16 × 16 CHUNKS</p><h2>Global cell grid</h2></div><span class="north">N ↑</span></div>
         <div class="mapwrap"><div id="map" role="img" aria-label="Interactive Earth globe showing materialized generation cells"></div><div id="workstream-list" class="globe-list" hidden></div><div class="mapnote" id="mapnote">Waiting for the first cell</div></div>
-        <div class="legend" aria-label="Cell status legend"><span><i class="queued"></i>Queued</span><span><i class="sourced"></i>Source ready</span><span><i class="generated"></i>Generated</span><span><i class="verified"></i>Verified</span></div>
-        <p class="caption">The address space covers Earth. The visible marks are the cells currently queued or backed by evidence.</p>
+        <div class="legend" aria-label="Cell status legend"><span><i class="sourced"></i>Source ready</span><span><i class="generated"></i>Generated</span><span><i class="verified"></i>Verified</span><span><i class="failed"></i>Failed</span></div>
+        <p class="caption">Queued cells stay in the ledger. Globe marks begin when a cell has evidence.</p>
         <p id="cell" aria-live="polite">Move over the globe to inspect a cell.</p>
       </section>
       <aside>
