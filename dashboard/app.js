@@ -31,13 +31,13 @@ function draw(){
       ctx.fillStyle='oklch(.25 .022 155)';ctx.font='12px Helvetica Neue, Arial, sans-serif';ctx.fillText(`${workstream.label} · ${stateLabel(workstream.state)}`,x0+28,y);
     });
   }
-  $('mapnote').textContent=regions.length?`${number(regions.length)} region${regions.length===1?'':'s'} indexed · global denominator not computed`:'No regional evidence indexed yet';
+  $('mapnote').textContent=regions.length?`${number(regions.length)} region${regions.length===1?'':'s'} indexed · no global denominator yet`:'No measured regions yet';
 }
 
 function render(){
   const rollup=data.rollup||{},local=data.local||{},performance=data.performance||{};
   $('phase').textContent=`${stateLabel(rollup.state)} · ${data.scope?.label||'Earth'}`;
-  $('connection').textContent=data.source==='local'?'Local overlay · generator evidence':'Public snapshot · GitHub Pages';
+  $('connection').textContent=data.source==='local'?'Local data':'Public snapshot · GitHub Pages';
   $('updated').textContent=data.updated_utc?`Updated ${new Date(data.updated_utc).toLocaleString()}`:'';
   $('rollup').textContent=stateLabel(rollup.state);
   $('geometry').textContent=number(rollup.generated_tiles);
@@ -48,7 +48,7 @@ function render(){
   $('recovery').textContent=performance.parallel_tile_workers+'; '+performance.source_cache_coordination+'.';
   $('log').textContent=Object.entries(local.stages||{}).map(([stage,counts])=>`${stage}: ${Object.entries(counts).map(([state,count])=>`${state} ${count}`).join(', ')||'no jobs'}`).join('\n')||'No local run connected.';
   $('footer-state').textContent=`Observed ${new Date(data.updated_utc||Date.now()).toLocaleTimeString()}`;
-  const warning=data.claims?.global_complete?'Global completion claim is disabled by policy.':'Blank regions are unknown, not complete.';
+  const warning=data.claims?.global_complete?'Global completion is not reported.':'Blank regions have not been measured yet.';
   $('warning').hidden=false;$('warning').textContent=warning;draw();
 }
 
@@ -77,6 +77,6 @@ $('map').addEventListener('mousemove',event=>{
   if(!view||!data)return;const rect=$('map').getBoundingClientRect();
   const lon=Math.round(((event.clientX-rect.left-view.x0)/view.mapWidth*360-180)*10)/10;
   const lat=Math.round((90-(event.clientY-rect.top-view.y0)/view.mapHeight*180)*10)/10;
-  if(lon<-180||lon>180||lat<-90||lat>90)return;$('cell').textContent=`Approximate atlas coordinate ${lat}°, ${lon}°. This area has no claim unless a region is listed.`;
+  if(lon<-180||lon>180||lat<-90||lat>90)return;$('cell').textContent=`Approximate atlas coordinate ${lat}°, ${lon}°. No measurement is recorded here.`;
 });
 refresh();setInterval(()=>{if($('auto').checked&&!document.hidden)refresh()},10000);

@@ -10,16 +10,16 @@
 <body>
   <header>
     <a href="./" class="brand">earthcraft<span>GLOBAL OBSERVATORY / 01</span></a>
-    <div id="connection" role="status">Reading the latest snapshot…</div>
+    <div id="connection" role="status">Reading the latest progress…</div>
   </header>
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">A MAP OF THE WORK, NOT A FICTIONAL ETA</p>
-        <h1>The whole Earth is the scope.</h1>
-        <p>Earthcraft builds measured places into a continuous, addressable world. The atlas reports source coverage, surface evidence, and delivery separately, so a generated file never masquerades as a verified planet.</p>
+        <p class="eyebrow">PUBLIC PROGRESS</p>
+        <h1>A world you can check.</h1>
+        <p>Earthcraft turns measured places into Minecraft. This atlas shows what has been sourced, built, and verified—and leaves the rest blank.</p>
       </div>
-      <div class="scope-note"><span>Current scope</span><strong>Entire Earth</strong><small>Regional evidence is counted where it exists.</small></div>
+      <div class="scope-note"><span>World target</span><strong>Entire Earth</strong><small>Evidence appears region by region.</small></div>
     </section>
     <div class="toolbar">
       <div><strong id="phase">Reading progress…</strong><span id="updated"></span></div>
@@ -28,33 +28,33 @@
     <div id="warning" role="status" hidden></div>
     <div class="workspace">
       <section class="atlas">
-        <div class="maphead"><h2>Earthwide coverage</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
+        <div class="maphead"><h2>Where the work is</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
         <div class="mapwrap"><canvas id="map" aria-label="World map showing known Earthcraft regions and workstream state"></canvas><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
-        <div class="legend"><span><i class="known"></i>Measured working region</span><span><i class="planned"></i>Global foundation</span><span>Blank space means unknown, not complete</span></div>
-        <p class="caption">The map is a geographic index of evidence. It is not a rendered Minecraft view and it does not turn missing observations into terrain.</p>
-        <p id="cell" aria-live="polite">Move over the map for coordinates and state.</p>
+        <div class="legend"><span><i class="known"></i>Measured region</span><span><i class="planned"></i>Planned foundation</span><span>No mark means no evidence yet</span></div>
+        <p class="caption">This is an evidence map, not a finished Minecraft view. A blank area means Earthcraft has not measured it yet.</p>
+        <p id="cell" aria-live="polite">Move over the map to inspect a coordinate.</p>
       </section>
       <aside>
-        <p class="eyebrow">EARTH ROLLUP</p>
+        <p class="eyebrow">CURRENT STATE</p>
         <dl>
-          <div><dt>Global state</dt><dd id="rollup">Pending</dd></div>
-          <div><dt>Verified geometry tiles</dt><dd id="geometry">Pending</dd></div>
-          <div><dt>Source tiles acquired</dt><dd id="sources">Pending</dd></div>
-          <div><dt>Coverage percentage</dt><dd id="coverage">Not computed</dd></div>
-          <div><dt>Surface model</dt><dd id="surface">Pending</dd></div>
-          <div><dt>Local feed</dt><dd id="local">Pending</dd></div>
+          <div><dt>World status</dt><dd id="rollup">Pending</dd></div>
+          <div><dt>Built tiles</dt><dd id="geometry">Pending</dd></div>
+          <div><dt>Source tiles</dt><dd id="sources">Pending</dd></div>
+          <div><dt>Earth covered</dt><dd id="coverage">Not computed</dd></div>
+          <div><dt>Surface</dt><dd id="surface">Pending</dd></div>
+          <div><dt>Feed</dt><dd id="local">Pending</dd></div>
         </dl>
         <p id="recovery" class="note"></p>
-        <p class="note">Below the measured surface, repeated substrate blocks are enough for the game. Above it, empty sections are omitted. Buildings, water, and landmarks keep their own evidence gates.</p>
-        <details><summary>Recent local activity</summary><pre id="log">No local run connected.</pre></details>
+        <p class="note">Only the surface is precise. Below it, Earthcraft reuses substrate; above it, empty sections are omitted. Buildings, water, and landmarks need their own evidence.</p>
+        <details><summary>Local activity</summary><pre id="log">No local run connected.</pre></details>
       </aside>
     </div>
     <section class="horizon">
-      <div><p class="eyebrow">THE LONG VIEW</p><h2>Progress follows evidence.</h2></div>
-      <p>Earthcraft does not need to write every block on Earth before a place can exist. It needs a stable global address, immutable source extracts, precise surfaces, and an on-demand cache that can replay the same tile anywhere.</p>
-      <ol><li><strong>01 / Catalog</strong><span>Index sources once, then hand bounded extracts to workers.</span></li><li><strong>02 / Surface</strong><span>Keep observed elevation precise and abstain when coverage is missing.</span></li><li><strong>03 / Delivery</strong><span>Generate locally, stream by need, preserve the player’s edits.</span></li></ol>
+      <div><p class="eyebrow">HOW IT WORKS</p><h2>Every mark has a source.</h2></div>
+      <p>Earthcraft does not generate every block in advance. It gives each place a stable address, keeps the source extract, and builds the tile when you need it.</p>
+      <ol><li><strong>01 / Sources</strong><span>Keep every input tied to its place, date, and terms.</span></li><li><strong>02 / Surface</strong><span>Build what was observed. Leave missing detail alone.</span></li><li><strong>03 / Delivery</strong><span>Load nearby tiles when you need them. Keep your edits.</span></li></ol>
     </section>
   </main>
-  <footer>EARTHCRAFT / GLOBAL OBSERVATORY<span id="footer-state">Awaiting first observation</span></footer>
+  <footer>EARTHCRAFT / PROGRESS ATLAS<span id="footer-state">Awaiting first observation</span></footer>
 </body>
 </html>
