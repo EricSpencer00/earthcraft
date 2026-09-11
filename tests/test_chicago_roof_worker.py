@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from chicago_roof_worker import route_tile_ids
+from chicago_roof_worker import route_tile_ids, roofable_root
 from chicago_tiles import digest
 
 
@@ -31,6 +31,19 @@ class ChicagoRoofWorkerTests(unittest.TestCase):
             path.write_text(json.dumps({'schema':'named-road-priority-v1','plan_sha256':'changed','tiles':tiles}))
             with self.assertRaisesRegex(ValueError,'frozen'):
                 route_tile_ids(path,plan)
+
+    def test_terrain_only_shell_is_not_an_appearance_candidate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); world=root/'world';world.mkdir()
+            (world/'building-layer.json').write_text(json.dumps({'buildings':[]}))
+            class JournalFixture:
+                def __init__(self):
+                    self.db=self
+                def execute(self, query, values):
+                    return self
+                def fetchone(self):
+                    return {'state':'complete','evidence':str(root/'geometry-receipt.json')}
+            self.assertIsNone(roofable_root(JournalFixture(),'0_0'))
 
 
 if __name__ == '__main__':

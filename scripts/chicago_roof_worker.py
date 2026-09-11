@@ -44,6 +44,25 @@ def styled_root(journal, tile):
     return root if (root/'world'/'building-layer.json').is_file() else None
 
 
+def roofable_root(journal, tile):
+    """Return a completed shell only when it contains building-owned cells.
+
+    Terrain-only city tiles have an intentionally empty building-layer sidecar.
+    They remain valid geometry results, but fetching imagery for their appearance
+    stage cannot improve the city and would make a route look more complete than
+    it is.  This test uses only the shell compiler's own local metadata.
+    """
+    root=styled_root(journal,tile)
+    if root is None:
+        return None
+    layer=json.loads((root/'world'/'building-layer.json').read_text())
+    buildings=layer.get('buildings')
+    if not isinstance(buildings,list):
+        raise ValueError('Styled shell has an invalid building-layer manifest')
+    return root if any(int(building.get('appearance_cells',0)) > 0
+                       for building in buildings if isinstance(building,dict)) else None
+
+
 def existing_roof_result(world, roof):
     result=json.loads((roof/'roof-colour.json').read_text())
     if result.get('schema') != 'earthcraft.roof-colour-v1' or result.get('source_world') != str(world.resolve()):
@@ -67,7 +86,7 @@ def run(plan_dir, route_path, limit, owner='lake-shore-roof-worker', acquire=acq
     processed=failed=0
     try:
         while processed < limit:
-            candidate=next((tile for tile in route if styled_root(journal,tile) is not None and
+            candidate=next((tile for tile in route if roofable_root(journal,tile) is not None and
                             journal.db.execute('SELECT state FROM jobs WHERE tile=? AND stage=2',(tile,)).fetchone()['state'] == 'pending'),
                            None)
             if candidate is None:
@@ -75,7 +94,7 @@ def run(plan_dir, route_path, limit, owner='lake-shore-roof-worker', acquire=acq
             job=journal.claim_exact('appearance',candidate,owner,lease_seconds=3600)
             if job is None:
                 continue
-            processed+=1;root=styled_root(journal,candidate);world=root/'world';roof=root/'world.roof'
+            processed+=1;root=roofable_root(journal,candidate);world=root/'world';roof=root/'world.roof'
             started=time.monotonic()
             try:
                 if roof.is_dir():
