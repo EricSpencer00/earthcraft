@@ -15,9 +15,9 @@
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">PUBLIC PROGRESS</p>
-        <h1>A world you can check.</h1>
-        <p>Earthcraft turns measured places into Minecraft. This atlas shows what has been sourced, built, and verified—and leaves the rest blank.</p>
+        <p class="eyebrow">EARTHCRAFT PROGRESS</p>
+        <h1>Generation progress</h1>
+        <p>This atlas shows which places have a source, which tiles have been generated, and which checks have passed. Places without evidence stay unmarked.</p>
       </div>
       <div class="scope-note"><span>World target</span><strong>Entire Earth</strong><small>Evidence appears region by region.</small></div>
     </section>
@@ -28,7 +28,7 @@
     <div id="warning" role="status" hidden></div>
     <div class="workspace">
       <section class="atlas">
-        <div class="maphead"><h2>Where the work is</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
+        <div class="maphead"><h2>Measured regions</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
         <div class="mapwrap"><canvas id="map" aria-label="World map showing known Earthcraft regions and workstream state"></canvas><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
         <div class="legend"><span><i class="known"></i>Measured region</span><span><i class="planned"></i>Planned foundation</span><span>No mark means no evidence yet</span></div>
         <p class="caption">This is an evidence map, not a finished Minecraft view. A blank area means Earthcraft has not measured it yet.</p>
@@ -50,9 +50,9 @@
       </aside>
     </div>
     <section class="horizon">
-      <div><p class="eyebrow">HOW IT WORKS</p><h2>Every mark has a source.</h2></div>
-      <p>Earthcraft does not generate every block in advance. It gives each place a stable address, keeps the source extract, and builds the tile when you need it.</p>
-      <ol><li><strong>01 / Sources</strong><span>Keep every input tied to its place, date, and terms.</span></li><li><strong>02 / Surface</strong><span>Build what was observed. Leave missing detail alone.</span></li><li><strong>03 / Delivery</strong><span>Load nearby tiles when you need them. Keep your edits.</span></li></ol>
+      <div><p class="eyebrow">WORKFLOW</p><h2>Generation process</h2></div>
+      <p>Earthcraft assigns each place a stable address, saves the source extract, and builds nearby tiles on demand. It does not precompute the entire planet.</p>
+      <ol><li><strong>01 / Source</strong><span>Record the place, date, terms, and input data.</span></li><li><strong>02 / Surface</strong><span>Build what was observed and leave missing detail alone.</span></li><li><strong>03 / Tile</strong><span>Generate nearby terrain and keep the player's edits.</span></li></ol>
     </section>
   </main>
   <footer>EARTHCRAFT / PROGRESS ATLAS<span id="footer-state">Awaiting first observation</span></footer>
