@@ -90,8 +90,8 @@ def roof_shell_floor(tops, mask, ground):
 def build(source, destination, surface_source=None, point_source=None, world_frame=None):
     if destination.exists():
         raise FileExistsError(destination)
-    if shutil.disk_usage(ROOT).free < 22*1024**3:
-        raise ValueError('Preserve 20 GiB free plus 2 GiB working allowance')
+    if shutil.disk_usage(ROOT).free < 20*1024**3:
+        raise ValueError('Preserve 20 GiB free-space reserve')
     meta = json.loads((source/'sources.json').read_text())
     data = np.load(source/'rasters.npz')
     elevation, cover = data['elevation'], data['cover']
@@ -202,8 +202,13 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             'low':low,'high':high,'block':BLOCK['stone_bricks'],'height':height})
         # Measured building footprint takes precedence over a coarse water class.
         surface[mask & (surface==BLOCK['water'])]=BLOCK['gray_concrete']
-    terrain_only = meta.get('buildings_available') is False
     osm_geometry = meta.get('building_source_kind')=='osm-explicit'
+    # A tile with no admitted county/OSM geometry and no 3D observation is a
+    # terrain-only result even when older source manifests lack the explicit
+    # buildings_available flag.  This mirrors the worker's LiDAR skip policy
+    # and makes the world receipt unambiguous for later appearance stages.
+    terrain_only = (meta.get('buildings_available') is False or
+                    (not county['features'] and not osm_geometry and point_source is None))
     if osm_geometry and (county_buildings or point_source is not None or surface_source is not None):
         raise ValueError('OSM geometry profile cannot silently mix county or scan geometry')
     if terrain_only and county_buildings:

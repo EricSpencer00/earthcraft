@@ -62,12 +62,18 @@ class CityPointCropTests(unittest.TestCase):
             reread=laspy.read(raw)
             geometry=mapping(box(*reread.header.mins[:2],*reread.header.maxs[:2]))
             asset={'id':'00000001','native_geometry':geometry}
-            cache=PointCache(max_bytes=2**20)
+            cache=PointCache(max_bytes=10*2**20)
             crop_sources([(raw,{'url':'frozen-test-source'},asset)],meta,root/'first',point_cache=cache)
+            candidates=cache.query(raw, (float(reread.header.mins[0]), float(reread.header.mins[1]),
+                                         float(reread.header.maxs[0]), float(reread.header.maxs[1])))
+            self.assertIsNotNone(candidates)
+            np.testing.assert_array_equal(candidates, np.arange(3,dtype=np.int32))
             crop_sources([(raw,{'url':'frozen-test-source'},asset)],meta,root/'second',point_cache=cache)
+            crop_sources([(raw,{'url':'frozen-test-source'},asset)],meta,root/'stream')
             self.assertEqual(cache.misses,1);self.assertEqual(cache.hits,1)
-            with np.load(root/'first/points.npz') as first,np.load(root/'second/points.npz') as second:
+            with np.load(root/'first/points.npz') as first,np.load(root/'second/points.npz') as second,np.load(root/'stream/points.npz') as stream:
                 for key in first.files: np.testing.assert_array_equal(first[key],second[key])
+                for key in first.files: np.testing.assert_array_equal(first[key],stream[key])
 
 
 if __name__=='__main__':unittest.main()

@@ -25,6 +25,15 @@ class PointCache:
 
     FIELDS = ('x', 'y', 'z', 'classification', 'withheld', 'point_source_id',
               'intensity', 'return_number', 'gps_time')
+    # Native Cook coordinates are US-survey feet.  A 1000-unit bin is smaller
+    # than a city tile in the source chart, so a crop usually visits only a
+    # handful of bins instead of scanning the whole member.
+    INDEX_BIN = 1000.0
+    DECODE_CHUNK = 2_000_000
+    LAS6_DTYPE = np.dtype({'names': ('X','Y','Z','intensity','return_info','flags',
+                                     'classification','scan_angle','point_source_id','gps_time'),
+                           'formats': ('<i4','<i4','<i4','<u2','u1','u1','u1','<i2','<u2','<f8'),
+                           'offsets': (0,4,8,12,14,15,16,18,20,22), 'itemsize': 30})
 
     def __init__(self, max_bytes=16 * 2**30):
         if type(max_bytes) is not int or max_bytes < 0:
@@ -47,37 +56,120 @@ class PointCache:
             np.testing.assert_allclose(
                 [*reader.header.mins[:2], *reader.header.maxs[:2]],
                 geometry.bounds, atol=.02, rtol=0)
-            for points in reader.chunk_iterator(400_000):
-                # Copy each field before the laspy chunk is released.  These
-                # arrays are immutable cache values and preserve source order.
-                for key in PointCache.FIELDS:
-                    parts[key].append(np.array(getattr(points, key), copy=True))
-                inspected += len(points)
+            if reader.header.point_format.id == 6 and reader.header.point_format.size == 30:
+                # Cook's 2022 scans use fixed-size LAS 1.4 format 6 records.
+                # Decode packed records in NumPy without constructing a laspy
+                # point object for every return.  Bit masks match LAS 1.4
+                # classification flags; source order is byte-stream order.
+                scale=np.asarray(reader.header.scales,dtype=np.float64)
+                offset=np.asarray(reader.header.offsets,dtype=np.float64)
+                stream.seek(reader.header.offset_to_point_data)
+                remaining=int(reader.header.point_count)
+                while remaining:
+                    count=min(PointCache.DECODE_CHUNK,remaining)
+                    raw=stream.read(count*PointCache.LAS6_DTYPE.itemsize)
+                    if len(raw)!=count*PointCache.LAS6_DTYPE.itemsize:
+                        raise ValueError('Incomplete original point stream')
+                    records=np.frombuffer(raw,dtype=PointCache.LAS6_DTYPE,count=count)
+                    parts['x'].append(records['X'].astype(np.float64)*scale[0]+offset[0])
+                    parts['y'].append(records['Y'].astype(np.float64)*scale[1]+offset[1])
+                    parts['z'].append(records['Z'].astype(np.float64)*scale[2]+offset[2])
+                    parts['classification'].append(np.array(records['classification'],copy=True))
+                    parts['withheld'].append(((records['flags']>>2)&1).astype(np.uint8,copy=False))
+                    parts['point_source_id'].append(np.array(records['point_source_id'],copy=True))
+                    parts['intensity'].append(np.array(records['intensity'],copy=True))
+                    parts['return_number'].append((records['return_info']&15).astype(np.uint8,copy=False))
+                    parts['gps_time'].append(np.array(records['gps_time'],copy=True))
+                    inspected+=count; remaining-=count
+            else:
+                for points in reader.chunk_iterator(PointCache.DECODE_CHUNK):
+                    # Copy each field before the laspy chunk is released.  These
+                    # arrays are immutable cache values and preserve source order.
+                    for key in PointCache.FIELDS:
+                        parts[key].append(np.array(getattr(points, key), copy=True))
+                    inspected += len(points)
             if inspected != reader.header.point_count:
                 raise ValueError('Incomplete original point stream')
         arrays = {key: np.concatenate(values) for key, values in parts.items()}
-        return arrays, sum(int(value.nbytes) for value in arrays.values()), inspected
+        # Build a stable native-coordinate bin index once.  The sorted order is
+        # only an acceleration structure; query() sorts selected source indices
+        # back into original LAS order before returning them.
+        x, y = arrays['x'], arrays['y']
+        bx = np.floor(x / PointCache.INDEX_BIN).astype(np.int64)
+        by = np.floor(y / PointCache.INDEX_BIN).astype(np.int64)
+        min_bx, min_by = int(bx.min()), int(by.min())
+        span_y = int(by.max() - min_by + 1)
+        keys = (bx - min_bx) * span_y + (by - min_by)
+        order = np.argsort(keys, kind='stable').astype(np.int32, copy=False)
+        sorted_keys = keys[order]
+        unique, counts = np.unique(sorted_keys, return_counts=True)
+        offsets = np.zeros(int(unique.max()) + 2, dtype=np.int64)
+        offsets[unique + 1] = counts
+        np.cumsum(offsets, out=offsets)
+        index = {'order': order, 'offsets': offsets, 'min_bx': min_bx,
+                 'min_by': min_by, 'span_y': span_y}
+        size = sum(int(value.nbytes) for value in arrays.values())
+        size += sum(int(value.nbytes) for value in (order, offsets))
+        return arrays, size, inspected, index
 
     def get(self, path, geometry):
         key = str(Path(path).resolve())
         entry = self._entries.get(key)
         if entry is not None:
-            arrays, size, count = entry
+            arrays, size, count, _ = entry
             self._entries.move_to_end(key)
             self.hits += 1
             return arrays, {'hit': True, 'bytes': size, 'point_count': count}
         self.misses += 1
-        arrays, size, count = self._read(path, geometry)
+        arrays, size, count, index = self._read(path, geometry)
         # A single member larger than the budget is still usable, but is not
         # retained; this keeps the acceleration opt-in and memory bounded.
         if self.max_bytes and size <= self.max_bytes:
             while self._entries and self._bytes + size > self.max_bytes:
-                _, (_, old_size, _) = self._entries.popitem(last=False)
+                _, (_, old_size, _, _) = self._entries.popitem(last=False)
                 self._bytes -= old_size
                 self.evictions += 1
-            self._entries[key] = (arrays, size, count)
+            self._entries[key] = (arrays, size, count, index)
             self._bytes += size
         return arrays, {'hit': False, 'bytes': size, 'point_count': count}
+
+    def query(self, path, bounds):
+        """Return candidate source indices for an inclusive native XY bounds.
+
+        Returned indices are always ascending, matching the original LAS
+        stream order.  A cache entry larger than the configured budget has no
+        retained index and deliberately returns None so callers use the exact
+        streaming path.
+        """
+        key = str(Path(path).resolve())
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        _, _, _, index = entry
+        lo_x, lo_y, hi_x, hi_y = map(float, bounds)
+        bx0 = int(np.floor(lo_x / self.INDEX_BIN)); bx1 = int(np.floor(hi_x / self.INDEX_BIN))
+        by0 = int(np.floor(lo_y / self.INDEX_BIN)); by1 = int(np.floor(hi_y / self.INDEX_BIN))
+        ix0, ix1 = bx0-index['min_bx'], bx1-index['min_bx']
+        iy0, iy1 = by0-index['min_by'], by1-index['min_by']
+        x_bins = (index['offsets'].size - 2) // index['span_y'] + 1
+        if ix1 < 0 or iy1 < 0 or ix0 >= x_bins:
+            return np.empty(0, dtype=np.int32)
+        ix0=max(0,ix0); iy0=max(0,iy0)
+        max_key=index['offsets'].size-2
+        ix1=min(ix1, max_key//index['span_y'])
+        iy1=min(iy1, index['span_y']-1)
+        candidates=[]
+        for bx in range(ix0,ix1+1):
+            base=bx*index['span_y']
+            for by in range(iy0,iy1+1):
+                key_id=base+by
+                if key_id>max_key: continue
+                start,end=int(index['offsets'][key_id]),int(index['offsets'][key_id+1])
+                if end>start: candidates.append(index['order'][start:end])
+        if not candidates:
+            return np.empty(0, dtype=np.int32)
+        # Bin iteration is spatial order; recover original LAS order exactly.
+        return np.sort(np.concatenate(candidates), kind='stable')
 
     def snapshot(self):
         return {'hits': self.hits, 'misses': self.misses,
@@ -98,6 +190,8 @@ def crop_sources(items,meta,output,max_points=20_000_000,compress_working=True,
     native_extent=transform(inverse.transform,extent.segmentize(16)).buffer(.01)
     bounds=native_extent.bounds;kept=[];coverage=[];sources=[];total=0;seen=set()
     cache_before = point_cache.snapshot() if point_cache is not None else None
+    indexed_candidates = 0
+    indexed_queries = 0
     for path,record,asset in items:
         if asset['id'] in seen:raise ValueError('Duplicate source member would duplicate observations')
         seen.add(asset['id']);geometry=shape(asset['native_geometry'])
@@ -127,13 +221,19 @@ def crop_sources(items,meta,output,max_points=20_000_000,compress_working=True,
         else:
             arrays, cache_info = point_cache.get(path, geometry)
             inspected = cache_info['point_count']
-            x, y = arrays['x'], arrays['y']
+            candidate_indices = point_cache.query(path, bounds)
+            if candidate_indices is None:
+                candidate_indices = np.arange(len(arrays['x']), dtype=np.int32)
+            else:
+                indexed_queries += 1
+                indexed_candidates += len(candidate_indices)
+            x, y = arrays['x'][candidate_indices], arrays['y'][candidate_indices]
             selected=(x>=bounds[0])&(x<=bounds[2])&(y>=bounds[1])&(y<=bounds[3])
             if selected.any():
                 xx,yy=projection.transform(x[selected],y[selected])
                 valid=(xx>=west)&(xx<west+size)&(yy>north-size)&(yy<=north)
                 if valid.any():
-                    source_indices=np.flatnonzero(selected)[valid]
+                    source_indices=candidate_indices[np.flatnonzero(selected)[valid]]
                     total+=len(source_indices)
                     if total>max_points:raise ValueError('Point crop memory budget exceeded; preserve sources, subdivide tile')
                     kept.append({'xyz':np.column_stack((xx[valid],yy[valid],arrays['z'][source_indices]*(1200/3937))),
@@ -174,5 +274,7 @@ def crop_sources(items,meta,output,max_points=20_000_000,compress_working=True,
         }
         report['point_cache']['cached_bytes'] = after['cached_bytes']
         report['point_cache']['cached_members'] = after['cached_members']
+        report['point_cache']['indexed_queries'] = indexed_queries
+        report['point_cache']['indexed_candidates'] = indexed_candidates
     (output/'manifest.json').write_text(json.dumps(report,indent=2))
     return report
