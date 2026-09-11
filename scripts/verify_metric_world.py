@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import hashlib
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -28,6 +29,22 @@ def verify(world):
     seen=set(); ground_checks=0; heightmap_checks=0; spawn_checks=False
     point_cells=np.load(world/'point-voxels.npy') if (world/'point-voxels.npy').exists() else None
     point_checks=0
+    derived_checks=0
+    building_layer=None
+    if (world/'building-layer.json').exists():
+        from building_layer import shell_for_chunk
+        style=json.loads((world/'building-layer.json').read_text())
+        model=world/'building-layer.npz'
+        if (style.get('schema')!='styled-shell-v1' or style.get('llm_used') is not False or
+            hashlib.sha256(model.read_bytes()).hexdigest()!=style['model_sha256'] or point_cells is None or
+            hashlib.sha256((world/'point-voxels.npy').read_bytes()).hexdigest()!=style['source_points_sha256']):
+            raise ValueError('Building layer provenance mismatch')
+        with np.load(model,allow_pickle=False) as data:
+            building_layer={key:data[key] for key in data.files}
+        if any(building_layer[k].shape!=(size,size) for k in ('owner','floor','top','base')):
+            raise ValueError('Building layer grid mismatch')
+        if any(building_layer[k].shape!=(size,size) for k in ('geometry_owner','paint_top') if k in building_layer):
+            raise ValueError('Building layer appearance/geometry grid mismatch')
     road_mask=np.load(world/'classified-road-mask.npy') if (world/'classified-road-mask.npy').exists() else None
     road_checks=0
     paint=json.loads((world/'ground-appearance.json').read_text()) if (world/'ground-appearance.json').exists() else None
@@ -67,6 +84,10 @@ def verify(world):
                 local=point_cells[(point_cells[:,0]//16==cx)&(point_cells[:,2]//16==cz)]
                 expected_structure=np.zeros_like(volume,dtype=bool)
                 expected_structure[local[:,1]-bottom,local[:,2]%16,local[:,0]%16]=True
+                if building_layer is not None:
+                    shell=shell_for_chunk(building_layer,cx,cz,h,bottom,(ox,oz))
+                    derived_checks+=int((shell & ~expected_structure).sum())
+                    expected_structure|=shell
                 above_ground=np.arange(bottom,bottom+h)[:,None,None]>expected[zs,xs]
                 np.testing.assert_array_equal((volume!=ids['air'])&above_ground,expected_structure)
                 point_checks+=len(local)
@@ -84,6 +105,8 @@ def verify(world):
                 assert np.all(volume[sy-bottom:sy-bottom+2,sz%16,sx%16]==ids['air'])
                 spawn_checks=True
     assert len(seen)==(size//16)**2 and spawn_checks
+    if building_layer is not None and derived_checks!=style['derived_added_cells']:
+        raise ValueError('Derived building occupancy differs from its receipt')
     roof_checks = 0
     if (world/'mapped-building-tops.npz').exists():
         mapped=np.load(world/'mapped-building-tops.npz')
@@ -99,6 +122,7 @@ def verify(world):
         'heightmap_cells':heightmap_checks,'safe_spawn':spawn_checks,
         'sampled_roof_cells':roof_checks,
         'observed_3d_voxels':point_checks,
+        'derived_building_cells':derived_checks,
         'classified_road_ground_cells':road_checks,
         'top_y_range':[int(tops.min()),int(tops.max())],
         'game_load_verified':False,'appearance_verified':False}
