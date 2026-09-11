@@ -1,0 +1,2 @@
+# Dashboard design
+Light atlas surface for glancing at progress while working on the Mac in daylight. Technical/editorial split: Georgia headings and Helvetica Neue controls, locally available without external font requests. Warm paper, charcoal ink, forest green written-region marks; amber for incomplete or stale observations. Large map with narrow activity ledger, responsive stacked layout. No decorative metric-card grid. Native controls and visible keyboard focus.
