@@ -35,7 +35,7 @@ A public planning repository can precede implementation if clearly labelled. v0.
 
 ## Code, dependencies and data
 
-Proposed project code license: Apache-2.0, matching Arnis's primary license and providing an explicit patent grant. This is a recommendation for the publishing decision; no license grant is added by this planning revision. Before publication, add the full selected LICENSE and copyright attribution. Audit actual incorporated files rather than assuming the entire upstream repository has one license: Arnis documents a separately licensed Luanti mapping. The Java-only baseline should avoid importing unrelated backend code. Preserve required upstream notices when distributing their work. [Arnis license information](https://github.com/louis-e/arnis#%EF%B8%8F-license-information)
+Earthcraft source is now available under Apache-2.0, with the full [LICENSE](../LICENSE) and a project [NOTICE](../NOTICE). That license applies to the source code only. Audit actual incorporated files rather than assuming the entire upstream repository has one license: Arnis documents a separately licensed Luanti mapping. The Java-only baseline should avoid importing unrelated backend code. Preserve required upstream notices when distributing their work. [Arnis license information](https://github.com/louis-e/arnis#%EF%B8%8F-license-information)
 
 Keep code licensing separate from provider data, derived databases, model weights, images and world downloads. For every public artifact, create a manifest listing source IDs, capture/retrieval dates, transformations, attribution text, license links and distribution decision. An unresolved distribution decision excludes the artifact from the release, not the entire codebase.
 
@@ -46,7 +46,7 @@ Google adapters remain disabled under the current source policy. Do not advertis
 ## Repository contents before v0.1
 
 - README: status, one tested quickstart, source coverage limits, exact supported game/runtime, resource requirements and attribution links.
-- LICENSE and third-party notices after the license decision and dependency audit.
+- LICENSE and third-party notices are present; provider and generated-artifact review remains per artifact.
 - CONTRIBUTING.md: local setup, fixture checks, source-adapter contract and small change workflow.
 - SECURITY.md: agreed reporting route; do not invent an address or enabled GitHub feature.
 - Portable example configuration and ignored machine-local overrides; no personal absolute paths in executable defaults.
@@ -65,13 +65,13 @@ At publication time, confirm the destination owner/name, selected license, clean
 
 ## First release acceptance checklist
 
-- [ ] License and dependency notices finalized.
+- [x] License and dependency notices added for the source tree.
 - [ ] Entire proposed public history reviewed; no secrets/private inputs/large payloads.
 - [ ] Clean native installation reproduced from instructions.
 - [ ] Offline synthetic checks pass and target game loads the demo world.
 - [ ] Volume absence, low disk, incomplete export and resumability checks pass.
 - [ ] Every shared demo asset has a documented distribution decision and attribution.
-- [ ] README distinguishes implemented features, measured results and roadmap.
+- [x] README distinguishes implemented features, measured results and roadmap.
 - [ ] Release tag identifies code, runtime and source/model revisions used.
 
 All boxes are pending; editing planning documents does not satisfy execution gates.
