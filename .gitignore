@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.python-version
 .venv/
 __pycache__/
 .pytest_cache/
@@ -12,6 +13,8 @@ __pycache__/
 /cache/
 /runs/
 /worlds/
+/archives/
+/outputs/
 /vendor/
 /target/
 *.mca
@@ -19,3 +22,28 @@ __pycache__/
 *.litematic
 *.safetensors
 *.gguf
+
+/runtime/
+/configs/local.json
+/configs/*.local.json
+
+/earthcraft.local.code-workspace
+
+# Local experiment notes. These contain machine paths, run handles, or
+# private working-state details and are not part of the public project.
+/docs/AUTOMATIC_WORLD_GOAL.md
+/docs/CHICAGO_ADAPTATION_GOAL.md
+/docs/CLIENT_VERIFICATION.md
+/docs/FACADE_AGENT_GOAL.md
+/docs/IMAGERY_GOAL_STATE.md
+/docs/IMAGERY_PROOF.md
+/docs/OVERNIGHT_HANDOFF.md
+/docs/SINGLE_WORLD.md
+/docs/tickets/
+
+# Local build and acquisition output.
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.partial
