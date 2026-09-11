@@ -39,7 +39,7 @@ def region_path(value):
     if scheme=='project':root=ROOT
     elif scheme=='bulk':
         configured=os.environ.get('EARTHCRAFT_BULK_ROOT')
-        root=Path(configured).expanduser() if configured else Path('/Volumes/LaCie/Earthcraft')
+        root=Path(configured).expanduser() if configured else Path.home()/'EarthcraftData'
         if not root.is_dir():raise ValueError(f'Bulk source root unavailable: {root}; no internal fallback')
     else:raise ValueError('Unknown source location')
     path=(root/relative).resolve()
