@@ -43,4 +43,7 @@ verified inputs, and neighboring tiles must agree on shared geometry.
 
 See [AWS source strategy](AWS_SOURCE_STRATEGY.md),
 [resource limits](RESOURCE_LIMITS.md), and the [implementation plan](PLAN.md)
-for the current durable decisions.
+for the current durable decisions. The performance and whole-Earth extension
+are recorded in [GLOBAL_GENERATION.md](GLOBAL_GENERATION.md); its progress
+surface deliberately leaves a global denominator uncomputed until a global
+catalog exists.

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "updated_utc": "2026-09-11T15:06:48.654183+00:00",
+  "scope": {
+    "id": "earth",
+    "label": "Entire Earth",
+    "progress_model": "stage evidence; no fabricated global percentage",
+    "coverage_percent": null
+  },
+  "rollup": {
+    "state": "regional-foundation",
+    "generated_tiles": 689,
+    "planned_tiles": null,
+    "known_area_km2": null,
+    "note": "A global source catalog and coverage denominator are not complete."
+  },
+  "workstreams": [
+    {
+      "id": "catalog",
+      "label": "Global source catalog",
+      "state": "planned",
+      "note": "Build immutable spatial indexes before planetary batch work."
+    },
+    {
+      "id": "terrain",
+      "label": "Terrain surface",
+      "state": "prototype",
+      "note": "Precise observed surface; no invented fill for missing observations."
+    },
+    {
+      "id": "subsurface",
+      "label": "Repeated substrate",
+      "state": "implemented",
+      "note": "Uniform blocks below the admitted surface; air sections above chunk tops are omitted."
+    },
+    {
+      "id": "urban",
+      "label": "Urban structures",
+      "state": "regional",
+      "note": "Chicago source-backed pilot; ordinary buildings and landmarks remain separate classes."
+    },
+    {
+      "id": "delivery",
+      "label": "On-demand delivery",
+      "state": "local-only",
+      "note": "Local Minecraft delivery is measured; planetary streaming is not claimed."
+    }
+  ],
+  "regions": [
+    {
+      "id": "chicago",
+      "label": "Chicago pilot",
+      "latitude": 41.8781,
+      "longitude": -87.6298,
+      "state": "active",
+      "source_tiles_complete": 694,
+      "geometry_tiles_complete": 689,
+      "source_tiles_total": 9639,
+      "note": "Current working example; counts appear when a local journal is available."
+    }
+  ],
+  "local": {
+    "state": "idle",
+    "source_tiles_complete": 694,
+    "source_tiles_total": 9639,
+    "geometry_tiles_complete": 689,
+    "stages": {
+      "sources": {
+        "complete": 694,
+        "failed": 6,
+        "pending": 8938,
+        "running": 1
+      },
+      "geometry": {
+        "complete": 689,
+        "failed": 5,
+        "pending": 8945
+      },
+      "appearance": {
+        "complete": 12,
+        "pending": 9627
+      },
+      "game_verify": {
+        "pending": 9639
+      }
+    },
+    "private_paths_included": false
+  },
+  "performance": {
+    "parallel_tile_workers": "independent processes over SQLite leases",
+    "source_cache_coordination": "per-source file locks",
+    "surface_strategy": "precise surface plus repeated substrate",
+    "global_generation": "not started"
+  },
+  "claims": {
+    "global_complete": false,
+    "accuracy_verified": false,
+    "private_data_in_snapshot": false
+  }
+}

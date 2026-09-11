@@ -1,9 +1,60 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Earthcraft · Field atlas</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body>
-<header><a href="/" class="brand">earthcraft<span>FIELD ATLAS / 01</span></a><div id="connection" role="status">Connecting to local run…</div></header>
-<main><section class="intro"><div><p class="eyebrow">EARTH, ONE PLACE AT A TIME</p><h1>Procedural baseline archive.</h1><p>This Chicago output uses Arnis and map data, not photo reconstruction. The imagery proof is a separate experiment.</p></div><label>Current expedition<select id="stage"><option value="city-draft">Chicago · City draft</option><option value="loop-pilot">Chicago · Downtown test</option></select></label></section>
-<div class="toolbar"><div><strong id="phase">Reading progress…</strong><span id="elapsed"></span></div><div class="actions"><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div></div>
-<div id="warning" role="status" hidden></div>
-<div class="workspace"><section class="atlas"><div class="maphead"><h2>World footprint</h2><label>View <select id="layer"><option value="written">Written regions</option><option value="grid">Planned region grid</option></select></label></div><div class="mapwrap"><canvas id="map" aria-label="Chicago boundary and Minecraft region write progress"></canvas><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for first region</div></div><div class="legend"><span><i class="written"></i>Chunks on disk</span><span><i class="outline"></i>City boundary</span><span>Each cell: 512 × 512 blocks</span></div><p class="caption">This is a live write-coverage map, not an in-game render. Region files can still be changing. Hover over a cell for details.</p><p id="cell" aria-live="polite">Map coordinates follow the generator’s approximate local projection.</p></section>
-<aside><p class="eyebrow">RUN OBSERVATIONS</p><dl><div><dt>Download stage</dt><dd id="downloads">—</dd></div><div><dt>Chunks present on disk</dt><dd id="chunks">—</dd></div><div><dt>Region files</dt><dd id="regions">—</dd></div><div><dt>World data written</dt><dd id="written">—</dd></div><div><dt>Generator memory</dt><dd id="memory">—</dd></div><div><dt>Peak memory</dt><dd id="peak">—</dd></div></dl><p id="recovery" class="note"></p><p class="note">Outputs on LaCie. No AI inference. Generation completion, game loading, and building accuracy are separate milestones.</p><details><summary>Live activity log</summary><pre id="log">Loading…</pre></details></aside></div>
-<section class="horizon"><div><p class="eyebrow">THE LONG VIEW</p><h2>From Chicago to Earth.</h2></div><p>Chicago is the active experiment. Global coverage is not started. The next foundation is a resumable geographic tile catalog, regional coordinate systems, and storage budgets. One enormous flat world cannot preserve Earth’s distances everywhere.</p><ol><li><strong>01 / Chicago</strong><span>Measure a complete city draft</span></li><li><strong>02 / Regional atlas</strong><span>Resume, validate, and connect tiles</span></li><li><strong>03 / Global catalog</strong><span>Generate places on demand</span></li></ol></section>
-</main><footer>EARTHCRAFT / LOCAL OBSERVATORY<span id="updated">Awaiting first observation</span></footer></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Earthcraft · Global observatory</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header>
+    <a href="./" class="brand">earthcraft<span>GLOBAL OBSERVATORY / 01</span></a>
+    <div id="connection" role="status">Reading the latest snapshot…</div>
+  </header>
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">A MAP OF THE WORK, NOT A FICTIONAL ETA</p>
+        <h1>The whole Earth is the scope.</h1>
+        <p>Earthcraft builds measured places into a continuous, addressable world. The atlas reports source coverage, surface evidence, and delivery separately, so a generated file never masquerades as a verified planet.</p>
+      </div>
+      <div class="scope-note"><span>Current scope</span><strong>Entire Earth</strong><small>Regional evidence is counted where it exists.</small></div>
+    </section>
+    <div class="toolbar">
+      <div><strong id="phase">Reading progress…</strong><span id="updated"></span></div>
+      <div class="actions"><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
+    </div>
+    <div id="warning" role="status" hidden></div>
+    <div class="workspace">
+      <section class="atlas">
+        <div class="maphead"><h2>Earthwide coverage</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
+        <div class="mapwrap"><canvas id="map" aria-label="World map showing known Earthcraft regions and workstream state"></canvas><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
+        <div class="legend"><span><i class="known"></i>Measured working region</span><span><i class="planned"></i>Global foundation</span><span>Blank space means unknown, not complete</span></div>
+        <p class="caption">The map is a geographic index of evidence. It is not a rendered Minecraft view and it does not turn missing observations into terrain.</p>
+        <p id="cell" aria-live="polite">Move over the map for coordinates and state.</p>
+      </section>
+      <aside>
+        <p class="eyebrow">EARTH ROLLUP</p>
+        <dl>
+          <div><dt>Global state</dt><dd id="rollup">Pending</dd></div>
+          <div><dt>Verified geometry tiles</dt><dd id="geometry">Pending</dd></div>
+          <div><dt>Source tiles acquired</dt><dd id="sources">Pending</dd></div>
+          <div><dt>Coverage percentage</dt><dd id="coverage">Not computed</dd></div>
+          <div><dt>Surface model</dt><dd id="surface">Pending</dd></div>
+          <div><dt>Local feed</dt><dd id="local">Pending</dd></div>
+        </dl>
+        <p id="recovery" class="note"></p>
+        <p class="note">Below the measured surface, repeated substrate blocks are enough for the game. Above it, empty sections are omitted. Buildings, water, and landmarks keep their own evidence gates.</p>
+        <details><summary>Recent local activity</summary><pre id="log">No local run connected.</pre></details>
+      </aside>
+    </div>
+    <section class="horizon">
+      <div><p class="eyebrow">THE LONG VIEW</p><h2>Progress follows evidence.</h2></div>
+      <p>Earthcraft does not need to write every block on Earth before a place can exist. It needs a stable global address, immutable source extracts, precise surfaces, and an on-demand cache that can replay the same tile anywhere.</p>
+      <ol><li><strong>01 / Catalog</strong><span>Index sources once, then hand bounded extracts to workers.</span></li><li><strong>02 / Surface</strong><span>Keep observed elevation precise and abstain when coverage is missing.</span></li><li><strong>03 / Delivery</strong><span>Generate locally, stream by need, preserve the player’s edits.</span></li></ol>
+    </section>
+  </main>
+  <footer>EARTHCRAFT / GLOBAL OBSERVATORY<span id="footer-state">Awaiting first observation</span></footer>
+</body>
+</html>

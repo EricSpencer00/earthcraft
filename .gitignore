@@ -63,3 +63,4 @@ __pycache__/
 *.sqlite-shm
 *.sqlite-wal
 *.partial
+roofer.log.json

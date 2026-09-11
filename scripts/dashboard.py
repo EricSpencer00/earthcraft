@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import psutil
 from local_paths import bulk_path
+from progress_snapshot import build_snapshot
 
 REPO = Path(__file__).resolve().parents[1]
 ROOT = bulk_path('chicago')
@@ -124,6 +125,10 @@ class Handler(BaseHTTPRequestHandler):
             if stage not in STAGES:
                 self.send_error(400); return
             content = json.dumps(snapshot(stage)).encode(); mime='application/json'
+        elif parsed.path == '/api/earth':
+            content = json.dumps(build_snapshot(REPO)).encode(); mime='application/json'
+        elif parsed.path == '/progress/earth.json':
+            content = (REPO/'progress/earth.json').read_bytes(); mime='application/json'
         elif parsed.path == '/api/boundary':
             data = read_json(ROOT/'sources/chicago-boundary.geojson')
             content = json.dumps(data).encode(); mime='application/json'

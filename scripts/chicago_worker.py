@@ -1,16 +1,20 @@
 """Execute real source and geometry jobs from the frozen Chicago city plan.
 
-One worker, bounded tile memory, immutable per-tile outputs and successful
-read-back receipts. Appearance/game stages are deliberately not certified here.
+Each worker owns one tile at a time, writes only to that tile's immutable
+staging directory, and publishes a receipt through the SQLite lease journal.
+Multiple processes may share one plan; appearance/game stages are deliberately
+not certified here.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import time
 import shutil
 import fcntl
 import os
 import signal
+import subprocess
 import sys
 import urllib.error
 from datetime import datetime,timezone
@@ -108,13 +112,18 @@ def promote_styled_shell(observed,source,world,compile_fn=compile_layer,verify_f
 
 
 def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_points=False,assembly=None,way_index=None,
-        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,retry_tiles=(),styled_buildings=False):
+        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,retry_tiles=(),styled_buildings=False,
+        worker_id='local-chicago-worker'):
     plan=json.loads((plan_dir/'plan.json').read_text());catalog=json.loads(catalog_path.read_text())
     if catalog['world_plan_sha256']!=digest(plan):raise ValueError('Source catalog does not match city plan')
     tiles={t['id']:t for t in plan['tiles']};jobs={j['tile']:j for j in catalog['jobs']}
     assets={a['id']:a for a in catalog['assets']};cached={}
     output.mkdir(parents=True,exist_ok=True)
-    run_lock=(plan_dir/'worker.lock').open('a+')
+    if not worker_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.' for char in worker_id):
+        raise ValueError('Worker id must be a nonempty filesystem-safe label')
+    if assembly and worker_id != 'local-chicago-worker':
+        raise ValueError('Closed assembly is single-writer; parallel workers must publish immutable tiles first')
+    run_lock=(plan_dir/f'worker-{worker_id}.lock').open('a+')
     fcntl.lockf(run_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     run_lock.seek(0);run_lock.truncate();run_lock.write(str(os.getpid()));run_lock.flush()
     stopping=False
@@ -142,7 +151,7 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
             append_tile(assembly,world,tiles[row['tile']],plan)
     def progress():
         save_json(output/'progress.json',{'world_plan_sha256':digest(plan),'stages':journal.summary(),
-            'installed_world_changed':False,'full_chicago_complete':False})
+            'worker_id':worker_id,'installed_world_changed':False,'full_chicago_complete':False})
     def geometry_job(job):
         # The source receipt identifies its output volume, so a resumed worker
         # does not lose pending work when later tiles move to bulk storage.
@@ -187,7 +196,7 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
             if shutil.disk_usage(ROOT).free<20*2**30:raise ValueError('Internal free-space reserve reached')
             if release_points and (not bulk_root().exists() or shutil.disk_usage(output).free<101*2**30):
                 raise ValueError('Bulk drive unavailable or free-space reserve reached')
-            job=journal.claim('geometry','local-chicago-worker',lease_seconds=3600)
+            job=journal.claim('geometry',worker_id,lease_seconds=3600)
             if job:
                 try:
                     geometry_job(job)
@@ -215,7 +224,7 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                     if geometry_failures>=3:
                         raise RuntimeError('Three consecutive geometry failures; inspect evidence before continuing') from error
                 progress();continue
-            job=journal.claim('sources','local-chicago-worker',lease_seconds=3600,
+            job=journal.claim('sources',worker_id,lease_seconds=3600,
                               source_locality_after=source_locality_after)
             if not job:break
             tile=tiles[job['tile']];tile_out=output/tile['id'];tile_out.mkdir(exist_ok=True)
@@ -272,7 +281,7 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                 if failures>=3:
                     progress();raise RuntimeError('Three consecutive source failures; inspect evidence before continuing downloads') from error
             # Build each tile before acquiring the next, keeping memory/disk bounded.
-            geometry=journal.claim('geometry','local-chicago-worker',lease_seconds=3600)
+            geometry=journal.claim('geometry',worker_id,lease_seconds=3600)
             if geometry:
                 try:
                     geometry_job(geometry)
@@ -299,6 +308,55 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
     finally:journal.close();run_lock.close()
 
 
+def spawn_workers(args):
+    """Run bounded independent tile workers over one SQLite lease queue.
+
+    Workers never share an Anvil directory or mutate the assembled world.  The
+    queue's lease and per-asset cache locks are the coordination boundary.
+    """
+    if args.assembly:
+        raise ValueError('--assembly is single-writer; omit it when using --workers')
+    budgets=[args.limit//args.workers + (1 if index < args.limit%args.workers else 0)
+             for index in range(args.workers)]
+    children=[]
+    try:
+        for index, budget in enumerate(budgets):
+            if not budget:
+                break
+            command=[sys.executable,str(Path(__file__).resolve()),
+                '--plan',str(args.plan),'--catalog',str(args.catalog),'--output',str(args.output),
+                '--bulk',str(args.bulk),'--limit',str(budget),'--workers','1',
+                '--worker-id',f'parallel-{index+1}']
+            if args.source_parent:command.extend(['--source-parent',str(args.source_parent)])
+            if args.way_index:command.extend(['--way-index',str(args.way_index)])
+            if args.point_cache_gib is not None:command.extend(['--point-cache-gib',str(args.point_cache_gib)])
+            command.extend(['--source-locality-after',str(args.source_locality_after)])
+            if args.release_derived_points:command.append('--release-derived-points')
+            if args.styled_buildings:command.append('--styled-buildings')
+            # Requeue is a queue-wide mutation; perform it once before the
+            # parallel workers start claiming jobs.
+            if index==0 and args.retry_failed:command.append('--retry-failed')
+            for tile in args.retry_tile:
+                if index==0:command.extend(['--retry-tile',tile])
+            children.append(subprocess.Popen(command))
+        failed=None
+        while children:
+            for child in children[:]:
+                result=child.poll()
+                if result is None:continue
+                children.remove(child)
+                if result and failed is None:failed=result
+            if failed is not None:break
+            if children:time.sleep(.2)
+        if failed is not None:
+            for child in children:child.terminate()
+            for child in children:child.wait(timeout=20)
+            raise SystemExit(failed)
+    finally:
+        for child in children:
+            if child.poll() is None:child.terminate()
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--plan',type=Path,default=ROOT/'runs/chicago-adaptation-city-001')
@@ -306,7 +364,9 @@ if __name__=='__main__':
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--source-parent',type=Path)
     p.add_argument('--bulk',type=Path,default=bulk_path('chicago','lidar-2022'))
-    p.add_argument('--limit',type=int,default=1)
+    p.add_argument('--limit',type=int,default=1,help='Total bounded worker-loop budget; with --workers it is divided across workers')
+    p.add_argument('--workers',type=int,default=1,help='Independent tile processes sharing the lease journal (default: 1)')
+    p.add_argument('--worker-id',default='local-chicago-worker',help='Unique filesystem-safe worker label')
     p.add_argument('--release-derived-points',action='store_true',help='Retain originals and provenance; release reproducible per-tile point working files after verified export')
     p.add_argument('--assembly',type=Path,help='Closed continuous city world on the bulk volume; never the installed save')
     p.add_argument('--way-index',type=Path,help='Verified read-only OSM spatial index for this exact source and city frame')
@@ -322,26 +382,30 @@ if __name__=='__main__':
                    help='Preserve raw observations and assemble a verified deterministic shell sibling for new tiles')
     a=p.parse_args()
     if not 1<=a.limit<=10000:p.error('Limit must be between one and the city job count')
-    class LogOutput:
-        def __init__(self,original,log):self.original,self.log=original,log
-        def write(self,value):self.original.write(value);self.log.write(value);self.log.flush()
-        def flush(self):self.original.flush();self.log.flush()
-    logdir=a.plan/'worker-logs';logdir.mkdir(exist_ok=True)
-    with (logdir/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'.log')).open('x') as log:
-        sys.stdout=LogOutput(sys.stdout,log);sys.stderr=LogOutput(sys.stderr,log)
-        index=None
-        try:
-            if a.way_index:
-                from metric_way_index import MetricWayIndex
-                frame=json.loads((a.plan/'frame.json').read_text())
-                index=MetricWayIndex(a.way_index,bulk_path('chicago','sources','chicago.osm.pbf'),frame['crs'])
-            if not 0 <= a.point_cache_gib <= 64:
-                raise ValueError('--point-cache-gib must be between 0 and 64')
-            if not 0 <= a.source_locality_after <= 1e9:
-                raise ValueError('--source-locality-after must be between 0 and 1e9')
-            run(a.plan,a.catalog,a.output,a.limit,a.source_parent,a.bulk,a.release_derived_points,
-                a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,
-                a.retry_failed,a.retry_tile,a.styled_buildings)
-        finally:
-            if index:index.close()
-            sys.stdout=sys.stdout.original;sys.stderr=sys.stderr.original
+    if not 1<=a.workers<=32:p.error('Workers must be between one and 32')
+    if a.workers>1:
+        spawn_workers(a)
+    else:
+        class LogOutput:
+            def __init__(self,original,log):self.original,self.log=original,log
+            def write(self,value):self.original.write(value);self.log.write(value);self.log.flush()
+            def flush(self):self.original.flush();self.log.flush()
+        logdir=a.plan/'worker-logs';logdir.mkdir(exist_ok=True)
+        with (logdir/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+a.worker_id+'.log')).open('x') as log:
+            sys.stdout=LogOutput(sys.stdout,log);sys.stderr=LogOutput(sys.stderr,log)
+            index=None
+            try:
+                if a.way_index:
+                    from metric_way_index import MetricWayIndex
+                    frame=json.loads((a.plan/'frame.json').read_text())
+                    index=MetricWayIndex(a.way_index,bulk_path('chicago','sources','chicago.osm.pbf'),frame['crs'])
+                if not 0 <= a.point_cache_gib <= 64:
+                    raise ValueError('--point-cache-gib must be between 0 and 64')
+                if not 0 <= a.source_locality_after <= 1e9:
+                    raise ValueError('--source-locality-after must be between 0 and 1e9')
+                run(a.plan,a.catalog,a.output,a.limit,a.source_parent,a.bulk,a.release_derived_points,
+                    a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,
+                    a.retry_failed,a.retry_tile,a.styled_buildings,a.worker_id)
+            finally:
+                if index:index.close()
+                sys.stdout=sys.stdout.original;sys.stderr=sys.stderr.original

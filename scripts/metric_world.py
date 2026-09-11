@@ -265,7 +265,6 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     # a newly allocated value; deep-copying the full template 256 times was a
     # measurable serialization hotspot.
     sample_template = copy.deepcopy(sample)
-    sections_n = world_height//16
     level = n.load(template/'level.dat')
     d = level['Data']
     d['LevelName'] = n.String(destination.name)
@@ -323,26 +322,62 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     level.save(destination/'level.dat')
     records = {}
     count = 0
+    written_sections = 0
+    omitted_air_sections = 0
+    tallest_chunk_height = 0
+    # Do not scan every admitted building for every chunk.  The raster mask is
+    # still the authority, but this index turns the common urban case into a
+    # local chunk lookup and keeps the writer parallel-friendly.
+    buildings_by_chunk = {}
+    for building_index, building in enumerate(buildings):
+        rows, cols = np.where(building['mask'])
+        if not len(rows):
+            continue
+        for cz in range(int(rows.min())//16, int(rows.max())//16+1):
+            for cx in range(int(cols.min())//16, int(cols.max())//16+1):
+                if building['mask'][cz*16:min(size,(cz+1)*16),cx*16:min(size,(cx+1)*16)].any():
+                    buildings_by_chunk.setdefault((cx,cz),[]).append(building_index)
     for cz in range(size//16):
         for cx in range(size//16):
             zs,xs = slice(cz*16,cz*16+16),slice(cx*16,cx*16+16)
             g = ground[zs,xs]
-            volume = np.zeros((world_height,16,16),np.uint8)
-            yy = np.arange(min_y,min_y+world_height)[:,None,None]
+            local_buildings = [buildings[index] for index in buildings_by_chunk.get((cx,cz),())]
+            local_points = None
+            if point_cells is not None:
+                local_points = point_cells[(point_cells[:,0]//16 == cx) & (point_cells[:,2]//16 == cz)]
+            column_top = g.copy()
+            for building in local_buildings:
+                mask = building['mask'][zs,xs]
+                column_top[mask] = np.maximum(column_top[mask],building['high'])
+            if lidar_report is not None:
+                local_roof_mask = roof_mask[zs,xs]
+                local_roof_top = roof_top[zs,xs]
+                column_top[local_roof_mask] = np.maximum(column_top[local_roof_mask],local_roof_top[local_roof_mask])
+            if local_points is not None and len(local_points):
+                np.maximum.at(column_top,(local_points[:,2]%16,local_points[:,0]%16),local_points[:,1])
+            # Empty space above the highest observed surface does not need a
+            # serialized section.  Beneath it remains an ordinary repeated
+            # substrate block, while the surface section stays exact.
+            chunk_height = max(16,math.ceil((int(column_top.max())-min_y+1)/16)*16)
+            if chunk_height > world_height:
+                raise ValueError('Chunk surface exceeds declared world height')
+            tallest_chunk_height = max(tallest_chunk_height,chunk_height)
+            omitted_air_sections += world_height//16 - chunk_height//16
+            volume = np.zeros((chunk_height,16,16),np.uint8)
+            yy = np.arange(min_y,min_y+chunk_height)[:,None,None]
             volume[:] = np.where(yy<=g, BLOCK['stone'],BLOCK['air'])
             volume[0] = BLOCK['bedrock']
             zz,xx=np.mgrid[:16,:16]
             volume[g-min_y,zz,xx] = surface[zs,xs]
             volume[g-min_y-1,zz,xx] = BLOCK['dirt']
-            if point_cells is not None:
-                local = point_cells[(point_cells[:,0]//16 == cx) & (point_cells[:,2]//16 == cz)]
-                volume[local[:,1]-min_y, local[:,2]%16, local[:,0]%16] = BLOCK['stone_bricks']
+            if local_points is not None:
+                volume[local_points[:,1]-min_y, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
             elif lidar_report is not None:
                 exposed = (roof_mask[zs,xs] & (yy >= roof_floor[zs,xs]) &
                            (yy <= roof_top[zs,xs]))
                 volume[exposed] = BLOCK['stone_bricks']
             else:
-                for b in buildings:
+                for b in local_buildings:
                     mask,wall=b['mask'][zs,xs],b['wall'][zs,xs]
                     if mask.any():
                         volume[b['low']-min_y:b['high']-min_y+1,wall]=b['block']
@@ -368,7 +403,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             tag['xPos']=n.Int(world_cx);tag['zPos']=n.Int(world_cz);tag['yPos']=n.Int(min_y//16)
             tag['isLightOn']=n.Byte(0)
             sections=[]
-            for si in range(sections_n):
+            for si in range(chunk_height//16):
                 values,inverse=palette_indices(volume[si*16:si*16+16])
                 states=n.Compound({'palette':n.List[n.Compound]([n.Compound({'Name':n.String('minecraft:'+PALETTE[v])}) for v in values])})
                 if len(values)>1:
@@ -376,7 +411,8 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
                 sections.append(n.Compound({'Y':n.Byte(si+min_y//16),'block_states':states,
                     'biomes':n.Compound({'palette':n.List[n.String](['minecraft:plains'])})}))
             tag['sections']=n.List[n.Compound](sections)
-            top=world_height-np.argmax((volume!=0)[::-1],axis=0)
+            written_sections += len(sections)
+            top = column_top-min_y+1
             heightmap=packed(top,(world_height).bit_length())
             tag['Heightmaps']=n.Compound({name:heightmap for name in ('WORLD_SURFACE','MOTION_BLOCKING','MOTION_BLOCKING_NO_LEAVES','OCEAN_FLOOR')})
             tag['PostProcessing']=n.List[n.List[n.Short]]([n.List[n.Short]([]) for _ in sections])
@@ -386,7 +422,10 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     for (rx,rz),values in records.items():
         region_write(destination/'region'/f'r.{rx}.{rz}.mca',values)
     report={'status':'populated_not_game_verified','source':meta,'chunks':count,'spawn':spawn,
-            'world_offset_xz':world_offset,'world_frame':world_frame,
+        'storage_strategy':'Exact surface and admitted structures; repeated substrate below the surface; air sections above each chunk top omitted',
+        'written_sections':written_sections,'omitted_air_sections':omitted_air_sections,
+        'tallest_chunk_height':tallest_chunk_height,'declared_world_height':world_height,
+        'world_offset_xz':world_offset,'world_frame':world_frame,
             'observation_coordinate_frame':'tile-local X/Z, shared absolute Minecraft Y',
             'spawn_rotation':[yaw,0], 'coverage_edge':'Unscanned surroundings are void; use Human at spawn to return.',
         'dem_path':str((source/meta.get('elevation_raster','usgs-elevation.tif')).resolve()),

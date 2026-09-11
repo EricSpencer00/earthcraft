@@ -1,0 +1,42 @@
+name: Publish Earthcraft progress atlas
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the public source
+        uses: actions/checkout@v4
+      - name: Build a privacy-safe snapshot
+        run: python scripts/progress_snapshot.py --root . --output progress/earth.json
+      - name: Assemble the static observatory
+        run: |
+          mkdir -p site/progress
+          cp dashboard/index.html dashboard/app.js dashboard/style.css site/
+          cp progress/earth.json site/progress/earth.json
+          touch site/.nojekyll
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -15,6 +15,12 @@ are not accepted as finished until they are checked independently. The current
 roadmap is in [docs/PLAN.md](docs/PLAN.md); the evidence and release limits are
 in [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md).
 
+The whole-Earth direction is sparse and on demand, not a claim that every
+square metre has already been generated. See
+[docs/GLOBAL_GENERATION.md](docs/GLOBAL_GENERATION.md) for the scrape stages,
+parallel tile workers, precise-surface/repeated-substrate split, and the
+privacy-safe progress contract behind the dashboard.
+
 ## Start here
 
 The quickest useful check is the offline test suite. It does not download a
