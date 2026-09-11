@@ -106,10 +106,12 @@ throughput claim. The multi-worker city path still needs a real frozen-tile
 
 `progress/earth.json` is the privacy-safe public contract. The GitHub Pages
 workflow assembles `dashboard/` plus that snapshot into a static site at the
-repository Pages URL, which can be mapped to `ericspencer.us/earthcraft/`.
-The localhost backend exposes the same contract at `/api/earth` and overlays
-counts from local journals without exporting machine paths or raw source
-metadata.
+repository Pages URL, currently served at `ericspencer.us/earthcraft/`. On a
+clean GitHub runner, the workflow preserves the last committed aggregate when
+there is no local `runs/` journal, so a deployment does not erase measured
+regional progress. The localhost backend exposes the same contract at
+`/api/earth` and overlays counts from local journals without exporting machine
+paths or raw source metadata.
 
 The dashboard intentionally leaves global coverage as “not computed” until a
 global catalog and denominator exist. Chicago is shown as a known working

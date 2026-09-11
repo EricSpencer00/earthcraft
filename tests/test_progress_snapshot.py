@@ -27,6 +27,32 @@ class ProgressSnapshotTests(unittest.TestCase):
             self.assertFalse(snapshot['local']['private_paths_included'])
             self.assertNotIn('/Users/', json.dumps(snapshot))
 
+    def test_ci_preserves_last_public_aggregate_without_local_journal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            seed = {
+                'schema_version': 1,
+                'updated_utc': '2026-01-01T00:00:00+00:00',
+                'scope': {'id': 'earth', 'coverage_percent': None},
+                'rollup': {'generated_tiles': 12},
+                'local': {
+                    'state': 'idle',
+                    'source_tiles_complete': 14,
+                    'source_tiles_total': 20,
+                    'geometry_tiles_complete': 12,
+                    'stages': {},
+                    'private_paths_included': False,
+                },
+                'claims': {'private_data_in_snapshot': False},
+            }
+            (root / 'progress').mkdir()
+            (root / 'progress/earth.json').write_text(json.dumps(seed))
+            snapshot = build_snapshot(root, datetime(2026, 1, 2, tzinfo=timezone.utc))
+            self.assertEqual(snapshot['rollup']['generated_tiles'], 12)
+            self.assertEqual(snapshot['local']['source_tiles_complete'], 14)
+            self.assertEqual(snapshot['local']['state'], 'public_snapshot')
+            self.assertEqual(snapshot['updated_utc'], '2026-01-02T00:00:00+00:00')
+
 
 if __name__ == '__main__':
     unittest.main()

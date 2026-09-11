@@ -45,6 +45,22 @@ def _status(root):
     return 'idle'
 
 
+def _previous_public_snapshot(root):
+    """Read the last committed aggregate when CI has no local run journal."""
+    path = root / 'progress' / 'earth.json'
+    try:
+        snapshot = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if snapshot.get('scope', {}).get('id') != 'earth':
+        return None
+    if snapshot.get('local', {}).get('private_paths_included') is not False:
+        return None
+    if snapshot.get('claims', {}).get('private_data_in_snapshot') is not False:
+        return None
+    return snapshot
+
+
 def build_snapshot(root, now=None):
     root = Path(root)
     counts = _journal_counts(root)
@@ -52,6 +68,11 @@ def build_snapshot(root, now=None):
     geometry_complete = counts['geometry'].get('complete', 0)
     total = sum(counts['sources'].values())
     has_local_journal = bool(total)
+    previous = _previous_public_snapshot(root) if not has_local_journal else None
+    if previous:
+        previous['updated_utc'] = (now or datetime.now(timezone.utc)).isoformat()
+        previous.setdefault('local', {})['state'] = 'public_snapshot'
+        return previous
     local_state = _status(root) if has_local_journal else 'no_local_run'
     return {
         'schema_version': 1,
@@ -87,7 +108,7 @@ def build_snapshot(root, now=None):
              'source_tiles_complete': source_complete,
              'geometry_tiles_complete': geometry_complete,
              'source_tiles_total': total or None,
-             'note': 'Current working example; counts appear when a local journal is available.'},
+             'note': 'Current working example; CI republishes the last privacy-safe aggregate when no local journal is present.'},
         ],
         'local': {
             'state': local_state,

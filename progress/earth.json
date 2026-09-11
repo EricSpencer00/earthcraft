@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-11T15:06:48.654183+00:00",
+  "updated_utc": "2026-09-11T15:21:13.531678+00:00",
   "scope": {
     "id": "earth",
     "label": "Entire Earth",
@@ -56,7 +56,7 @@
       "source_tiles_complete": 694,
       "geometry_tiles_complete": 689,
       "source_tiles_total": 9639,
-      "note": "Current working example; counts appear when a local journal is available."
+      "note": "Current working example; CI republishes the last privacy-safe aggregate when no local journal is present."
     }
   ],
   "local": {

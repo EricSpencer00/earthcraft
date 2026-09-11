@@ -24,9 +24,9 @@ ignores the photo directory.
 
 ## Publication state
 
-The public repository has been created at
-`https://github.com/EricSpencer00/earthcraft`, but this checkout still needs
-its audited source pushed and its Pages deployment verified. The Pages
-workflow publishes the dashboard at the repository Pages URL; the desired
-`ericspencer.us/earthcraft/` route still requires the site's existing hosting
-configuration to map that path.
+The audited source is public at
+`https://github.com/EricSpencer00/earthcraft`. Its Pages workflow completed
+successfully, and the live progress atlas is verified at
+`https://ericspencer.us/earthcraft/`. The static public snapshot preserves the
+last committed aggregate when CI has no local run journal; local runs remain
+available through the loopback backend.
