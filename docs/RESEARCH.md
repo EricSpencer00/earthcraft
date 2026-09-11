@@ -22,7 +22,7 @@ Checked 2026-09-09. Primary sources only. This is a planning survey, not a bench
 Read-only shell inspection found:
 
 - `sysctl -n machdep.cpu.brand_string hw.memsize`: Apple M1 Max; 68,719,476,736 bytes = 64 GiB.
-- `df -h /Users/eric`: about 39 GiB available on the data volume at inspection time. Recheck before downloading.
+- `df -h`: about 39 GiB available on the data volume at inspection time. Recheck before downloading.
 - Minecraft version directory: `1.21.10`, `1.21.11-pre1`.
 - Python shim, uv, Cargo, and Git executables present. No dependency/model compatibility tests were run.
 
@@ -44,3 +44,11 @@ Read-only shell inspection found:
 - What fraction of the selected area remains unknown after all admitted sources?
 
 These questions are assigned concrete tests in [the experiment protocol](../experiments/PROTOCOL.md). No model weights, geographic payloads, or existing Minecraft saves were modified during planning.
+
+## Hardware/public-plan revision, 2026-09-09
+
+Read-only `system_profiler`, `df -h` and `mount` confirmed M1 Max, 10 CPU cores, 64 GiB memory, approximately 39 GiB internal free, and LaCie approximately 1.5 TiB free mounted as exFAT. Device-detail inspection through DiskManagement failed. No media type, connection speed or storage performance is established. Device identifiers were not retained in these documents.
+
+Rechecked Arnis, MLX-VLM, Qwen3-VL and the OSM tile policy upstream. Arnis documents an exception to its primary Apache-2.0 licensing for the Luanti block mapping; audit incorporated files before distribution. The external filesystem finding changed storage placement and recovery design. The 100 GiB external budget is an engineering ceiling, not a benchmark or required download size.
+
+The revised public milestones are in [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md). Exact model selection remains an implementation experiment; checking upstream support is not a local compatibility test.

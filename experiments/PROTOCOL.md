@@ -1,8 +1,10 @@
 # Pilot experiment protocol
 
-Preregistered design, 2026-09-09. No results have been collected. Numeric gates below are proposed engineering targets, to be frozen for a selected dataset before running it. If a target is impossible given source accuracy, record that limitation; do not silently loosen the target after seeing a result.
+Preregistered design, 2026-09-09. The narrow MVP has generated-world checks recorded in docs/MVP.md; the preregistered source-quality and game-loading gates below have not passed. Numeric gates below are proposed engineering targets, to be frozen for a selected dataset before running it. If a target is impossible given source accuracy, record that limitation; do not silently loosen the target after seeing a result.
 
 ## E0. Environment and export fixture
+
+First execute the preflight in [HARDWARE.md](../docs/HARDWARE.md): verify both volumes, budget caches and overlapping copies, benchmark bounded external I/O, and record native architecture. Test missing-volume, low-space, partial-copy and simulated I/O failure behavior. Keep active state internal. These guards are proposed, not implemented. This stage does not require a selected real AOI.
 
 Build a synthetic 64 × 64 metre scene containing known distances, a sloped ground surface, diagonal wall, pitched roof, bridge, water edge, and hollow building. Cross a chunk boundary and include negative coordinates in at least one fixture.
 
@@ -76,7 +78,7 @@ Measure the pilot before extrapolating. For a grid-aligned square, 256 metres is
 
 At a 384-block vertical envelope, 1,024² × 384 is 402,653,184 possible cells, about 1.5 GiB at four bytes per dense cell before overhead. This is capacity arithmetic, not predicted compressed world size. Stream sparse/chunk-local output instead of materializing several dense copies.
 
-Proposed pilot limits are in `configs/pilot.json`: 15 GiB project disk cap, 20 GiB free-disk reserve, 24 GiB process memory target, 60 minute wall-time target. Download and model-load times are reported separately from generation, and total end-to-end time is also reported. Dependency caches count toward project storage consumption even when located outside the repository.
+Proposed pilot limits are in `configs/pilot.json`: 12 GiB internal project cap with 20 GiB free reserve; 100 GiB external cap with 100 GiB reserve; 24 GiB process-tree memory target, 32 GiB stop threshold, 2 GiB swap-growth pause threshold; 60 minute warm-generation target. Each volume is checked independently. See [HARDWARE.md](../docs/HARDWARE.md) for allocation and disconnect handling. Download and model-load times are reported separately from generation, and total end-to-end time is also reported. Dependency caches count toward project storage consumption even when located outside the repository.
 
 Gate: a second location runs from configuration alone with a truthful quality report and bounded resources. Do not claim city-scale throughput or general geographic accuracy from one successful street.
 
