@@ -185,6 +185,35 @@ class Journal:
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
 
+    def claim_exact(self, stage, tile, owner, now=None, lease_seconds=300):
+        """Claim one eligible named job without disturbing the global queue.
+
+        Appearance workers use this to advance an auditable corridor only when
+        its geometry is already complete and compatible with their evidence
+        stage.  It retains the same receipt and lease fences as ``claim``.
+        """
+        index=STAGES.index(stage);now=time.time() if now is None else now;tile=str(tile)
+        if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:
+            raise ValueError('Invalid worker lease')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            row=self.db.execute('''SELECT * FROM jobs j WHERE tile=? AND stage=? AND
+              (state='pending' OR (state='running' AND expires<=?)) AND
+              NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')''',
+                (tile,index,now)).fetchone()
+            result=None
+            if row:
+                for prior in self.db.execute('SELECT evidence,evidence_sha256 FROM jobs WHERE tile=? AND stage<?',(tile,index)):
+                    path=Path(prior['evidence'])
+                    if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
+                        raise ValueError('Prior stage evidence changed; do not advance tile')
+                token=uuid.uuid4().hex
+                self.db.execute('UPDATE jobs SET state=\'running\',token=?,owner=?,expires=?,attempts=attempts+1 WHERE tile=? AND stage=?',
+                    (token,owner,now+lease_seconds,tile,index))
+                result={'tile':tile,'stage':stage,'token':token}
+            self.db.execute('COMMIT');return result
+        except Exception:self.db.execute('ROLLBACK');raise
+
     def finish(self,job,receipt,now=None):
         now=time.time() if now is None else now;receipt=Path(receipt)
         if receipt.stat().st_size>2**20:raise ValueError('Receipt exceeds journal budget')

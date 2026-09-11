@@ -148,6 +148,20 @@ class ChicagoTileTests(unittest.TestCase):
             self.assertEqual(states[failed[1]],'failed')
             journal.close()
 
+    def test_exact_claim_waits_for_prior_stages_and_leaves_other_jobs_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); plan=fixture_plan(); journal=Journal(root/'jobs.sqlite',plan)
+            tile=plan['tiles'][0]['id']; other=plan['tiles'][1]['id']
+            self.assertIsNone(journal.claim_exact('appearance',tile,'roof',now=1))
+            for stage in ('sources','geometry'):
+                job=journal.claim_exact(stage,tile,'geometry',now=2)
+                receipt=root/f'{stage}.json';receipt.write_text(json.dumps(dict(job,result='pass')))
+                journal.finish(job,receipt,now=3)
+            claimed=journal.claim_exact('appearance',tile,'roof',now=4)
+            self.assertEqual(claimed['tile'],tile)
+            self.assertEqual(journal.db.execute('SELECT state FROM jobs WHERE tile=? AND stage=2',(other,)).fetchone()[0],'pending')
+            journal.close()
+
     def test_named_route_precedes_locality_but_keeps_running_jobs(self):
         with tempfile.TemporaryDirectory() as folder:
             plan=fixture_plan();path=Path(folder)/'jobs.sqlite';journal=Journal(path,plan)
