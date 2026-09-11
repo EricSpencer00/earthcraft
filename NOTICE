@@ -1,0 +1,13 @@
+Earthcraft
+Copyright 2026 Eric Spencer
+
+The Earthcraft source code is available under the Apache License, Version
+2.0. See LICENSE.
+
+Earthcraft can invoke or interoperate with third-party software and data,
+including Arnis, OpenStreetMap, public elevation and imagery providers, and
+Minecraft. Those projects, services, datasets, images, and generated worlds
+are not relicensed by this notice. Keep their attribution and distribution
+terms with any artifact that uses them. Do not treat the Apache license for
+Earthcraft source as permission to redistribute provider data, model weights,
+Minecraft assets, or a generated world.
