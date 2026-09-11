@@ -3,37 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Earthcraft · Global observatory</title>
+  <title>Earthcraft · Global cell progress</title>
   <link rel="stylesheet" href="./style.css">
   <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js" defer></script>
-  <script src="./app.js?v=globe-gl-6" defer></script>
+  <script src="./app.js?v=cell-globe-3" defer></script>
 </head>
 <body>
   <header>
-    <a href="./" class="brand">earthcraft<span>GLOBAL OBSERVATORY / 01</span></a>
+    <a href="./" class="brand">earthcraft<span>GLOBAL CELL PROGRESS / 01</span></a>
     <div id="connection" role="status">Reading the latest progress…</div>
   </header>
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">EARTHCRAFT PROGRESS</p>
-        <h1>Generation progress</h1>
-        <p>This page shows source, tile, and validation status. Places without evidence stay unmarked.</p>
+        <p class="eyebrow">EARTHCRAFT / WORLD PROGRESS</p>
+        <h1>The world, cell by cell.</h1>
+        <p>Each mark is a 256 metre generation cell. Open one to see its 256 Minecraft chunks and the stage each one has reached.</p>
       </div>
-      <div class="scope-note"><span>World target</span><strong>Entire Earth</strong><small>Coverage is partial.</small></div>
+      <div class="scope-note"><span>World target</span><strong>Entire Earth</strong><small>Unmeasured cells stay unmarked.</small></div>
     </section>
     <div class="toolbar">
       <div><strong id="phase">Reading progress…</strong><span id="updated"></span></div>
-      <div class="actions"><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
+      <div class="actions"><label>View <select id="layer"><option value="cells">Cells</option><option value="regions">Regions</option><option value="workstreams">Workstreams</option></select></label><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
     </div>
     <div id="warning" role="status" hidden></div>
     <div class="workspace">
       <section class="atlas">
-        <div class="maphead"><h2>Measured regions</h2><label>View <select id="layer"><option value="regions">Known regions</option><option value="workstreams">Workstreams</option></select></label></div>
-        <div class="mapwrap"><div id="map" role="img" aria-label="Interactive Earth globe showing known Earthcraft regions and workstream state"></div><div id="workstream-list" class="globe-list" hidden></div><span class="north">N ↑</span><div class="mapnote" id="mapnote">Waiting for the first observation</div></div>
-        <div class="legend"><span><i class="known"></i>Measured region</span><span><i class="planned"></i>Planned foundation</span><span>No mark means no evidence yet</span></div>
-        <p class="caption">Blank means not measured.</p>
-        <p id="cell" aria-live="polite">Move over the globe to inspect a coordinate.</p>
+        <div class="maphead"><div><p class="eyebrow">256 METRE CELLS / 16 × 16 CHUNKS</p><h2>Global cell grid</h2></div><span class="north">N ↑</span></div>
+        <div class="mapwrap"><div id="map" role="img" aria-label="Interactive Earth globe showing materialized generation cells"></div><div id="workstream-list" class="globe-list" hidden></div><div class="mapnote" id="mapnote">Waiting for the first cell</div></div>
+        <div class="legend" aria-label="Cell status legend"><span><i class="queued"></i>Queued</span><span><i class="sourced"></i>Source ready</span><span><i class="generated"></i>Generated</span><span><i class="verified"></i>Verified</span></div>
+        <p class="caption">The address space covers Earth. The visible marks are the cells currently queued or backed by evidence.</p>
+        <p id="cell" aria-live="polite">Move over the globe to inspect a cell.</p>
       </section>
       <aside>
         <p class="eyebrow">CURRENT STATE</p>
@@ -41,16 +41,15 @@
           <div><dt>World status</dt><dd id="rollup">Pending</dd></div>
           <div><dt>Built tiles</dt><dd id="geometry">Pending</dd></div>
           <div><dt>Source tiles</dt><dd id="sources">Pending</dd></div>
-          <div><dt>Earth covered</dt><dd id="coverage">Not computed</dd></div>
-          <div><dt>Surface</dt><dd id="surface">Pending</dd></div>
-          <div><dt>Feed</dt><dd id="local">Pending</dd></div>
+          <div><dt>Materialized cells</dt><dd id="cells">Pending</dd></div>
+          <div><dt>Addressed chunks</dt><dd id="chunks">Pending</dd></div>
         </dl>
         <p id="recovery" class="note"></p>
-        <p class="note">Surface data is precise. Subsurface repeats a standard block; empty space stays empty.</p>
+        <p class="note">The globe uses the same cell ledger as generation. Surface data stays precise; the substrate below it can repeat.</p>
         <details><summary>Local activity</summary><pre id="log">No local run connected.</pre></details>
       </aside>
     </div>
   </main>
-  <footer>EARTHCRAFT / PROGRESS ATLAS<span id="footer-state">Awaiting first observation</span></footer>
+  <footer>EARTHCRAFT / GLOBAL CELL PROGRESS<span id="footer-state">Awaiting first observation</span></footer>
 </body>
 </html>

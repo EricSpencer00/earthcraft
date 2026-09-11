@@ -11,6 +11,30 @@ from progress_snapshot import build_snapshot
 
 
 class ProgressSnapshotTests(unittest.TestCase):
+    def test_snapshot_exposes_stage_state_for_each_materialized_cell(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = root / 'runs/demo'
+            run.mkdir(parents=True)
+            (run / 'plan.json').write_text(json.dumps({
+                'frame': {'crs': 'EPSG:3857'},
+                'tiles': [{'id': '0_0', 'west': 0, 'north': 256, 'size': 256}],
+            }))
+            with sqlite3.connect(run / 'jobs.sqlite') as db:
+                db.execute('CREATE TABLE jobs (tile TEXT,stage INTEGER,state TEXT)')
+                db.executemany('INSERT INTO jobs VALUES (?,?,?)', [
+                    ('0_0', 0, 'complete'), ('0_0', 1, 'complete'),
+                    ('0_0', 2, 'pending'), ('0_0', 3, 'pending'),
+                ])
+                db.commit()
+            snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
+            self.assertEqual(snapshot['cell_grid']['chunks_per_cell'], 256)
+            self.assertEqual(snapshot['cell_grid']['materialized_cells'], 1)
+            self.assertEqual(snapshot['cells'][0]['state'], 'generated')
+            self.assertEqual(snapshot['cells'][0]['chunks_total'], 256)
+            self.assertEqual(snapshot['cells'][0]['chunks_generated'], 256)
+            self.assertNotIn('/Users/', json.dumps(snapshot))
+
     def test_global_snapshot_does_not_fabricate_denominator_or_private_paths(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

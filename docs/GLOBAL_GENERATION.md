@@ -125,7 +125,12 @@ paths or raw source metadata.
 
 The dashboard intentionally leaves global coverage as “not computed” until a
 global catalog and denominator exist. Chicago is shown as a known working
-region, not as a proxy for the planet.
+region, not as a proxy for the planet. The public snapshot now also carries a
+global cell address model: one 256 m cell contains 256 Minecraft chunks. The
+Earth-scale address space is estimated for planning, while `cells` contains
+only cells that are queued or backed by evidence. Missing cells are omitted,
+not painted as complete. Each materialized cell reports source, geometry,
+appearance, and game-verification state plus its chunk counts.
 
 ## Promotion gates
 
