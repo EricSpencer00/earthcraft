@@ -64,11 +64,19 @@ function initGlobe(){
     .pointLat('latitude')
     .pointLng('longitude')
     .pointColor(()=> 'rgb(45, 96, 65)')
-    .pointAltitude(.045)
-    .pointRadius(.42)
+    .pointAltitude(.06)
+    .pointRadius(.6)
     .pointResolution(12)
     .pointsMerge(false)
     .pointLabel(region=>`${region.label||region.id}<br>${formatCoordinate(region.latitude,region.longitude)}`)
+    .labelLat('latitude')
+    .labelLng('longitude')
+    .labelText(region=>region.label||region.id)
+    .labelColor(()=> 'rgb(45, 96, 65)')
+    .labelSize(.55)
+    .labelAltitude(.075)
+    .labelDotRadius(.2)
+    .labelIncludeDot(true)
     .onPointHover(point=>{
       hoveredPoint=point;
       map.style.cursor=point?'pointer':'grab';
@@ -99,7 +107,8 @@ function render(){
   if(globe){
     const regions=data.regions||[];
     globe.pointsData(regions);
-    if(regions[0]&&!globe.__positioned){globe.pointOfView({lat:regions[0].latitude,lng:regions[0].longitude,altitude:4.5},0);globe.__positioned=true;}
+    globe.labelsData($('layer').value==='regions'?regions:[]);
+    if(regions[0]&&!globe.__positioned){globe.pointOfView({lat:regions[0].latitude,lng:regions[0].longitude,altitude:3},0);globe.__positioned=true;}
     setMapMessage(regions.length?`${number(regions.length)} region${regions.length===1?'':'s'} indexed · interactive globe`:'No measured regions yet');
     updateControls();resizeGlobe();
   }
@@ -126,7 +135,7 @@ async function refresh(){
 
 initGlobe();
 $('refresh').onclick=refresh;
-$('layer').onchange=()=>{updateWorkstreamList();setMapMessage($('layer').value==='workstreams'?'Workstream state':'Known regions');};
+$('layer').onchange=()=>{updateWorkstreamList();if(globe)globe.labelsData($('layer').value==='regions'?data?.regions||[]:[]);setMapMessage($('layer').value==='workstreams'?'Workstream state':'Known regions');};
 $('auto').onchange=()=>{if($('auto').checked)refresh()};
 $('map').addEventListener('pointermove',showCoordinate);
 window.addEventListener('resize',resizeGlobe);
