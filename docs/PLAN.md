@@ -1,6 +1,6 @@
 # Earthcraft implementation plan
 
-Prepared 2026-09-09. Status: design complete enough to start a bounded prototype; no implementation or performance results yet.
+Revised 2026-09-09. A narrow [64 m MVP](MVP.md) now exists; the architecture below remains the broader roadmap. Generated-world checks pass, but in-game loading and building accuracy are not verified. Start with [building fidelity](BUILDING_FIDELITY.md) before increasing the area.
 
 ## 1. Outcome and scope
 
@@ -10,13 +10,13 @@ The initial scope is terrain, roads, water, building exteriors, roofs, vegetatio
 
 This is a reconstruction system, not a screenshot-to-block painting system. The deliverable includes a quality report so a visually convincing result cannot hide misplaced geometry.
 
-The first pilot is 256 × 256 metres, followed by 1,024 × 1,024 metres and then larger tiled areas. The location is the one pending user input. Until it is known, US public elevation is a candidate, not an assumption about actual coverage.
+The immediate proof is one building in a 64 × 64 metre square. The broader pilot is 256 × 256 metres, followed by 1,024 × 1,024 metres and then larger tiled areas. The location is the one pending user input. Until it is known, US public elevation is a candidate, not an assumption about actual coverage.
 
 ## 2. Decisions made now
 
 | Decision | Choice | Reason |
 |---|---|---|
-| Repository | Local `/Users/eric/earthcraft`, branch `main` | Separate from HorneSci; no remote publishing implied |
+| Repository | Standalone Git repository, branch `main` | Prepare for public development; publishing is a separate action |
 | First edition | Minecraft Java | Installed locally; direct world files are useful for repeatable inspection |
 | First version | Installed release 1.21.10, subject to writer smoke test | Avoid claiming arbitrary version compatibility |
 | Scale | One block per metre in X, Y, and Z | User requirement; no adaptive stretching |
@@ -26,7 +26,7 @@ The first pilot is 256 × 256 metres, followed by 1,024 × 1,024 metres and then
 | Default detail | Faithful exteriors; unknown interiors | Avoid presenting generative completion as recovery |
 | Source policy | Independent adapters and independent evaluation | Each source loses different information |
 | UI | CLI and generated review report first | Prove geometry and data quality before building an application |
-| Distribution | Local artifacts | Dataset obligations and code license can be settled before a future release |
+| Distribution | Public source planned; generated data distributed separately | See [public release plan](PUBLIC_RELEASE.md) for staged release gates |
 
 ## 3. What 1:1 means
 
@@ -50,17 +50,26 @@ For the vanilla height envelope, preflight the full ground-to-rooftop range and 
 
 Check projection distortion at the area corners and representative control pairs. For the pilot, propose less than 0.1 metre of projection-induced distance discrepancy across its extent. A continent or globe needs a separate atlas/projection design: a flat Minecraft world cannot be a globally undistorted Earth surface.
 
-## 4. Roles of AI and deterministic code
+## 4. Default no-AI path
 
-Codex/Astra is the development agent for writing, inspecting, and improving this software. The project does not assume that Astra weights run on this Mac. Production inference is a separately downloaded local model with a pinned revision.
+The public baseline is deterministic. Coordinate transforms, building
+placement, terrain sampling, block occupancy, source fusion, and world writing
+must work without a hosted model, a subscription, or an AI coding assistant.
+The checked-in tests and synthetic fixtures follow this path.
 
-Use deterministic geometry for coordinate transforms, building placement, terrain sampling, block occupancy, and world writing. Use local models for uncertain semantic observations: likely wall material, visible roof type, façade palette, window bands, and image quality/occlusion flags.
+Local computer-vision or model experiments are optional research, not a hidden
+dependency. They must be separately enabled, pinned to a local runtime and
+input set, and recorded as observations with an abstention option. They may
+classify a visible attribute, but they cannot invent a building, choose an
+arbitrary source URL, or emit unrestricted block edits. A model's confidence
+is not a calibrated probability.
 
-Model output is bounded structured data associated with an image region and object ID. It cannot directly execute tools, choose arbitrary source URLs, or emit unrestricted block edits. Validate the schema and allowed labels. A language model's stated confidence is not a calibrated probability.
-
-Depth prediction is a secondary geometry cue. Even a metric-depth model needs local checks against known dimensions; do not let it overrule reliable LiDAR or surveyed geometry. One panorama cropped into many images provides angular coverage, not new camera translation for stereo triangulation.
-
-Inference can abstain. More image crops of the same original are correlated evidence. Two providers may also share upstream data; repeated evidence is not independent confirmation.
+Depth prediction is a secondary geometry cue. Even a metric-depth model needs
+local checks against known dimensions; do not let it overrule reliable LiDAR
+or surveyed geometry. One panorama cropped into many images provides angular
+coverage, not new camera translation for stereo triangulation. More crops of
+the same original are correlated evidence and do not count as independent
+measurements.
 
 ## 5. Pipeline and interfaces
 
@@ -110,7 +119,7 @@ Compile the metric scene into chunk-local block commands with stable ordering. P
 
 Generate terrain, structures, façades, then supported details. Resolve intersections using explicit ownership and surface rules. Keep building shells hollow where interiors are unknown, and report that empty space as unknown rather than reconstructed interior.
 
-Partition writes by region so two workers never mutate the same output file. Stage into a new world directory and atomically promote a completed export. Do not patch a world that Minecraft has open. Save attribution and reconstruction metadata beside the world.
+Partition writes by region so two workers never mutate the same output file. Stage into a new world directory on the same filesystem and publish a completion manifest only after verification. Cross-volume promotion is copy, checksum verification, then completion marking; never assume it is an atomic rename. Do not patch a world that Minecraft has open. Save attribution and reconstruction metadata beside the world.
 
 ### G. Validate and review
 
@@ -135,17 +144,19 @@ Use GeoParquet for larger vector tables, GeoTIFF/COG for terrain and imagery, LA
 
 ## 7. Mac runtime and budgets
 
-Read-only inspection on 2026-09-09 found Apple M1 Max, 64 GiB physical memory, about 39 GiB free on the data volume, and installed Minecraft versions 1.21.10 and 1.21.11-pre1. Python, uv, Rust/Cargo, and Git are present. Installation presence is not a runtime benchmark or a statement of package compatibility.
+The development target is an Apple M1 Max with 10 CPU cores and 64 GiB unified memory. On 2026-09-09 the internal data volume had about 39 GiB free; the connected LaCie had about 1.5 TiB free and was mounted as **exFAT**. Capacity and filesystem are observed; drive media, link speed, sustained throughput, and inference performance are unverified. Do not describe the LaCie as an SSD without checking it.
 
-Start with Qwen3-VL-4B-Instruct through MLX-VLM, targeting a verified 4-bit conversion. Resolve the exact checkpoint and license at implementation time. Compare an 8B candidate only if the smaller model fails materially. MLX-VLM documents local Mac inference and Qwen3-VL support. [MLX-VLM](https://github.com/Blaizzy/mlx-vlm), [Qwen3-VL](https://github.com/QwenLM/Qwen3-VL).
+Use the [hardware and storage plan](HARDWARE.md) as the operating contract. Keep Git, executable environments, active SQLite state, and the selected inference cache on internal APFS. Store immutable source assets, large normalized files, archived models, and completed world archives on LaCie. External capacity permits larger bounded datasets; it supplies neither GPU memory nor additional compute.
 
-Depth Pro is an experimental depth adapter. Test PyTorch MPS availability, operator coverage, numerical validity, and latency before enabling it. Upstream GPU timing is not an M1 Max timing. [Depth Pro](https://github.com/apple/ml-depth-pro), [PyTorch MPS](https://docs.pytorch.org/docs/2.14/notes/mps.html).
+The default pilot uses a 12 GiB internal project cap with a 20 GiB free-space reserve, and a separate 100 GiB external cap with a 100 GiB reserve. Internal allocation: 4 GiB dependencies/build caches, 6 GiB active model, 2 GiB state/scratch/playtest. External allocation: 40 GiB raw sources, 30 GiB derived artifacts/world archives, 20 GiB model archives, 10 GiB transfer staging. These are provisional ceilings, not expected consumption; preflight the next stage and overlapping copies. See `configs/pilot.json` for matching values. Stop before exceeding either volume's limit; never silently fall back to the internal drive if LaCie is unavailable.
 
-Run one inference model at a time. Proposed initial project disk cap: 15 GiB, with at least 20 GiB remaining free. Allocate up to 6 GiB for a selected model/cache, 4 GiB for source assets, and 5 GiB for derived data and worlds. These are caps, not claims that every candidate fits. If a model/dependency footprint exceeds them, report before download and select a smaller viable candidate. Disable large persistent inference caches initially.
+Start with Qwen3-VL-4B-Instruct through MLX-VLM and a verified 4-bit conversion. Pin exact weights, runtime and license after a native ARM64 smoke test. Compare 8B only after an identified 4B failure on development examples; do not promote it based on parameter count. [MLX-VLM](https://github.com/Blaizzy/mlx-vlm), [Qwen3-VL](https://github.com/QwenLM/Qwen3-VL).
 
-Target at most 24 GiB of process memory, including imagery and model allocations; measure actual memory pressure and swap growth too. Bound crops, tokens, raster windows, and LiDAR batches. Pause jobs when resource limits would be exceeded. City-scale work likely needs an external SSD or a revised storage budget; no automatic cleanup of unrelated files.
+Run one model and one image at a time initially, at most 1,024 generated tokens per crop. Record the processor's actual resized dimensions and visual-token count. Start with four CPU preprocessing workers and one world writer, then tune from measurements. Target at most 24 GiB across the pipeline process tree, with a 32 GiB stop threshold and a 2 GiB swap-growth pause threshold. Process accounting does not replace system memory-pressure checks because CPU and GPU share memory. Keep Minecraft closed during inference; release model allocations before game validation.
 
-After source/model acquisition, test generation with network access disabled. No silent cloud inference fallback. There is no credible run-time estimate until the first measured pilot; the one-hour pilot budget is a proposed acceptance target.
+Depth Pro remains optional and outside the first release. Test MPS operator coverage, numerical validity and latency on one image first; reject hidden CPU fallback. Neither upstream GPU timings nor fitting model weights in RAM establishes M1 Max throughput. [Depth Pro](https://github.com/apple/ml-depth-pro), [PyTorch MPS](https://docs.pytorch.org/docs/stable/notes/mps.html).
+
+After acquisition, generation must pass an offline replay test. No silent cloud inference fallback. The 60 minute warm pilot target is an experiment budget, not an estimate. Report acquisition, cold loading, generation, transfer and game validation separately as well as total elapsed time.
 
 ## 8. Build versus reuse
 
@@ -230,6 +241,8 @@ For replay, compare canonical scene and block-state hashes. Raw world bytes can 
 
 ## 13. First implementation session
 
+Begin with E0 and storage preflight; neither requires a real location. Use synthetic fixtures in public CI. The first real AOI should be a public landmark or block with documented coverage, avoiding a private home as the default published demonstration.
+
 1. Resolve the selected location and produce the source coverage report.
 2. Install/pin only dependencies needed for a small Arnis baseline and geospatial validation.
 3. Generate a fresh baseline world and inspect its coordinates in the installed game.
@@ -238,3 +251,7 @@ For replay, compare canonical scene and block-state hashes. Raw world bytes can 
 6. Implement the scene and inference schema based on observed integration needs, then execute M2/M3.
 
 The fastest useful proof is a playable, dimension-checked street block plus a small set of façade predictions with measured errors. It is not a city-sized download.
+
+## 14. Public development sequence
+
+[PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) separates a planning repository, the v0.1 geometry-only prototype, the v0.2 evidence-backed local-AI demo, and later kilometre-scale work. M6/M7 are not prerequisites for publishing useful source. [PLAN_REVIEW.md](PLAN_REVIEW.md) records the critique and changes made in this revision. All proposed commands, resource guards and stage gates still require implementation.
