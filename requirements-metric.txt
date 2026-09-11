@@ -1,0 +1,4 @@
+-r requirements-chicago.txt
+rasterio==1.4.3
+tifffile==2025.6.11
+pillow==12.3.0

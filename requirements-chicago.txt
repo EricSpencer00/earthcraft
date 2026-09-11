@@ -1,0 +1,5 @@
+-r requirements-mvp.txt
+osmium==4.2.0
+pyproj==3.7.2
+shapely==2.1.2
+psutil==7.2.2
