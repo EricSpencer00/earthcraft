@@ -115,7 +115,7 @@ class Journal:
               tile TEXT NOT NULL,stage INTEGER NOT NULL,priority REAL NOT NULL,
               state TEXT NOT NULL DEFAULT 'pending',token TEXT,owner TEXT,expires REAL,
               attempts INTEGER NOT NULL DEFAULT 0,evidence TEXT,evidence_sha256 TEXT,
-              source_key TEXT NOT NULL DEFAULT '',
+              source_key TEXT NOT NULL DEFAULT '',route_rank INTEGER,route_label TEXT,
               PRIMARY KEY(tile,stage));
         ''')
         # Older journals predate the locality scheduler.  This additive
@@ -124,6 +124,10 @@ class Journal:
         columns={row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}
         if 'source_key' not in columns:
             self.db.execute("ALTER TABLE jobs ADD COLUMN source_key TEXT NOT NULL DEFAULT ''")
+        if 'route_rank' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN route_rank INTEGER')
+        if 'route_label' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN route_label TEXT')
         fingerprint=digest(plan)
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -156,12 +160,14 @@ class Journal:
                 # neighboring tiles.  Every tie-break is explicit, making the
                 # faster schedule reproducible without changing tile output.
                 ordering='''
-                    ORDER BY CASE WHEN j.priority<=? THEN 0 ELSE 1 END,
+                    ORDER BY CASE WHEN j.route_rank IS NULL THEN 1 ELSE 0 END,
+                             j.route_rank,
+                             CASE WHEN j.priority<=? THEN 0 ELSE 1 END,
                              CASE WHEN j.priority<=? THEN j.priority ELSE j.source_key END,
                              CASE WHEN j.priority<=? THEN j.tile ELSE printf('%020.6f:%s',j.priority,j.tile) END'''
                 params=(index,now,source_locality_after,source_locality_after,source_locality_after)
             else:
-                ordering='ORDER BY priority,tile'; params=(index,now)
+                ordering='ORDER BY CASE WHEN route_rank IS NULL THEN 1 ELSE 0 END, route_rank, priority,tile'; params=(index,now)
             row=self.db.execute('''SELECT * FROM jobs j WHERE stage=? AND
               (state='pending' OR (state='running' AND expires<=?)) AND
               NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')
@@ -203,6 +209,60 @@ class Journal:
             WHERE tile=? AND stage=? AND token=? AND state='running'""",
             (str(receipt.resolve()),hashlib.sha256(raw).hexdigest(),job['tile'],STAGES.index(job['stage']),job['token'])).rowcount
         if changed!=1:raise ValueError('Stale worker cannot fail another attempt')
+
+    def requeue_failed(self, stages=('sources','geometry'), tiles=None):
+        """Return fenced failures to pending for an explicit retry run.
+
+        Failure receipts remain on disk as audit evidence; a later successful
+        receipt replaces the journal pointer only after the normal checksum and
+        dependency gates pass.  No running or complete job is touched.
+        """
+        indexes=tuple(STAGES.index(stage) for stage in stages)
+        if not indexes or any(stage not in STAGES for stage in stages):
+            raise ValueError('Unknown retry stage')
+        marks=','.join('?' for _ in indexes)
+        tile_clause=''
+        params=list(indexes)
+        if tiles is not None:
+            tiles=tuple(str(tile) for tile in tiles)
+            if not tiles:return 0
+            tile_marks=','.join('?' for _ in tiles)
+            tile_clause=f' AND tile IN ({tile_marks})'
+            params.extend(tiles)
+        changed=self.db.execute(
+            f"UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL "
+            f"WHERE state='failed' AND stage IN ({marks}){tile_clause}", params).rowcount
+        return changed
+
+    def prioritize_tiles(self,tiles,label,stages=('sources','geometry'),replace=True):
+        """Route pending work through a named, auditable geographic corridor.
+
+        This changes only the local dispatch order.  The immutable plan,
+        source membership, completed receipts and running leases are retained.
+        A replacement clears an earlier route only for work that has not
+        started, so a graceful worker stop can safely pick up the new route.
+        """
+        tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
+        indexes=tuple(STAGES.index(stage) for stage in stages)
+        if not tiles or not label or any(stage not in STAGES for stage in stages):
+            raise ValueError('Nonempty known tiles, label and stages required')
+        known={row[0] for row in self.db.execute('SELECT DISTINCT tile FROM jobs')}
+        unknown=set(tiles)-known
+        if unknown:raise ValueError('Unknown route tiles: '+','.join(sorted(unknown)))
+        marks=','.join('?' for _ in indexes)
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if replace:
+                self.db.execute(f"UPDATE jobs SET route_rank=NULL,route_label=NULL WHERE state='pending' AND stage IN ({marks})",indexes)
+            changed=0
+            for rank,tile in enumerate(tiles):
+                changed+=self.db.execute(
+                    f"UPDATE jobs SET route_rank=?,route_label=? WHERE tile=? AND state='pending' AND stage IN ({marks})",
+                    (rank,label,tile,*indexes)).rowcount
+            self.db.execute('COMMIT')
+            return changed
+        except Exception:
+            self.db.execute('ROLLBACK');raise
 
 
 def main():

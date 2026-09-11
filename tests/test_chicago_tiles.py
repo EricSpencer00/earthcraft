@@ -121,5 +121,29 @@ class ChicagoTileTests(unittest.TestCase):
             self.assertEqual(first['tile'],ordered[1]['id'])
             journal.close()
 
+    def test_explicit_retry_requeues_only_failed_jobs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); journal=Journal(root/'jobs.sqlite',fixture_plan())
+            job=journal.claim('sources','worker',now=1)
+            failure=root/'failure.json'; failure.write_text(json.dumps(dict(job,result='failed',error='transient')))
+            journal.fail(job,failure)
+            self.assertEqual(journal.requeue_failed(('sources',)),1)
+            retry=journal.claim('sources','worker',now=2)
+            self.assertEqual(retry['tile'],job['tile'])
+            self.assertEqual(journal.requeue_failed(('sources',)),0)
+            journal.close()
+
+    def test_named_route_precedes_locality_but_keeps_running_jobs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            plan=fixture_plan();path=Path(folder)/'jobs.sqlite';journal=Journal(path,plan)
+            tiles=[tile['id'] for tile in sorted(plan['tiles'],key=lambda t:t['id'])]
+            running=journal.claim('sources','worker',now=1)
+            self.assertEqual(journal.prioritize_tiles([tiles[-1],tiles[-2]],'north-road'),4)
+            next_job=journal.claim('sources','worker',now=2,source_locality_after=0)
+            self.assertEqual(next_job['tile'],tiles[-1])
+            row=journal.db.execute('SELECT state,route_rank FROM jobs WHERE tile=? AND stage=0',(running['tile'],)).fetchone()
+            self.assertEqual((row['state'],row['route_rank']),('running',None))
+            journal.close()
+
 
 if __name__=='__main__':unittest.main()
