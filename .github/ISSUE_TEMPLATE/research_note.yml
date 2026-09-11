@@ -1,0 +1,31 @@
+name: Research note
+description: Record a source, measurement, failed experiment, or decision
+title: "Research: "
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question or decision
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+      description: Include inputs, source terms, commands, and the date of the observation.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result and limits
+      description: Separate what was measured from what remains unknown.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before posting
+      options:
+        - label: I removed private paths, coordinates, credentials, and unlicensed source material.
+          required: true

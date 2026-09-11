@@ -1,0 +1,34 @@
+name: Feature or experiment
+description: Propose a focused improvement or research question
+title: "Proposal: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the user or contributor problem before suggesting an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What evidence do we have?
+      description: Link measurements, source documentation, or a small reproducible example. Say when this is only a hypothesis.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Suggested scope
+      description: What is the smallest change that would answer the question?
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before posting
+      options:
+        - label: This proposal does not require committing private data or credentials.
+          required: true
+        - label: I have checked the roadmap and existing issues.
+          required: true

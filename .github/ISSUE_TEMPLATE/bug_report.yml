@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible problem in Earthcraft
+title: "Bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove private paths, credentials, personal locations, and raw source files before posting.
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: What did you run?
+      placeholder: PYTHONPATH=scripts .venv/bin/python -m unittest discover -s tests -v
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python, and Minecraft versions when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Include the complete error and the useful lines before it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before posting
+      options:
+        - label: I removed secrets, private coordinates, personal images, and large data files.
+          required: true
+        - label: I checked that this is not already reported.
+          required: true
