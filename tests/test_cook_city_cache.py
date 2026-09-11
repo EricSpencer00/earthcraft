@@ -44,6 +44,9 @@ class CacheTests(unittest.TestCase):
     def test_only_catalog_provider_and_bounded_deflate_members(self):
         with self.assertRaises(ValueError):cache.validate_asset({'id':'../../x'})
         with self.assertRaises(ValueError):cache.validate_asset({'id':'17759050','url':'https://other.invalid/file'})
+        root_member={'id':'09009250','member':'09009250.las','url':cache.BASE+'cook-las2.zip',
+            'compression':8,'compressed_bytes':2,'uncompressed_bytes':4,'crc32':'deadbeef'}
+        cache.validate_asset(root_member)
 
 
 if __name__=='__main__':unittest.main()

@@ -35,7 +35,14 @@ def save_json(path,record):
 def validate_asset(asset):
     if not re.fullmatch(r'\d{8}',asset['id']):raise ValueError('Invalid survey ID')
     if not re.fullmatch(re.escape(BASE)+r'cook-las[1-5]\.zip',asset['url']):raise ValueError('Not the public Cook source')
-    if asset['member']!=asset['url'].rsplit('/',1)[1][:-4]+'/'+asset['id']+'.las':raise ValueError('Member/source mismatch')
+    archive_prefix=asset['url'].rsplit('/',1)[1][:-4]
+    # Cook archives 1/3/4/5 use a directory prefix while cook-las2 stores
+    # members at archive root.  Both are exact, frozen member identities; the
+    # ZIP central-directory and local-header checks below still prove the
+    # selected bytes, so accepting the two observed layouts does not broaden
+    # the source.
+    if asset['member'] not in (archive_prefix+'/'+asset['id']+'.las',asset['id']+'.las'):
+        raise ValueError('Member/source mismatch')
     if asset['compression']!=8 or not 0<asset['compressed_bytes']<asset['uncompressed_bytes']<=3*2**30:
         raise ValueError('Unsupported codec or indexed member size')
     if not re.fullmatch(r'[0-9a-f]{8}',asset['crc32']):raise ValueError('Invalid CRC')

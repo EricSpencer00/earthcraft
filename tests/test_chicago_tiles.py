@@ -107,5 +107,19 @@ class ChicagoTileTests(unittest.TestCase):
             with self.assertRaises(ValueError):journal.fail(job,receipt)
             journal.close()
 
+    def test_source_locality_schedule_is_deterministic_after_frontier(self):
+        with tempfile.TemporaryDirectory() as folder:
+            plan=fixture_plan(); path=Path(folder)/'jobs.sqlite'
+            # Force the first two tiles into two source groups and use a
+            # threshold below their priorities so the locality branch is used.
+            ordered=sorted(plan['tiles'],key=lambda tile:(tile['priority'],tile['id']))
+            source_order={tile['id']:('b' if tile['id']==ordered[0]['id'] else
+                                      'a' if tile['id']==ordered[1]['id'] else 'z')
+                          for tile in ordered}
+            journal=Journal(path,plan,source_order=source_order)
+            first=journal.claim('sources','worker',now=1,source_locality_after=0)
+            self.assertEqual(first['tile'],ordered[1]['id'])
+            journal.close()
+
 
 if __name__=='__main__':unittest.main()

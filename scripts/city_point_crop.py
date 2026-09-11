@@ -26,7 +26,7 @@ class PointCache:
     FIELDS = ('x', 'y', 'z', 'classification', 'withheld', 'point_source_id',
               'intensity', 'return_number', 'gps_time')
 
-    def __init__(self, max_bytes=4 * 2**30):
+    def __init__(self, max_bytes=16 * 2**30):
         if type(max_bytes) is not int or max_bytes < 0:
             raise ValueError('Point cache budget must be a non-negative integer')
         self.max_bytes = max_bytes

@@ -65,7 +65,7 @@ def source_for_tile(tile,frame,destination,parent=None,way_index=None):
 
 
 def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_points=False,assembly=None,way_index=None,
-        point_cache_bytes=4*2**30,source_locality_after=200.0):
+        point_cache_bytes=16*2**30,source_locality_after=200.0):
     plan=json.loads((plan_dir/'plan.json').read_text());catalog=json.loads(catalog_path.read_text())
     if catalog['world_plan_sha256']!=digest(plan):raise ValueError('Source catalog does not match city plan')
     tiles={t['id']:t for t in plan['tiles']};jobs={j['tile']:j for j in catalog['jobs']}
@@ -186,7 +186,8 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                     source_manifest_sha256=sha(tile_out/'sources/sources.json'),
                     point_manifest_sha256=sha(point_dir/'manifest.json'),point_sha256=points['points_sha256'],
                     source_ids=members,seconds=time.monotonic()-started,
-                    coverage_role=points['coverage_role'],point_count=points['crop_point_count']))
+                    coverage_role=points['coverage_role'],point_count=points['crop_point_count'],
+                    point_cache=points.get('point_cache')))
                 journal.finish(job,receipt);failures=0
             except Exception as error:
                 receipt=tile_out/'sources-failure.json'
@@ -234,8 +235,8 @@ if __name__=='__main__':
     p.add_argument('--release-derived-points',action='store_true',help='Retain originals and provenance; release reproducible per-tile point working files after verified export')
     p.add_argument('--assembly',type=Path,help='Closed continuous city world on the bulk volume; never the installed save')
     p.add_argument('--way-index',type=Path,help='Verified read-only OSM spatial index for this exact source and city frame')
-    p.add_argument('--point-cache-gib',type=float,default=4.0,
-                   help='Bounded decoded LAS-member cache in GiB (0 disables; default 4)')
+    p.add_argument('--point-cache-gib',type=float,default=16.0,
+                   help='Bounded decoded LAS-member cache in GiB (0 disables; default 16)')
     p.add_argument('--source-locality-after',type=float,default=200.0,
                    help='Keep near tiles priority-ordered, then batch by shared LAS member (default 200)')
     a=p.parse_args()
