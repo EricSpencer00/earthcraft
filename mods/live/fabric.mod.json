@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "earthcraft_live",
+  "version": "0.1.0",
+  "name": "Earthcraft Live",
+  "description": "Local, source-backed scan updates. No network, no generated geography.",
+  "environment": "*",
+  "entrypoints": {"main": ["earthcraft.LiveImport"]},
+  "depends": {"fabricloader": ">=0.19.5", "minecraft": "1.21.10", "java": ">=21", "fabric-lifecycle-events-v1": "*"}
+}
