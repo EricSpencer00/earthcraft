@@ -12,6 +12,7 @@ import fcntl
 import os
 import signal
 import sys
+import urllib.error
 from datetime import datetime,timezone
 from city_continuous import initialize,append_tile
 
@@ -25,6 +26,26 @@ from verify_metric_world import verify
 from local_paths import bulk_path,bulk_root
 
 ROOT=Path(__file__).resolve().parents[1]
+TRANSIENT_HTTP={408,425,429,500,502,503,504}
+
+
+def retry_transient(operation, label, attempts=3):
+    """Retry only explicitly transient HTTP failures with fixed backoff.
+
+    The schedule is deterministic (1 s, 2 s) and permanent source or
+    provenance errors still fail immediately; no data is substituted.
+    """
+    if type(attempts) is not int or attempts < 1:
+        raise ValueError('Retry attempts must be positive')
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except urllib.error.HTTPError as error:
+            if error.code not in TRANSIENT_HTTP or attempt + 1 >= attempts:
+                raise
+            delay=2**attempt
+            print(f'TRANSIENT {label}: HTTP {error.code}; retrying in {delay}s',flush=True)
+            time.sleep(delay)
 
 
 def source_for_tile(tile,frame,destination,parent=None,way_index=None):
@@ -142,12 +163,16 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
             tile=tiles[job['tile']];tile_out=output/tile['id'];tile_out.mkdir(exist_ok=True)
             print(f"SOURCE {tile['id']}",flush=True);started=time.monotonic()
             try:
-                grid=source_for_tile(tile,plan['frame'],tile_out/'sources',source_parent,way_index)
+                grid=retry_transient(lambda: source_for_tile(tile,plan['frame'],tile_out/'sources',source_parent,way_index),
+                                     f'source-grid {tile["id"]}')
                 members=jobs[tile['id']]['source_tiles']
                 if jobs[tile['id']]['missing_archive_members']:raise ValueError('Missing source members in this tile')
                 items=[]
                 for identifier in members:
-                    if identifier not in cached:cached[identifier]=acquire(assets[identifier],catalog['publisher'],bulk)
+                    if identifier not in cached:
+                        cached[identifier]=retry_transient(
+                            lambda identifier=identifier: acquire(assets[identifier],catalog['publisher'],bulk),
+                            f'LiDAR {identifier}')
                     path,record=cached[identifier];items.append((path,record,assets[identifier]))
                 point_dir=tile_out/'points'
                 if (point_dir/'manifest.json').is_file():
