@@ -59,10 +59,15 @@ def mutate_chunk(original,patch):
     return result,{'written':written,'conflicts':conflicts,'already_target':already}
 
 
-def apply(stage,exchange,output,world_override=None):
+def apply(stage,exchange,output,closed_proof,world_override=None):
     stage,exchange,output=map(Path,(stage,exchange,output))
     manifest=json.loads((stage/'manifest.json').read_text());binding=json.loads((exchange/'binding.json').read_text())
     world=Path(world_override) if world_override else Path(binding['world'])
+    proof=json.loads(Path(closed_proof).read_text())
+    if (not proof.get('passed') or proof.get('stage_manifest_sha256')!=sha(stage/'manifest.json') or
+        proof.get('closed_writer_matches_native_blocks_and_block_entities') is not True or
+        proof.get('two_native_save_cycles_previously_verified') is not True):
+        raise ValueError('Matching closed/native proof required before save publication')
     if manifest['frame']!=binding['frame'] or manifest['llm_used'] is not False:raise ValueError('Wrong frame or source')
     if sha(Path(manifest['candidate_world'])/'building-layer.json')!=manifest['candidate_manifest_sha256']:raise ValueError('Candidate changed')
     if output.exists():raise FileExistsError(output)
@@ -128,4 +133,5 @@ def apply(stage,exchange,output,world_override=None):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--stage',type=Path,required=True)
     p.add_argument('--exchange',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();print(json.dumps(apply(a.stage,a.exchange,a.output),indent=2))
+    p.add_argument('--closed-proof',type=Path,required=True)
+    a=p.parse_args();print(json.dumps(apply(a.stage,a.exchange,a.output,a.closed_proof),indent=2))
