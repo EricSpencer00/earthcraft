@@ -78,9 +78,10 @@ function updateGlobeLayer(){
   const view=$('layer').value;
   const regions=data.regions||[],cells=data.cells||[],observed=observedCells(cells);
   const cellView=view==='cells';
+  const regionView=view==='regions';
   globe.tilesData(cellView?observed:[]);
-  globe.pointsData(view==='regions'?regions:[]);
-  globe.labelsData(view==='workstreams'?[]:regions);
+  globe.pointsData(regionView?regions:[]);
+  globe.labelsData(regionView?regions:[]);
   globe.pointRadius(.38);
   globe.pointColor(()=> 'rgb(45, 96, 65)');
   updateWorkstreamList();
@@ -128,9 +129,9 @@ function initGlobe(){
     .labelLng('longitude')
     .labelText(region=>region.label||region.id)
     .labelColor(()=> 'rgb(45, 96, 65)')
-    .labelSize(.55)
-    .labelAltitude(.075)
-    .labelDotRadius(.2)
+    .labelSize(.18)
+    .labelAltitude(.025)
+    .labelDotRadius(.08)
     .labelIncludeDot(true)
     .onPointHover(item=>{
       hoveredItem=item;
