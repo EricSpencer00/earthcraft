@@ -28,11 +28,7 @@ privacy-safe progress contract behind the dashboard.
 
 ## Why not just use Arnis?
 
-[Arnis](https://github.com/louis-e/arnis) was the obvious baseline. I am not
-pretending Earthcraft invented the real-world-to-Minecraft idea, and I am
-crediting Arnis for making it a usable starting point.
-
-Arnis is good at:
+pros:
 
 - Turning geographic data into a playable Minecraft world without needing
   Earthcraft's larger evidence pipeline.
@@ -41,7 +37,7 @@ Arnis is good at:
 - Being the better choice if the goal is simply to generate a place and start
   walking around.
 
-For Earthcraft, the gaps are:
+cons:
 
 - Source provenance and uncertainty: which source produced a surface, and
   what was measured versus inferred?
@@ -50,10 +46,6 @@ For Earthcraft, the gaps are:
   planetary percentage.
 - Replayable fidelity boundaries: precise surfaces, repeated unseen interiors,
   source-backed landmark/photo layers, and byte-for-byte regeneration.
-
-Those tiling, evidence-ledger, deterministic-replay, sparse-interior, and
-source-adapter ideas are the part I am taking responsibility for in
-Earthcraft. Arnis remains useful infrastructure and a comparison point.
 
 ## Start here
 
