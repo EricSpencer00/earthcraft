@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    # The offline suite covers the real installer too; its exclusive atomic
+    # publication primitive is intentionally macOS-only.
+    runs-on: macos-14
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
