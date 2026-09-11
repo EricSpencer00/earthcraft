@@ -42,6 +42,17 @@ def sha(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def point_cells(source_world):
+    """Load measured voxels, or an explicit empty set for terrain-only tiles."""
+    path = Path(source_world)/'point-voxels.npy'
+    if not path.exists():
+        return np.empty((0, 3), dtype=np.int32), None
+    cells = np.asarray(np.load(path, allow_pickle=False), dtype=np.int32)
+    if cells.ndim != 2 or cells.shape[1] != 3:
+        raise ValueError('Point voxel grid must be an N×3 integer array')
+    return cells, sha(path)
+
+
 def envelope(cells, mask, ground, provider_top):
     """Nearest sampled column envelope with a fixed one-metre closing radius.
 
@@ -144,7 +155,7 @@ def compile_layer(source_world, source, destination, roof_models=None):
     with np.load(source/'rasters.npz') as data:
         elevation = data['elevation'].copy()
     ground = np.floor(elevation + report['vertical_offset_m']).astype(np.int32)
-    cells = np.load(source_world/'point-voxels.npy', allow_pickle=False)
+    cells, point_hash = point_cells(source_world)
     anchors, protected_air, photo_rgb = photo_protection(source_world)
     layer = {'owner': np.zeros((size, size), np.int32),
              'geometry_owner': np.zeros((size, size), np.int32), 'paint_top': ground.copy(), 'floor': ground+1,
@@ -335,7 +346,7 @@ def compile_layer(source_world, source, destination, roof_models=None):
     import scipy
     result = {'schema': VERSION, 'source_world': str(source_world.resolve()),
         'source_regions': source_regions, 'source_hashes': source_hashes,
-        'source_points_sha256': sha(source_world/'point-voxels.npy'),
+        'source_points_sha256': point_hash,
         'model_sha256': sha(destination/'building-layer.npz'),
         'buildings': building_records, 'mapped_material_routes': routing,
         'derived_added_cells': added, 'recolored_existing_cells': painted,

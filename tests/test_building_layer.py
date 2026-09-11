@@ -1,10 +1,11 @@
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from building_layer import envelope, shell_for_chunk, checked_roof_override
+from building_layer import envelope, shell_for_chunk, checked_roof_override, point_cells
 from material_router import choose_with_evidence
 
 
@@ -112,6 +113,12 @@ class BuildingLayerTests(unittest.TestCase):
         block, evidence = choose_with_evidence({'facade:material': 'stucco'}, 'facade', {})
         self.assertIsNone(block)
         self.assertEqual(evidence['role'], 'abstain')
+
+    def test_terrain_only_world_has_explicit_empty_point_observation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cells, source_hash = point_cells(Path(folder))
+        self.assertEqual(cells.shape, (0, 3))
+        self.assertIsNone(source_hash)
 
 
 if __name__ == '__main__':
