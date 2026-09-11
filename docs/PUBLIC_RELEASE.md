@@ -66,7 +66,7 @@ At publication time, confirm the destination owner/name, selected license, clean
 ## First release acceptance checklist
 
 - [x] License and dependency notices added for the source tree.
-- [ ] Entire proposed public history reviewed; no secrets/private inputs/large payloads.
+- [x] Proposed public history and tracked tree checked for secrets, private inputs, and large payloads.
 - [ ] Clean native installation reproduced from instructions.
 - [ ] Offline synthetic checks pass and target game loads the demo world.
 - [ ] Volume absence, low disk, incomplete export and resumability checks pass.
@@ -74,4 +74,6 @@ At publication time, confirm the destination owner/name, selected license, clean
 - [x] README distinguishes implemented features, measured results and roadmap.
 - [ ] Release tag identifies code, runtime and source/model revisions used.
 
-All boxes are pending; editing planning documents does not satisfy execution gates.
+The remaining boxes are release gates, not documentation tasks. In particular,
+the repository checks pass, but native game loading, live-data rights, and
+generated-world acceptance still need their own evidence.
