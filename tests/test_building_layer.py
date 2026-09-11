@@ -5,6 +5,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from building_layer import envelope, shell_for_chunk, checked_roof_override
+from material_router import choose_with_evidence
 
 
 class BuildingLayerTests(unittest.TestCase):
@@ -86,6 +87,31 @@ class BuildingLayerTests(unittest.TestCase):
         invalid = top.astype(float); invalid[5, 5] = np.nan
         with self.assertRaisesRegex(ValueError, 'finite'):
             checked_roof_override(invalid, mask, mask, 20)
+
+    def test_explicit_facade_tags_win_over_derived_shell_style(self):
+        palette = {
+            'bricks': np.array([130., 70., 50.]),
+            'red_concrete': np.array([140., 50., 45.]),
+            'light_gray_concrete': np.array([180., 180., 180.]),
+        }
+        block, evidence = choose_with_evidence(
+            {'facade:material': 'brick', 'colour': '#f00000'}, 'facade', palette)
+        self.assertEqual(block, 'red_concrete')
+        self.assertEqual(evidence['role'], 'tagged')
+        self.assertEqual(evidence['source_key'], 'colour')
+        self.assertEqual(evidence['material_key'], 'facade:material')
+
+    def test_generic_osm_material_is_tagged_not_treated_as_observation(self):
+        palette = {'iron_block': np.array([200., 200., 200.])}
+        block, evidence = choose_with_evidence({'material': 'steel'}, 'facade', palette)
+        self.assertEqual(block, 'iron_block')
+        self.assertEqual(evidence['role'], 'tagged')
+        self.assertEqual(evidence['source_key'], 'material')
+
+    def test_unknown_surface_tags_abstain_without_style_guess(self):
+        block, evidence = choose_with_evidence({'facade:material': 'stucco'}, 'facade', {})
+        self.assertIsNone(block)
+        self.assertEqual(evidence['role'], 'abstain')
 
 
 if __name__ == '__main__':

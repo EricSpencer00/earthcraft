@@ -28,7 +28,7 @@ from shapely.ops import transform as transform_geometry
 from building_audit import county_objects
 from city_save_update import read_region
 from ground_color import nearest_colors
-from material_router import route, texture_colors
+from material_router import choose_with_evidence, route, texture_colors
 from osm_json_to_kml import building_tag
 from metric_world import BLOCK, PALETTE, packed, palette_indices, region_write, roof_shell_floor
 from photo_layer import NORMALS
@@ -228,9 +228,21 @@ def compile_layer(source_world, source, destination, roof_models=None):
         if landmark:
             wall = 'stone_bricks'
         color_source = 'Fixed height-class style palette; not observed material'
+        palette_role = 'derived_style'
+        wall_evidence = {'role': 'derived_style', 'reason': 'no admitted facade observation or explicit map style applied'}
         if owns_photo and photo_rgb is not None:
             wall = swatches[int(nearest_colors(photo_rgb, np.array([swatch_colors[k] for k in swatches])))]
             color_source = 'Median opaque accepted photo texels extended as a building style swatch; experimental registration'
+            palette_role = 'observed'
+            wall_evidence = {'role': 'observed', 'source': 'accepted_photo_anchor',
+                             'scope': 'experimental building style swatch, not a facade-wide material measurement'}
+        else:
+            tagged_wall, wall_evidence = choose_with_evidence(tags, 'facade', swatch_colors)
+            if tagged_wall is not None:
+                wall = tagged_wall
+                color_source = f"Explicit OSM {wall_evidence['decision']} tag {wall_evidence['source_key']}"
+                palette_role = 'tagged'
+        tagged_roof, roof_tag_evidence = choose_with_evidence(tags, 'roof', swatch_colors)
         wall_blocks.append(BLOCK[wall])
         building_records.append({'id': obj['id'], 'provider_height_m': obj['height_m'],
             'footprint_cells': int(mask.sum()), 'sampled_columns': sampled,
@@ -239,6 +251,8 @@ def compile_layer(source_world, source, destination, roof_models=None):
             'roof_method': 'Exact sampled maxima / nearest columns / gap-only fixed 3x3 filters' if sampled else 'Provider-height shell fallback',
             'roof_model': roof_evidence,
             'wall_block': wall, 'color_source': color_source,
+            'wall_palette_role': palette_role, 'wall_evidence': wall_evidence,
+            'roof_evidence_route': roof_tag_evidence,
             'matched_osm_way': match['id'] if match else None,
             'style_class': 'landmark' if landmark or owns_photo else 'regular_building',
             'photo_style_rgb': photo_rgb.tolist() if owns_photo and photo_rgb is not None else None,

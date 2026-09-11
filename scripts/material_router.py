@@ -1,6 +1,7 @@
 """Deterministic geographic appearance routing; no geometry completion or LLM."""
 import io
 import json
+import re
 import zipfile
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +21,22 @@ MATERIALS = {'brick':'bricks', 'bricks':'bricks', 'stone':'stone_bricks',
              'limestone':'sandstone', 'sandstone':'sandstone', 'concrete':'light_gray_concrete',
              'metal':'iron_block', 'steel':'iron_block', 'glass':'light_gray_stained_glass'}
 
+# OSM's generic tags occur often on simple buildings; the namespaced forms
+# matter when a building has a distinct facade or roof.  The tuple order is
+# deliberate evidence precedence, not a popularity heuristic.
+SURFACE_KEYS = {
+    'facade': {
+        'material': ('facade:material', 'building:material', 'material'),
+        'colour': ('facade:colour', 'facade:color', 'building:colour',
+                   'building:color', 'colour', 'color'),
+    },
+    'roof': {
+        'material': ('roof:material', 'building:material', 'material'),
+        'colour': ('roof:colour', 'roof:color', 'building:colour',
+                   'building:color', 'colour', 'color'),
+    },
+}
+
 
 @lru_cache(maxsize=1)
 def texture_colors():
@@ -33,19 +50,66 @@ def texture_colors():
     return result
 
 
-def choose(tags, surface, palette):
-    material = tags.get(f'{surface}:material', '').lower()
-    color = tags.get(f'{surface}:colour')
+def _tag_value(tags, keys):
+    """Return the first supported OSM tag without guessing compound values."""
+    for key in keys:
+        value = str(tags.get(key, '')).strip()
+        if value:
+            # Semicolon values mean multiple stated materials/colours.  Pick
+            # the first value deterministically; preserve the original tag in
+            # the receipt so a later richer source can supersede it.
+            return key, re.split(r'\s*[;,]\s*', value, maxsplit=1)[0].strip()
+    return None, None
+
+
+def _normalize_colour(value):
+    # PIL recognises US spelling.  This changes only the parser spelling, not
+    # the declared source value retained in a manifest.
+    return value.strip().lower().replace('grey', 'gray')
+
+
+def choose_with_evidence(tags, surface, palette):
+    """Select one explicit facade/roof appearance and return its lineage.
+
+    This is intentionally a router, not a semantic model: a missing or
+    unusable tag returns an abstention.  Callers may then use an explicitly
+    labelled deterministic house style, but cannot label that fallback as a
+    measured material.
+    """
+    if surface == 'building':
+        surface = 'facade'
+    if surface not in SURFACE_KEYS:
+        raise ValueError(f'Unknown surface: {surface}')
+    material_key, material = _tag_value(tags, SURFACE_KEYS[surface]['material'])
+    colour_key, color = _tag_value(tags, SURFACE_KEYS[surface]['colour'])
+    material = material.lower() if material else None
     if color:
         try:
-            rgb = np.array(ImageColor.getrgb(color), dtype=float)
+            rgb = np.array(ImageColor.getrgb(_normalize_colour(color)), dtype=float)
         except ValueError:
             rgb = None
         if rgb is not None and rgb.shape == (3,):
             suffix = '_stained_glass' if material == 'glass' else '_concrete'
             candidates = [b for b in palette if b.endswith(suffix)]
-            return min(candidates, key=lambda b: float(np.sum((palette[b]-rgb)**2)))
-    return MATERIALS.get(material)
+            if candidates:
+                return (min(candidates, key=lambda b: float(np.sum((palette[b]-rgb)**2))),
+                        {'role': 'tagged', 'surface': surface, 'decision': 'colour',
+                         'source_key': colour_key, 'source_value': color,
+                         'material_key': material_key, 'material_value': material})
+    block = MATERIALS.get(material)
+    if block:
+        return (block, {'role': 'tagged', 'surface': surface, 'decision': 'material',
+                        'source_key': material_key, 'source_value': material,
+                        'colour_key': colour_key, 'colour_value': color})
+    return (None, {'role': 'abstain', 'surface': surface,
+                   'reason': 'no supported explicit material or colour tag',
+                   'material_key': material_key, 'material_value': material,
+                   'colour_key': colour_key, 'colour_value': color})
+
+
+def choose(tags, surface, palette):
+    """Compatibility wrapper for callers that need only a palette block."""
+    return choose_with_evidence(tags, surface, palette)[0]
 
 
 def route(source, meta, elevation, offset, block_ids, ways=None):
@@ -59,7 +123,8 @@ def route(source, meta, elevation, offset, block_ids, ways=None):
         tags = way['tags']
         if not way['closed'] or not building_tag(tags):
             continue
-        wall, roof = choose(tags, 'building', palette), choose(tags, 'roof', palette)
+        wall, wall_evidence = choose_with_evidence(tags, 'facade', palette)
+        roof, roof_evidence = choose_with_evidence(tags, 'roof', palette)
         if wall is None and roof is None:
             continue
         xs, ys = transform.transform(*zip(*way['coordinates']))
@@ -83,8 +148,12 @@ def route(source, meta, elevation, offset, block_ids, ways=None):
         layer = {'mask':mask, 'low':low, 'high':high, 'area':polygon.area,
                  'wall':block_ids[wall] if wall else None, 'roof':block_ids[roof] if roof else None}
         layers.append(layer)
+        source_keys = set(SURFACE_KEYS['facade']['material'] + SURFACE_KEYS['facade']['colour'] +
+                          SURFACE_KEYS['roof']['material'] + SURFACE_KEYS['roof']['colour'] +
+                          ('min_height', 'height'))
         records.append({'osm_way':way['id'], 'decision':'route', 'wall_block':wall, 'roof_block':roof,
-                        'source_tags':{k:v for k,v in tags.items() if k.startswith(('building:','roof:','min_height','height'))},
+                        'wall_evidence':wall_evidence, 'roof_evidence':roof_evidence,
+                        'source_tags':{k:v for k,v in tags.items() if k in source_keys},
                         'cells':int(mask.sum()), 'vertical_range_y':[low,high]})
     layers.sort(key=lambda layer: -layer['area'])
     return layers, {'method':'explicit OSM material/colour → nearest installed texture colour; smaller parts take precedence',
