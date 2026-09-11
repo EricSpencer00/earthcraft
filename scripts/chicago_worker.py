@@ -25,6 +25,7 @@ from metric_world import build
 from verify_metric_world import verify
 from local_paths import bulk_path,bulk_root
 from osm_json_to_kml import building_tag
+from building_layer import compile_layer
 
 ROOT=Path(__file__).resolve().parents[1]
 TRANSIENT_HTTP={408,425,429,500,502,503,504}
@@ -88,8 +89,26 @@ def source_for_tile(tile,frame,destination,parent=None,way_index=None):
     return expected
 
 
+def promote_styled_shell(observed,source,world,compile_fn=compile_layer,verify_fn=verify):
+    """Compile a resumable styled sibling without mutating raw observations.
+
+    The observed world is retained under its own path.  A completed staging
+    directory is always verified before promotion, so an interrupted shell
+    compile cannot masquerade as a ready city tile.
+    """
+    observed,source,world=map(Path,(observed,source,world))
+    if world.exists():
+        return verify_fn(world),{'observed_world':str(observed.resolve()),
+                                 'styled_world':str(world.resolve()),'resumed':True}
+    staging=world.with_name('world.styled')
+    if not staging.exists():compile_fn(observed,source,staging)
+    checks=verify_fn(staging);staging.rename(world)
+    return checks,{'observed_world':str(observed.resolve()),
+                   'styled_world':str(world.resolve()),'resumed':False}
+
+
 def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_points=False,assembly=None,way_index=None,
-        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False):
+        point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,styled_buildings=False):
     plan=json.loads((plan_dir/'plan.json').read_text());catalog=json.loads(catalog_path.read_text())
     if catalog['world_plan_sha256']!=digest(plan):raise ValueError('Source catalog does not match city plan')
     tiles={t['id']:t for t in plan['tiles']};jobs={j['tile']:j for j in catalog['jobs']}
@@ -128,9 +147,9 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
         row=journal.db.execute('SELECT evidence FROM jobs WHERE tile=? AND stage=0',(job['tile'],)).fetchone()
         receipt=json.loads(Path(row['evidence']).read_text())
         root=Path(receipt.get('tile_output',str(output/job['tile'])))
-        world=root/'world';started=time.monotonic()
+        world=root/'world';observed=root/'world.observed' if styled_buildings else world;started=time.monotonic()
         print(f"GEOMETRY {job['tile']}",flush=True)
-        if not world.exists():
+        if not observed.exists():
             staging=root/'world.building'
             if not staging.exists():
                 point_manifest = root/'points/manifest.json'
@@ -138,13 +157,19 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                 build(root/'sources',staging,point_source=point_source,world_frame=plan['frame'])
             # A complete staging directory can survive an interrupted read-back.
             # It is promoted only after the same full checks; nothing overwritten.
-            checked=verify(staging);staging.rename(world)
+            observed_checks=verify(staging);staging.rename(observed)
         else:
-            checked=verify(world)
+            observed_checks=verify(observed)
+        style=None
+        if styled_buildings:
+            checked,style=promote_styled_shell(observed,root/'sources',world)
+        else:
+            checked=observed_checks
         path=root/'geometry-receipt.json'
         save_json(path,dict(job,result='pass',checks=checked,seconds=time.monotonic()-started,
             regions={p.name:sha(p) for p in sorted((world/'region').glob('r.*.*.mca'))},
             world_manifest_sha256=sha(world/'earthcraft.json'),
+            observed_world_manifest_sha256=sha(observed/'earthcraft.json'),styled_shell=style,
             physical_accuracy_verified=False,appearance_complete=False,installed=False))
         journal.finish(job,path)
         if assembly:append_tile(assembly,world,tiles[job['tile']],plan)
@@ -289,6 +314,8 @@ if __name__=='__main__':
                    help='Keep near tiles priority-ordered, then batch by shared LAS member (default 200)')
     p.add_argument('--retry-failed',action='store_true',
                    help='Explicitly return failed source/geometry jobs to pending; failure receipts remain audited')
+    p.add_argument('--styled-buildings',action='store_true',
+                   help='Preserve raw observations and assemble a verified deterministic shell sibling for new tiles')
     a=p.parse_args()
     if not 1<=a.limit<=10000:p.error('Limit must be between one and the city job count')
     class LogOutput:
@@ -309,7 +336,7 @@ if __name__=='__main__':
             if not 0 <= a.source_locality_after <= 1e9:
                 raise ValueError('--source-locality-after must be between 0 and 1e9')
             run(a.plan,a.catalog,a.output,a.limit,a.source_parent,a.bulk,a.release_derived_points,
-                a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,a.retry_failed)
+                a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,a.retry_failed,a.styled_buildings)
         finally:
             if index:index.close()
             sys.stdout=sys.stdout.original;sys.stderr=sys.stderr.original
