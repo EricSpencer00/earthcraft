@@ -31,11 +31,19 @@ Use approximately three to five purposeful wall/trim/roof/glass materials per bu
 
 For Water Tower, warm buff limestone and the distinctive narrow shaft matter more than adding generic balconies or random moss. Do not recolour the whole neighborhood to match the landmark. The original OSM observation remains immutable; any supported correction belongs in a named overlay with source and reason. No arbitrary height change may be disguised as a style improvement.
 
-## Smallest AI experiment
+## Optional local-vision experiment
 
-One building, two to four permitted façade views, one compact observation JSON. Ask a local vision model only for visible material classes, bay layout and occlusion. Human-check these against the inputs. Deterministic code maps accepted observations to block choices. No depth model, training, mesh reconstruction, generalized fusion engine or city batch is required.
+The baseline does not need AI. If a local-vision experiment is useful, start
+with one building, two to four permitted façade views, and one compact
+observation JSON. Ask a local model only for visible material classes, bay
+layout, and occlusion. Human-check every accepted observation against the
+inputs, then let deterministic code map it to block choices. No hosted model,
+depth model, training, mesh reconstruction, generalized fusion engine, or city
+batch is required.
 
-First test a manually verified observation record. If that cannot produce a better building, adding AI only automates an ineffective representation. AI starts after the renderer can use a reliable record.
+First test a manually verified observation record. If that cannot produce a
+better building, adding a model only automates an ineffective representation.
+The experiment stays optional and separately enabled.
 
 ## Review gate
 

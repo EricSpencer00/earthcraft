@@ -1,6 +1,7 @@
 # Source-by-source loss analysis
 
-Status: design hypotheses to test, 2026-09-09. These failure modes describe how the representations can lose information; they are not measurements of the unknown pilot location.
+These failure modes describe how the representations can lose information;
+they are not measurements of a particular pilot location.
 
 Evaluate one source at a time before fusion. Separate **availability**, **measurement error**, **missing information**, **inference error**, and **Minecraft representation error**. More sources can add contradictions as well as information.
 

@@ -1,16 +1,16 @@
 # Earthcraft implementation plan
 
-Revised 2026-09-09. A narrow [64 m MVP](MVP.md) now exists; the architecture below remains the broader roadmap. Generated-world checks pass, but in-game loading and building accuracy are not verified. Start with [building fidelity](BUILDING_FIDELITY.md) before increasing the area.
+Last reviewed 2026-09-10. A narrow [64 m MVP](MVP.md) exists; the architecture below remains the broader roadmap. Generated-world checks pass, but in-game loading and building accuracy are not verified. Start with [building fidelity](BUILDING_FIDELITY.md) before increasing the area.
 
 ## 1. Outcome and scope
 
-Select a real-world area, acquire its available geographic observations, infer useful missing exterior attributes locally on a Mac, and export a playable Minecraft world at one block per metre.
+Select a real-world area, acquire its available geographic observations, preserve what is unknown, and export a playable Minecraft world at one block per metre. Optional local computer vision is a later research track, not a requirement for the baseline.
 
 The initial scope is terrain, roads, water, building exteriors, roofs, vegetation, and major visible street objects. The map covers the complete selected bounding area. Interiors, underground infrastructure, hidden courtyards, and occluded façades can remain unknown. Later procedural interiors must be explicitly marked as invented.
 
 This is a reconstruction system, not a screenshot-to-block painting system. The deliverable includes a quality report so a visually convincing result cannot hide misplaced geometry.
 
-The immediate proof is one building in a 64 × 64 metre square. The broader pilot is 256 × 256 metres, followed by 1,024 × 1,024 metres and then larger tiled areas. The location is the one pending user input. Until it is known, US public elevation is a candidate, not an assumption about actual coverage.
+The immediate proof is one building in a 64 × 64 metre square. The broader case study is Chicago, followed by 1,024 × 1,024 metres and then larger tiled areas. Live source coverage remains a measured input, not an assumption.
 
 ## 2. Decisions made now
 
@@ -20,7 +20,7 @@ The immediate proof is one building in a 64 × 64 metre square. The broader pilo
 | First edition | Minecraft Java | Installed locally; direct world files are useful for repeatable inspection |
 | First version | Installed release 1.21.10, subject to writer smoke test | Avoid claiming arbitrary version compatibility |
 | Scale | One block per metre in X, Y, and Z | User requirement; no adaptive stretching |
-| Runtime | Native Python orchestration, MLX vision inference; optional PyTorch MPS depth | Work on Apple Silicon without assuming NVIDIA |
+| Runtime | Native Python orchestration; optional local vision experiments | Keep the public baseline usable without AI or hosted services |
 | Baseline | Pinned Arnis revision | Existing geographic generation and world export provide an early playable comparison |
 | Reconstruction representation | Metric terrain plus semantic objects and optional local meshes | Preserve measurements until final voxelization |
 | Default detail | Faithful exteriors; unknown interiors | Avoid presenting generative completion as recovery |
@@ -142,21 +142,18 @@ Proposed objects, to become schemas during implementation:
 
 Use GeoParquet for larger vector tables, GeoTIFF/COG for terrain and imagery, LAZ/COPC where supplied for points, JSON for manifests, and SQLite for stage/job indexing. These are proposed formats, not installed dependencies. Keep transforms and evidence accessible without loading a model.
 
-## 7. Mac runtime and budgets
+## 7. Runtime and budgets
 
-The development target is an Apple M1 Max with 10 CPU cores and 64 GiB unified memory. On 2026-09-09 the internal data volume had about 39 GiB free; the connected LaCie had about 1.5 TiB free and was mounted as **exFAT**. Capacity and filesystem are observed; drive media, link speed, sustained throughput, and inference performance are unverified. Do not describe the LaCie as an SSD without checking it.
+Use the [resource and storage plan](RESOURCE_LIMITS.md) as the operating
+contract. Keep Git, environments, active state, and small fixtures in the
+repository workspace. Put raw sources, large normalized files, model archives,
+and completed worlds in a separate user-selected bulk workspace. Never assume
+that another volume supplies more memory or compute.
 
-Use the [resource and storage plan](RESOURCE_LIMITS.md) as the operating contract. Keep Git, executable environments, active SQLite state, and any selected inference cache on the development volume. Store immutable source assets, large normalized files, archived models, and completed world archives in a separate bulk workspace. External capacity permits larger bounded datasets; it supplies neither GPU memory nor additional compute.
-
-The default pilot uses a 12 GiB internal project cap with a 20 GiB free-space reserve, and a separate 100 GiB external cap with a 100 GiB reserve. Internal allocation: 4 GiB dependencies/build caches, 6 GiB active model, 2 GiB state/scratch/playtest. External allocation: 40 GiB raw sources, 30 GiB derived artifacts/world archives, 20 GiB model archives, 10 GiB transfer staging. These are provisional ceilings, not expected consumption; preflight the next stage and overlapping copies. See `configs/pilot.json` for matching values. Stop before exceeding either volume's limit; never silently fall back to the internal drive if LaCie is unavailable.
-
-Start with Qwen3-VL-4B-Instruct through MLX-VLM and a verified 4-bit conversion. Pin exact weights, runtime and license after a native ARM64 smoke test. Compare 8B only after an identified 4B failure on development examples; do not promote it based on parameter count. [MLX-VLM](https://github.com/Blaizzy/mlx-vlm), [Qwen3-VL](https://github.com/QwenLM/Qwen3-VL).
-
-Run one model and one image at a time initially, at most 1,024 generated tokens per crop. Record the processor's actual resized dimensions and visual-token count. Start with four CPU preprocessing workers and one world writer, then tune from measurements. Target at most 24 GiB across the pipeline process tree, with a 32 GiB stop threshold and a 2 GiB swap-growth pause threshold. Process accounting does not replace system memory-pressure checks because CPU and GPU share memory. Keep Minecraft closed during inference; release model allocations before game validation.
-
-Depth Pro remains optional and outside the first release. Test MPS operator coverage, numerical validity and latency on one image first; reject hidden CPU fallback. Neither upstream GPU timings nor fitting model weights in RAM establishes M1 Max throughput. [Depth Pro](https://github.com/apple/ml-depth-pro), [PyTorch MPS](https://docs.pytorch.org/docs/stable/notes/mps.html).
-
-After acquisition, generation must pass an offline replay test. No silent cloud inference fallback. The 60 minute warm pilot target is an experiment budget, not an estimate. Report acquisition, cold loading, generation, transfer and game validation separately as well as total elapsed time.
+The public baseline must run without model files or cloud inference. Optional
+local vision or depth work belongs in a separately pinned experiment with
+input hashes, license records, abstention, and an offline replay check. Report
+acquisition, generation, transfer, and game validation separately.
 
 ## 8. Build versus reuse
 
@@ -254,4 +251,4 @@ The fastest useful proof is a playable, dimension-checked street block plus a sm
 
 ## 14. Public development sequence
 
-[PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) separates a planning repository, the v0.1 geometry-only prototype, the v0.2 evidence-backed local-AI demo, and later kilometre-scale work. M6/M7 are not prerequisites for publishing useful source. [PLAN_REVIEW.md](PLAN_REVIEW.md) records the critique and changes made in this revision. All proposed commands, resource guards and stage gates still require implementation.
+[PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) separates the no-AI geographic baseline, optional local visual research, and later scale work. M6/M7 are not prerequisites for publishing useful source. Proposed commands, resource guards, and stage gates still require implementation.

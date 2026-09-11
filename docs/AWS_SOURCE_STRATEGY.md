@@ -2,10 +2,9 @@
 
 Decision: use an on-demand regional atlas, not a pre-generated global volume.
 Select evidence per layer and location. Keep continuous geographic observations
-until final voxelization. The current executable batch is Chicago plus a bounded
-high-elevation terrain test; global coverage is not implemented or verified.
+until final voxelization. Global coverage is not implemented or verified.
 
-## Sources checked, 2026-09-10 UTC
+## Source decisions
 
 | Source | Useful role | Critical limitation | Current decision |
 |---|---|---|---|

@@ -1,7 +1,8 @@
 # Public repository and release plan
 
-Status: public-repository preparation, 2026-09-10. This document describes
-what may be published; it is not a claim that a generated world is finished.
+Status: the source tree is prepared for public review. Publishing still needs
+the destination repository, final native checks, and artifact-specific rights
+decisions. This document is not a claim that a generated world is finished.
 
 ## Public promise
 
@@ -18,9 +19,9 @@ enabled, and must preserve the source evidence and abstentions. Contributors
 should use their own names in Git history; the project does not accept bot
 `Co-authored-by` trailers.
 
-The first supported runtime is M1 Max/64 GiB; other hardware remains untested.
-Generated worlds require a separately installed compatible game. Publish
-compatibility only after a real load test.
+The maintained development target is macOS on Apple Silicon; other hardware
+remains untested. Generated worlds require a separately installed compatible
+game. Publish compatibility only after a real load test.
 
 ## Release stages
 
@@ -28,7 +29,7 @@ compatibility only after a real load test.
 |---|---|---|
 | Planning repository | License decision, clean history review, accurate status and roadmap | Architecture and proposed experiments only; no working product claim |
 | v0.1 geographic baseline | Native installation instructions tested, pinned Arnis, bounded fetch, storage preflight, synthetic offline checks, one dimension-checked playable 256 m world | Experimental no-AI baseline with measured limits |
-| v0.2 local visual refinement | Exact model/runtime revisions and licenses, held-out semantic results, offline replay, frozen before/after views and attribution | Optional local AI improves the reported visible attributes on tested locations |
+| v0.2 local visual refinement | Exact model/runtime revisions and licenses, held-out semantic results, offline replay, frozen before/after views and attribution | An explicitly optional local experiment improves reported visible attributes on tested locations |
 | Later scale release | 1,024 m seam/resume checks, second location, measured storage and runtime | Only the area sizes and configurations actually tested |
 
 A public planning repository can precede implementation if clearly labelled. v0.1 need not wait for depth, LiDAR ingestion, a GUI, every provider, or kilometre tiling.
@@ -53,7 +54,9 @@ Google adapters remain disabled under the current source policy. Do not advertis
 - Offline synthetic CI for transforms, boundary occupancy, configuration and world parsing; opt-in local checks for models, live data and actual game loading.
 - A compact release report: exact commits, input hashes, reproduction steps, errors and sample counts, measured memory/time/disk, known unsupported cases.
 
-Add contribution and security documents when actual setup/reporting routes exist; do not publish fictional commands. Current proposed CLI commands remain explicitly non-runnable.
+Contribution and security documents are included, but they do not invent a
+private contact address or a GitHub feature that has not been enabled. Current
+proposed CLI commands remain explicitly non-runnable.
 
 ## History and publication gate
 

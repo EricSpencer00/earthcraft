@@ -78,6 +78,8 @@ def main():
     p.add_argument('--kml',type=Path);p.add_argument('--lon',type=float);p.add_argument('--lat',type=float)
     p.add_argument('--name',default='Earthcraft-Location-'+datetime.now().strftime('%Y%m%d-%H%M%S'));p.add_argument('--size',type=int,default=256,
         help='Uncached terrain extent only; cached scans retain their declared grid')
+    p.add_argument('--catalog',type=Path,default=ROOT/'configs/atlas-regions.json',
+        help='Optional local catalog of cached regions; omitted catalogs use bounded public data')
     p.add_argument('--plan-only',action='store_true')
     p.add_argument('--public-data',action='store_true',help='Acquire fresh bounded public sources instead of selecting cached scans')
     p.add_argument('--resume-acquisition',action='store_true',help='Resume this named public source acquisition before any world has been written')
@@ -90,7 +92,7 @@ def main():
         if args.lon is None or args.lat is None:p.error('Provide --kml or both --lon and --lat')
         lon,lat=location(args.lon,args.lat);origin={'role':'Explicit WGS84 coordinates'}
     if args.size<16 or args.size>512 or args.size%16:p.error('Terrain size must be 16..512, a multiple of 16')
-    catalog=json.loads((ROOT/'configs/atlas-regions.json').read_text())
+    catalog=json.loads(args.catalog.read_text()) if args.catalog.exists() else {'regions':{}}
     selected,unavailable=select_cached(lon,lat,catalog)
     if args.public_data:selected=None
     plan={'location_wgs84':[lon,lat],'location_input':origin,'selected':selected,'requested_size_m':args.size,

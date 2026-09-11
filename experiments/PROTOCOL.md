@@ -1,6 +1,11 @@
 # Pilot experiment protocol
 
-Preregistered design, 2026-09-09. The narrow MVP has generated-world checks recorded in docs/MVP.md; the preregistered source-quality and game-loading gates below have not passed. Numeric gates below are proposed engineering targets, to be frozen for a selected dataset before running it. If a target is impossible given source accuracy, record that limitation; do not silently loosen the target after seeing a result.
+This is a preregistered design for optional research. The no-AI MVP remains the
+public release path; the source-quality and game-loading gates below have not
+passed. Numeric gates are proposed engineering targets, to be frozen for a
+selected dataset before running it. If a target is impossible given source
+accuracy, record that limitation; do not silently loosen the target after
+seeing a result.
 
 ## E0. Environment and export fixture
 
