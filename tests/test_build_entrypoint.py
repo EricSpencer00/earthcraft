@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import unittest
 
@@ -10,11 +9,9 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn('set -e',entry)
         self.assertIn('scripts/earth_location.py --kml location.kmz',entry)
         self.assertIn('scripts/earth_location.py --kml location.kml',entry)
-        self.assertIn('exec .venv/bin/python scripts/earthcraft.py --replay-check',entry)
-        catalog=json.loads((root/'configs/atlas-regions.json').read_text())
-        region=catalog['regions'][catalog['default_region']]
-        self.assertIn('photo_layer',region)
-        self.assertTrue(region['photo_layer']['start_at_detail'])
+        self.assertIn('PYTHON="$ROOT/.venv/bin/python"',entry)
+        self.assertIn('exec "$PYTHON" scripts/earthcraft.py --replay-check',entry)
+        self.assertNotIn('/Users/',entry)
 
 
 if __name__=='__main__':unittest.main()

@@ -28,16 +28,18 @@ class CacheTests(unittest.TestCase):
                 super().__init__(payload);self.etag='test-version';self.transferred=0
             def read(self,n=-1):
                 value=super().read(n);self.transferred+=len(value);return value
-        with tempfile.TemporaryDirectory() as folder,patch.object(cache,'RangeReader',Remote), \
-                patch.object(Path,'is_mount',return_value=True),patch.object(Path,'is_relative_to',return_value=True):
+        with tempfile.TemporaryDirectory() as folder,patch.object(cache,'RangeReader',Remote):
             root=Path(folder)
-            path,record=cache.acquire(asset,{'capture_interval':['2022-04-05','2022-06-29']},root,reserve_bytes=0)
+            with patch.object(cache,'bulk_root',return_value=root):
+                path,record=cache.acquire(asset,{'capture_interval':['2022-04-05','2022-06-29']},root,reserve_bytes=0)
             self.assertEqual(gzip.decompress(path.read_bytes()),original)
             self.assertEqual(path.read_bytes()[10:-8],payload[30+len(info.filename):30+len(info.filename)+info.compress_size])
             self.assertEqual(record['bytes'],len(original))
-            self.assertEqual(cache.acquire(asset,{},root,reserve_bytes=0),(path,record))
+            with patch.object(cache,'bulk_root',return_value=root):
+                self.assertEqual(cache.acquire(asset,{},root,reserve_bytes=0),(path,record))
             with path.open('ab') as stream:stream.write(b'changed')
-            with self.assertRaisesRegex(ValueError,'checksum'):cache.acquire(asset,{},root,reserve_bytes=0)
+            with patch.object(cache,'bulk_root',return_value=root):
+                with self.assertRaisesRegex(ValueError,'checksum'):cache.acquire(asset,{},root,reserve_bytes=0)
 
     def test_only_catalog_provider_and_bounded_deflate_members(self):
         with self.assertRaises(ValueError):cache.validate_asset({'id':'../../x'})
