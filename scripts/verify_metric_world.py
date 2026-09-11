@@ -16,6 +16,14 @@ def unpack(words, bits, count):
     return ((data[indices//(64//bits)] >> ((indices%(64//bits))*bits).astype(np.uint64)) & ((1<<bits)-1)).astype(int)
 
 
+def point_provenance_matches(world, declared_hash):
+    """Verify measured point lineage, including an explicit absent-point case."""
+    path=Path(world)/'point-voxels.npy'
+    if declared_hash is None:
+        return not path.exists()
+    return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==declared_hash
+
+
 def verify(world):
     report=json.loads((world/'earthcraft.json').read_text())
     size=report['source']['size']; h=report['dimension_height']; bottom=report['dimension_min_y']
@@ -36,8 +44,8 @@ def verify(world):
         style=json.loads((world/'building-layer.json').read_text())
         model=world/'building-layer.npz'
         if (style.get('schema')!='styled-shell-v1' or style.get('llm_used') is not False or
-            hashlib.sha256(model.read_bytes()).hexdigest()!=style['model_sha256'] or point_cells is None or
-            hashlib.sha256((world/'point-voxels.npy').read_bytes()).hexdigest()!=style['source_points_sha256']):
+            hashlib.sha256(model.read_bytes()).hexdigest()!=style['model_sha256'] or
+            not point_provenance_matches(world,style.get('source_points_sha256'))):
             raise ValueError('Building layer provenance mismatch')
         with np.load(model,allow_pickle=False) as data:
             building_layer={key:data[key] for key in data.files}

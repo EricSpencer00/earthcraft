@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from metric_world import packed, region_write
+from verify_metric_world import point_provenance_matches
 from inspect_world import chunks
 from osm_json_to_kml import convert
 
@@ -43,6 +44,13 @@ class MetricWorldTests(unittest.TestCase):
         way['tags']['height']='31.5 m'
         _,count=convert({'elements':nodes+[way]})
         self.assertEqual(count,1)
+
+    def test_empty_point_provenance_requires_no_hidden_point_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            world=Path(directory)
+            self.assertTrue(point_provenance_matches(world,None))
+            np.save(world/'point-voxels.npy',np.empty((0,3),dtype=int))
+            self.assertFalse(point_provenance_matches(world,None))
 
 
 if __name__=='__main__':
