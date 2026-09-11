@@ -43,6 +43,20 @@ __pycache__/
 /docs/SINGLE_WORLD.md
 /docs/tickets/
 
+# Local run records and unreviewed visual outputs. Keep public docs durable.
+/docs/ADAPTATION_LAYER.md
+/docs/AUTOMATIC_WORLD.md
+/docs/DASHBOARD.md
+/docs/FACADE_PHOTO_EXPERIMENT.md
+/docs/IMAGERY_SOURCE_STRATEGY.md
+/docs/MVP_EXTENSION.md
+/docs/PHOTO_LAYER_PIPELINE.md
+/docs/PIPELINE_EVALUATION.md
+/docs/PLAN_REVIEW.md
+/docs/REPLAY_PIPELINE.md
+/docs/RESEARCH.md
+/docs/photos/
+
 # Local build and acquisition output.
 *.log
 *.sqlite

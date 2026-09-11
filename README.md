@@ -1,7 +1,5 @@
 # Earthcraft
 
-![docs/photos/watertower-sep-10-26.png](docs/photos/watertower-sep-10-26.png)
-
 Earthcraft turns a bounded real-world place into a Minecraft Java world. The
 project keeps the geographic measurements, source provenance, and uncertainty
 visible instead of hiding them behind a screenshot that merely looks right.
