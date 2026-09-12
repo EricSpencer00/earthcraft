@@ -109,9 +109,15 @@ def publish(exchange,patch):
 def archive_receipted(exchange):
     # The inbox is bounded; the receipt history is not. Inspect at most the
     # pending files instead of rescanning every historic city patch each tick.
+    # Return the exact number of bytes moved so the caller can maintain its
+    # already-audited archive cap without a growing ``archive.glob`` on every
+    # poll.
+    moved=0
     for source in (exchange/'inbox').glob('*.json.gz'):
         if (exchange/'receipts'/source.name[:-3]).exists():
+            moved+=source.stat().st_size
             source.rename(exchange/'archive'/source.name)
+    return moved
 
 
 def initialize(exchange,world,config):
@@ -230,6 +236,11 @@ def feed(exchange,journal,once=False,priority_manifest=None):
     if state.exists():
         previous=json.loads(state.read_text());seen=set(previous['chunks'])
         complete_regions=dict(previous.get('complete_regions',{}))
+    # Audit historic content once per publisher process.  After that, only this
+    # process moves receipted inbox files into the archive, so exact incremental
+    # accounting preserves the one-GiB cap without an O(history) directory scan
+    # on every one-second publication poll.
+    archive_bytes=sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))
 
     def save_state():
         atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,'time':time.time(),
@@ -241,8 +252,8 @@ def feed(exchange,journal,once=False,priority_manifest=None):
                 lock.close();return
             time.sleep(1);continue
         if shutil.disk_usage(ROOT).free<20*2**30:raise RuntimeError('Internal 20 GiB reserve reached')
-        archive_receipted(exchange)
-        if sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
+        archive_bytes+=archive_receipted(exchange)
+        if archive_bytes>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
         room=128-len(list((exchange/'inbox').glob('*.gz')))
         rows=completed_geometry_rows(journal)
         rows.sort(key=lambda row:(0,priority[row[0]]) if row[0] in priority else (1,row[3],row[0]))

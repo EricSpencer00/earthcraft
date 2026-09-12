@@ -114,7 +114,7 @@ class LiveTests(unittest.TestCase):
             (root/'inbox/pending.json.gz').write_bytes(b'pending')
             (root/'receipts/done.json').write_text('{}')
             (root/'receipts/old.json').write_text('{}')
-            archive_receipted(root)
+            self.assertEqual(archive_receipted(root),len(b'done'))
             self.assertEqual((root/'archive/done.json.gz').read_bytes(),b'done')
             self.assertEqual((root/'inbox/pending.json.gz').read_bytes(),b'pending')
             self.assertFalse((root/'archive/old.json.gz').exists())
