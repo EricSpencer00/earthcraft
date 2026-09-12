@@ -16,6 +16,7 @@ import time
 
 from building_layer import compile_layer
 from verify_metric_world import verify
+from chicago_tiles import digest
 
 
 SCHEMA = 'building-rerun-manifest-v1'
@@ -90,6 +91,31 @@ def tile_record(tile, row, source_root, output_root):
     }, 'rerun'
 
 
+def selected_tiles(args,plan,by_id):
+    """Choose either a frozen named route or a deterministic lattice window."""
+    if args.tile_list is not None:
+        path=Path(args.tile_list)
+        route=json.loads(path.read_text())
+        if route.get('plan_sha256')!=digest(plan):
+            raise ValueError('Tile list does not belong to the frozen plan')
+        ids=route.get('tiles')
+        if not isinstance(ids,list) or not ids or len(set(ids))!=len(ids):
+            raise ValueError('Tile list must contain unique tile IDs')
+        if set(ids)-set(by_id):raise ValueError('Tile list contains an unknown tile')
+        return [by_id[tile] for tile in ids],{
+            'tile_list':str(path.resolve()),'tile_list_sha256':sha(path),
+            'tiles_requested':len(ids),'meaning':'Frozen explicit route order; no bounding-box expansion.'}
+    if None in (args.min_tx,args.max_tx,args.min_tz,args.max_tz):
+        raise ValueError('Tile bounds are required without --tile-list')
+    if args.min_tx>args.max_tx or args.min_tz>args.max_tz:
+        raise ValueError('Tile bounds must be ordered')
+    selected=[tile for tile in by_id.values() if args.min_tx<=tile['tx']<=args.max_tx and
+              args.min_tz<=tile['tz']<=args.max_tz]
+    return sorted(selected,key=lambda item:(item['tz'],item['tx'],item['id'])),{
+        'tx':[args.min_tx,args.max_tx],'tz':[args.min_tz,args.max_tz],
+        'meaning':'Explicit tile lattice window; existing styled tiles are excluded.'}
+
+
 def select(args):
     plan = json.loads((args.plan / 'plan.json').read_text())
     by_id = {tile['id']: tile for tile in plan['tiles']}
@@ -106,10 +132,8 @@ def select(args):
     records = []
     skipped = {}
     candidates = []
-    for tile in sorted(by_id.values(), key=lambda item: (item['tz'], item['tx'], item['id'])):
-        if not (args.min_tx <= tile['tx'] <= args.max_tx and
-                args.min_tz <= tile['tz'] <= args.max_tz):
-            continue
+    selection,bounds=selected_tiles(args,plan,by_id)
+    for tile in selection:
         row = rows.get(tile['id'])
         if not row or row['state'] != 'complete':
             skipped['not_complete'] = skipped.get('not_complete', 0) + 1
@@ -142,11 +166,7 @@ def select(args):
         'journal': str(args.journal.resolve()),
         'source_root': str(source_root),
         'output_root': str(output_root),
-        'bounds': {
-            'tx': [args.min_tx, args.max_tx],
-            'tz': [args.min_tz, args.max_tz],
-            'meaning': 'Explicit tile lattice window; existing styled tiles are excluded.',
-        },
+        'bounds': bounds,
         'tiles': records,
         'skipped': skipped,
         'llm_used': False,
@@ -267,10 +287,12 @@ def parser():
     p.add_argument('--source-root', type=Path, default=DEFAULT_SOURCE_ROOT)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--manifest', type=Path)
-    p.add_argument('--min-tx', type=int, required=True)
-    p.add_argument('--max-tx', type=int, required=True)
-    p.add_argument('--min-tz', type=int, required=True)
-    p.add_argument('--max-tz', type=int, required=True)
+    p.add_argument('--tile-list',type=Path,
+                   help='Frozen route JSON with matching plan_sha256 and ordered unique tile IDs')
+    p.add_argument('--min-tx', type=int)
+    p.add_argument('--max-tx', type=int)
+    p.add_argument('--min-tz', type=int)
+    p.add_argument('--max-tz', type=int)
     p.add_argument('--workers', type=int, default=1,
                    help='Independent verified candidate processes for --build (1-8; default: 1)')
     p.add_argument('--select', action='store_true', help='Write a fresh immutable tile manifest')
@@ -282,8 +304,9 @@ def main():
     args = parser().parse_args()
     if args.select == args.build:
         raise SystemExit('Choose exactly one of --select or --build')
-    if args.min_tx > args.max_tx or args.min_tz > args.max_tz:
-        raise SystemExit('Tile bounds must be ordered')
+    if args.select and args.tile_list is None and (None in (args.min_tx,args.max_tx,args.min_tz,args.max_tz) or
+                                                   args.min_tx>args.max_tx or args.min_tz>args.max_tz):
+        raise SystemExit('Ordered tile bounds are required without --tile-list')
     manifest_path = args.manifest or args.output / 'manifest.json'
     if args.select:
         if Path(manifest_path).exists():
