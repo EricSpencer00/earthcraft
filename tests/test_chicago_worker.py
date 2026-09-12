@@ -81,6 +81,22 @@ class ChicagoWorkerTests(unittest.TestCase):
             self.assertEqual((archived/'partial').read_text(),'audit me')
             self.assertEqual((staging/'ready').read_text(),'complete')
 
+    def test_invalid_asserted_geometry_is_preserved_and_rebuilt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'sources';source.mkdir()
+            staging=root/'world.building';staging.mkdir();(staging/'invalid').write_text('retain evidence')
+            def build_fn(actual_source,destination,point_source=None,world_frame=None):
+                self.assertEqual(actual_source,source);self.assertFalse(destination.exists())
+                destination.mkdir();(destination/'ready').write_text('complete')
+            def verify_fn(destination):
+                if not (destination/'ready').exists():raise AssertionError('unsafe spawn')
+                return {'safe_spawn':True}
+            checks,archived=build_or_resume_staging(
+                source,staging,None,{'frame':'fixture'},build_fn,verify_fn)
+            self.assertEqual(checks,{'safe_spawn':True})
+            self.assertEqual((archived/'invalid').read_text(),'retain evidence')
+            self.assertEqual((staging/'ready').read_text(),'complete')
+
 
 if __name__ == '__main__':
     unittest.main()

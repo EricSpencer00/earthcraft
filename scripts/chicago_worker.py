@@ -143,7 +143,7 @@ def build_or_resume_staging(source,staging,point_source,world_frame,
     if staging.exists():
         try:
             return verify_fn(staging),archived
-        except (OSError,ValueError):
+        except (OSError, ValueError, AssertionError):
             archived=staging.with_name(
                 f'{staging.name}.incomplete-{os.getpid()}-{time.time_ns()}')
             staging.rename(archived)
