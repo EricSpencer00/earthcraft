@@ -163,13 +163,17 @@ def _request_for_stage(stage, exchange, native, closed):
     return made
 
 
-def await_publication(exchange, stage, seconds=300):
-    """Wait for a zero-conflict publisher result; never touch a player save."""
+def await_publication(exchange, stage):
+    """Wait for a zero-conflict publisher result; never touch a player save.
+
+    The publisher deliberately stops below its internal storage reserve.  That
+    condition is recoverable, so this worker waits for the supervised child
+    rather than imposing an arbitrary delivery deadline.
+    """
     exchange, stage = map(Path, (exchange, stage))
     manifest_hash = sha(stage / 'manifest.json')
     record = exchange / 'building-publications' / f'{manifest_hash}.json'
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+    while True:
         if record.exists():
             result = _read(record)
             state = result.get('state')
@@ -178,7 +182,6 @@ def await_publication(exchange, stage, seconds=300):
             if state in {'complete_with_conflicts', 'receipt_requires_attention', 'rejected'}:
                 raise ValueError(f'Publisher stopped safely for {stage.name}: {state}')
         time.sleep(2)
-    raise TimeoutError(f'Publisher did not complete {stage.name} within {seconds}s')
 
 
 def _write_checkpoint(path, value):
