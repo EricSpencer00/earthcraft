@@ -40,7 +40,7 @@ class BuildingDeliveryTests(unittest.TestCase):
         (stage / 'manifest.json').write_text(json.dumps(manifest))
         manifest_sha = digest(stage / 'manifest.json')
         native = root / 'native.json'; native.write_text(json.dumps({'passed': True,
-            'stage_manifest_sha256': manifest_sha, 'two_load_save_cycles_verified': True,
+            'staged_manifest_sha256': manifest_sha, 'two_load_save_cycles_verified': True,
             'player_edit_preserved': True, 'block_entity_preserved': True, 'unowned_chunk_preserved': True,
             'district_patches': 1, 'district_written_cells': 1}))
         closed = root / 'closed.json'; closed.write_text(json.dumps({'passed': True, 'llm_used': False,

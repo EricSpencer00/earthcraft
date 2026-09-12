@@ -25,7 +25,11 @@ def _read(path):
 def _proof(proof, manifest_sha, kind):
     if not proof.get('passed'):
         raise ValueError(f'{kind} proof did not pass')
-    if proof.get('stage_manifest_sha256') != manifest_sha:
+    # ``check_building_delta`` published ``staged_manifest_sha256`` before
+    # the closed writer standardized the shorter field.  Both bind the same
+    # immutable manifest; retain compatibility without accepting ambiguity.
+    proof_manifest = proof.get('stage_manifest_sha256', proof.get('staged_manifest_sha256'))
+    if proof_manifest != manifest_sha:
         raise ValueError(f'{kind} proof belongs to another stage')
     # Older native harness receipts predate the explicit field.  The immutable
     # stage manifest and the closed receipt both carry the no-LLM declaration;
