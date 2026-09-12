@@ -37,6 +37,23 @@ def pending_jobs(journal):
         ).fetchone()[0]
 
 
+def publisher_lock_held(exchange=EXCHANGE):
+    """Observe a publisher already feeding the live inbox without replacing it.
+
+    A supervisor crash deliberately leaves its start-new-session publisher alive
+    so a large live import is not needlessly interrupted.  A replacement
+    supervisor must adopt that single-writer process rather than spin failed
+    duplicate children against the publisher lock.
+    """
+    with (Path(exchange) / 'publisher.lock').open('a+') as lock:
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.lockf(lock, fcntl.LOCK_UN)
+        return False
+
+
 def validate_lacie(bulk_root, output):
     bulk_root = Path(bulk_root).resolve()
     output = Path(output).resolve()
@@ -116,18 +133,27 @@ def main():
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         publisher = publisher_log = workers = workers_log = None
+        external_publisher = False
         try:
             while not stopping:
                 try:
                     validate_lacie(args.bulk_root, args.output)
                     env = command_environment(args.bulk_root)
-                    if publisher is None or publisher.poll() is not None:
+                    if external_publisher and not publisher_lock_held(EXCHANGE):
+                        external_publisher = False
+                        log(log_handle, 'adopted publisher released its lock; resuming supervision')
+                    if not external_publisher and (publisher is None or publisher.poll() is not None):
                         if publisher is not None:
                             log(log_handle, f'publisher exited rc={publisher.returncode}; restarting')
                             publisher_log.close()
-                        publisher, publisher_log = start_publisher(
-                            env, EXCHANGE / 'publisher-supervisor.log')
-                        log(log_handle, f'started publisher pid={publisher.pid}')
+                            publisher = publisher_log = None
+                        if publisher_lock_held(EXCHANGE):
+                            external_publisher = True
+                            log(log_handle, 'adopted existing publisher holding the live inbox lock')
+                        else:
+                            publisher, publisher_log = start_publisher(
+                                env, EXCHANGE / 'publisher-supervisor.log')
+                            log(log_handle, f'started publisher pid={publisher.pid}')
                     if workers is None or workers.poll() is not None:
                         if workers is not None:
                             log(log_handle, f'worker pool exited rc={workers.returncode}; restarting')
