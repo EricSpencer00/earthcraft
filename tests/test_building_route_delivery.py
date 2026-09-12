@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from building_route_delivery import _closed_ok, _native_ok, route_tiles
+from building_route_delivery import _closed_ok, _fixture, _native_ok, route_tiles
 
 
 class BuildingRouteDeliveryTests(unittest.TestCase):
@@ -29,6 +29,9 @@ class BuildingRouteDeliveryTests(unittest.TestCase):
                    'llm_used': False}
         self.assertTrue(_closed_ok(receipt, 'a'))
         self.assertFalse(_closed_ok({**receipt, 'llm_used': True}, 'a'))
+
+    def test_disposable_native_fixture_uses_local_apfs_temp(self):
+        self.assertEqual(_fixture('proof').parent, Path('/private/tmp'))
 
 
 if __name__ == '__main__':

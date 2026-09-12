@@ -112,11 +112,15 @@ def _archive_receipt(source, destination):
         raise ValueError(f'Archived proof changed: {destination}')
 
 
-def _fixture(prefix, fixture_root):
-    """Place disposable native fixtures on the external Earthcraft volume."""
-    root = Path(fixture_root) / '.verification-fixtures'
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f'{prefix}-{os.getpid()}-{time.time_ns()}'
+def _fixture(prefix):
+    """Create a disposable verifier fixture on the local APFS filesystem.
+
+    Fabric extracts many runtime files.  On the LaCie filesystem macOS creates
+    AppleDouble sidecars for those files, which Fabric mistakes for datapack
+    content.  The fixture is neither a source, cache nor live-import artifact:
+    its only durable result is copied to the LaCie proof archive before cleanup.
+    """
+    return Path('/private/tmp') / f'{prefix}-{os.getpid()}-{time.time_ns()}'
 
 
 def ensure_proofs(stage, route_label, report_root):
@@ -132,8 +136,8 @@ def ensure_proofs(stage, route_label, report_root):
         return native_path, closed_path
     if native is not None or closed is not None:
         raise ValueError(f'Incomplete proof archive for {stage.name}')
-    native_work = _fixture('earthcraft-route-native', report_root)
-    closed_work = _fixture('earthcraft-route-closed', report_root)
+    native_work = _fixture('earthcraft-route-native')
+    closed_work = _fixture('earthcraft-route-closed')
     try:
         result = native_check(native_work, stage)
         if not _native_ok(result, manifest_hash):
