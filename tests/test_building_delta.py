@@ -8,6 +8,7 @@ import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from building_delta import encode_delta, native_states
 from apply_building_stage_closed import mutate_chunk
+from check_live_import import assert_same_blocks
 from live_city import validate
 from metric_world import packed
 
@@ -65,12 +66,36 @@ class DeltaTests(unittest.TestCase):
         old=chunk(before);p=encode_delta(old,chunk(after),'f',{})
         actual,counts=mutate_chunk(old,p)
         self.assertEqual(counts,{'written':2,'conflicts':0,'already_target':0})
+        original_palette,original_values=native_states(old)
+        self.assertEqual(original_palette[original_values[8*4096]],'minecraft:air')
         palette,values=native_states(actual)
         self.assertEqual(palette[values[8*4096]],'minecraft:bricks')
+        in_place=chunk(before);same,counts=mutate_chunk(in_place,p,copy_chunk=False)
+        self.assertIs(same,in_place);self.assertEqual(counts['written'],2)
         _,replay=mutate_chunk(actual,p);self.assertEqual(replay['already_target'],2)
         changed=before.copy();changed[0]=1
         _,counts=mutate_chunk(chunk(changed),p)
         self.assertEqual(counts['written'],1);self.assertEqual(counts['conflicts'],1)
+
+    def test_closed_writer_vector_path_preserves_block_entity_cell(self):
+        before=np.zeros(4096,int);after=before.copy();after[:4]=2
+        old=chunk(before)
+        # Section Y=4 begins at world Y=64.  The protected entity occupies
+        # the third changed block in chunk -3,5 and must prevent only that
+        # one otherwise-valid CAS write.
+        old['block_entities']=n.List[n.Compound]([n.Compound({
+            'x':n.Int(-46),'y':n.Int(64),'z':n.Int(80),'id':n.String('minecraft:chest')})])
+        patch=encode_delta(old,chunk(after),'f',{})
+        actual,counts=mutate_chunk(old,patch)
+        self.assertEqual(counts,{'written':3,'conflicts':1,'already_target':0})
+        self.assertEqual(actual['block_entities'],old['block_entities'])
+
+    def test_sectionwise_comparator_matches_block_volume_semantics(self):
+        before=np.zeros(4096,int)
+        self.assertEqual(assert_same_blocks(chunk(before),chunk(before)),262144)
+        changed=before.copy();changed[17]=1
+        with self.assertRaises(AssertionError):
+            assert_same_blocks(chunk(before),chunk(changed),'changed block')
 
 
 if __name__=='__main__':unittest.main()

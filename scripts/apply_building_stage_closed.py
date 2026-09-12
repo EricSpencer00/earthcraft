@@ -18,33 +18,54 @@ from verify_metric_world import unpack
 from world_replay import files_snapshot
 
 
-def mutate_chunk(original,patch):
+def mutate_chunk(original,patch,*,copy_chunk=True):
     validate(patch)
     if patch['mode']!='building_delta':raise ValueError('Building delta required')
     if (int(original['xPos']),int(original['zPos']))!=(patch['cx'],patch['cz']):raise ValueError('Wrong chunk')
-    result=copy.deepcopy(original);sections={int(s['Y']):s for s in result['sections']}
+    # Callers that still need their source tag can retain the conservative
+    # default.  Closed-stage preparation has already recorded the immutable
+    # baseline and rewrites a separate region file, so duplicating all 64
+    # vertical sections per touched chunk is needless memory and CPU churn.
+    result=copy.deepcopy(original) if copy_chunk else original
+    sections={int(s['Y']):s for s in result['sections']}
     arrays={};written=conflicts=already=0;raised=np.zeros(256,int)
-    entities={(int(e['x']),int(e['y']),int(e['z'])) for e in original.get('block_entities',[])}
+    # Convert protected block-entity coordinates once to the live patch's
+    # linear index.  Applying a city cohort can touch millions of cells; the
+    # former per-cell tuple construction dominated closed-proof time.
+    entities={(int(e['y'])+64)*256+(int(e['z'])&15)*16+(int(e['x'])&15)
+              for e in original.get('block_entities',[])}
     for start,count,expected_code,target_code in patch['runs']:
         expected,target=patch['palette'][expected_code],patch['palette'][target_code]
         if target=='minecraft:water':raise ValueError('Closed building delta requires a solid target')
-        for index in range(start,start+count):
-            sy=index//4096-4;slot=index%4096
+        cursor=start;remaining=count
+        while remaining:
+            sy=cursor//4096-4;slot=cursor%4096
+            width=min(remaining,4096-slot)
             if sy not in sections or 'block_states' not in sections[sy]:raise ValueError('Missing source block section')
             state=sections[sy]['block_states'];palette=state['palette']
             if sy not in arrays:
                 arrays[sy]=np.zeros(4096,int) if len(palette)==1 else unpack(state['data'],max(4,(len(palette)-1).bit_length()),4096)
-            values=arrays[sy];old=palette[int(values[slot])]
-            current=str(old['Name'])
-            default=not old.get('Properties')
-            pos=(patch['cx']*16+(index&15),(index>>8)-64,patch['cz']*16+((index>>4)&15))
-            if default and current==target:already+=1;continue
-            if pos in entities or not default or current!=expected:conflicts+=1;continue
+            values=arrays[sy];current_codes=values[slot:slot+width]
+            names=np.asarray([str(value['Name']) for value in palette],dtype=object)
+            defaults=np.asarray([not value.get('Properties') for value in palette],dtype=bool)
+            current=names[current_codes];default=defaults[current_codes]
             target_index=next((i for i,p in enumerate(palette) if str(p['Name'])==target and not p.get('Properties')),None)
             if target_index is None:
                 target_index=len(palette);palette.append(n.Compound({'Name':n.String(target)}))
-            values[slot]=target_index;written+=1
-            raised[index%256]=max(raised[index%256],index//256+1)
+            can_write=default&(current==expected)
+            if entities:
+                indexes=np.arange(cursor,cursor+width)
+                can_write &= ~np.isin(indexes,tuple(entities))
+            already_mask=default&(current==target)
+            writes=int(can_write.sum());replayed=int(already_mask.sum())
+            # Every cell that is neither already the requested default state
+            # nor a permitted baseline match is preserved as a conflict.
+            written+=writes;already+=replayed;conflicts+=width-writes-replayed
+            if writes:
+                current_codes[can_write]=target_index
+                changed=np.flatnonzero(can_write)+cursor
+                np.maximum.at(raised,changed%256,changed//256+1)
+            cursor+=width;remaining-=width
     if written:
         for sy,values in arrays.items():
             state=sections[sy]['block_states']
@@ -102,7 +123,7 @@ def apply(stage,exchange,output,closed_proof,world_override=None):
                 key=(patch['cx'],patch['cz'])
                 if key not in chunks:raise ValueError('Missing owned chunk')
                 entities=copy.deepcopy(chunks[key].get('block_entities'))
-                chunks[key],counts=mutate_chunk(chunks[key],patch)
+                chunks[key],counts=mutate_chunk(chunks[key],patch,copy_chunk=False)
                 if chunks[key].get('block_entities')!=entities:raise ValueError('Block entities changed')
                 expected[key]=chunk_payload(chunks[key]);report['patches'].append({'patch':identity,'chunk':list(key),**counts})
             prepared=output/'prepared'/name

@@ -25,6 +25,37 @@ def block_volume(tag):
     return v
 
 
+def assert_same_blocks(first,second,err_msg=''):
+    """Compare 1,024-height chunks without materializing object volumes.
+
+    ``block_volume`` is useful for diagnostics, but creating two 262,144-cell
+    Python-string arrays per chunk dominated large closed-stage proofs.  This
+    preserves its state-name semantics section by section and only expands a
+    4,096-cell section when palette encodings differ.
+    """
+    def states(tag):
+        result={}
+        for section in tag['sections']:
+            sy=int(section['Y'])
+            if not -4<=sy<60 or 'block_states' not in section:continue
+            state=section['block_states'];names=tuple(str(p['Name']) for p in state['palette'])
+            values=np.zeros(4096,np.int16) if len(names)==1 else np.asarray(
+                unpack(state['data'],max(4,(len(names)-1).bit_length()),4096),np.int16)
+            result[sy]=(names,values)
+        return result
+    left,right=states(first),states(second)
+    air=(('minecraft:air',),np.zeros(4096,np.int16))
+    for sy in range(-4,60):
+        left_names,left_values=left.get(sy,air);right_names,right_values=right.get(sy,air)
+        if left_names==right_names:
+            np.testing.assert_array_equal(left_values,right_values,err_msg=f'{err_msg}, section {sy}')
+        else:
+            np.testing.assert_array_equal(np.asarray(left_names,object)[left_values],
+                                          np.asarray(right_names,object)[right_values],
+                                          err_msg=f'{err_msg}, section {sy}')
+    return 262144
+
+
 def check(work):
     work.mkdir(parents=True,exist_ok=False)
     # Closed fixture only; the installed save is never copied while active.

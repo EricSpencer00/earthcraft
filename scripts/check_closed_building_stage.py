@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from apply_building_stage_closed import mutate_chunk
-from check_live_import import block_volume
+from check_live_import import assert_same_blocks
 from city_save_update import read_region
 from live_city import atomic, sha, validate
 
@@ -40,11 +40,14 @@ def check(stage,native,output):
         original=original_regions[region].get((patch['cx'],patch['cz']))
         persisted=persisted_regions[region].get((patch['cx'],patch['cz']))
         if original is None or persisted is None:raise ValueError('Missing staged chunk in source or native save')
-        closed,counts=mutate_chunk(original,patch)
+        # The immutable source is checked again from disk below; this
+        # disposable verifier does not need a second in-memory copy of a
+        # 1,024-block-tall chunk before it passes it to the closed writer.
+        closed,counts=mutate_chunk(original,patch,copy_chunk=False)
         if counts['written']!=item['cells'] or counts['conflicts'] or counts['already_target']:
             raise ValueError('Closed writer does not exactly admit immutable baseline')
-        np.testing.assert_array_equal(block_volume(persisted),block_volume(closed),
-                                      err_msg=f"Native/closed block mismatch at {patch['cx']},{patch['cz']}")
+        assert_same_blocks(persisted,closed,
+                           err_msg=f"Native/closed block mismatch at {patch['cx']},{patch['cz']}")
         if persisted.get('block_entities')!=closed.get('block_entities'):raise ValueError('Native/closed block entity mismatch')
         compared+=262144;records.append({'patch':item['patch'],'chunk':item['chunk'],'cells':item['cells']})
     for name,value in expected_regions.items():

@@ -22,8 +22,8 @@ def await_condition(process,predicate,seconds,label):
         time.sleep(.1)
 
 
-def check(work):
-    work=Path(work).resolve();stage=ROOT/'runs/building-delta-district-001'
+def check(work,stage=ROOT/'runs/building-delta-district-001'):
+    work=Path(work).resolve();stage=Path(stage).resolve()
     manifest=json.loads((stage/'manifest.json').read_text());records=manifest['patches']
     source=Path(manifest['source_world']);decoded={}
     for record in records:
@@ -31,8 +31,23 @@ def check(work):
         if sha(file)!=record['patch']:raise ValueError('Changed staged patch')
         p=json.loads(gzip.decompress(file.read_bytes()))
         decoded[(p['cx'],p['cz'])]=p
+    if not decoded:raise ValueError('Stage has no building delta patches')
+    source_regions={p.name:sha(p) for p in (source/'region').glob('r.*.*.mca')}
+    # Keep the deliberately-mutated CAS probe outside the staged delta.  The
+    # native checker still proves player edits and block entities survive, but
+    # the independent closed-writer comparison can then compare every staged
+    # chunk byte-for-byte without needing exceptions for test fixtures.
+    unpatched_owned=[]
+    for region in sorted((source/'region').glob('r.*.*.mca')):
+        unpatched_owned.extend(sorted(key for key in read_region(region) if key not in decoded))
+    if not unpatched_owned:raise ValueError('Stage leaves no owned unpatched chunk for CAS probe')
+    probe_chunk=unpatched_owned[0]
     if work.exists():raise FileExistsError(work)
-    work.mkdir(parents=True);shutil.copytree(source,work/'world')
+    work.mkdir(parents=True)
+    # External volumes can contain AppleDouble sidecars (``._*``).  They are
+    # Finder metadata, not datapack content; copying them makes Fabric attempt
+    # to parse names such as ``._overworld.json`` as a registry definition.
+    shutil.copytree(source,work/'world',ignore=shutil.ignore_patterns('._*','.DS_Store'))
     for folder in ('mods','config','exchange/inbox','exchange/receipts','exchange/archive'):
         (work/folder).mkdir(parents=True)
     mod=ROOT/'vendor/live/earthcraft-live-0.1.0.jar'
@@ -41,17 +56,17 @@ def check(work):
     shutil.copy2(ROOT/'vendor/minecraft-server-1.21.10.jar',work/'server.jar')
     (work/'eula.txt').write_text('eula=true\n')
     (work/'server.properties').write_text('server-ip=127.0.0.1\nserver-port=25586\nlevel-name=world\nonline-mode=true\nmax-players=1\nview-distance=2\nsimulation-distance=2\n')
-    protected=sorted({'0,0',*(f'{x},{z}' for x,z in decoded)})
+    protected=sorted({f'{probe_chunk[0]},{probe_chunk[1]}',*(f'{x},{z}' for x,z in decoded)})
     (work/'config/earthcraft-live.json').write_text(json.dumps({'world':str(work/'world'),
         'exchange':str(work/'exchange'),'frame':manifest['frame'],'protected_chunks':protected}))
     (work/'verification.json').write_text(json.dumps({'passed':False,'reason':'Native verification in progress'}))
     frame=manifest['frame'];index=(900+64)*256+2*16+2
-    probe=dict(version=1,frame=frame,cx=0,cz=0,mode='building_delta',
+    probe_x,probe_z=probe_chunk[0]*16+2,probe_chunk[1]*16+2
+    probe=dict(version=1,frame=frame,cx=probe_chunk[0],cz=probe_chunk[1],mode='building_delta',
         palette=['minecraft:gray_concrete','minecraft:bricks','minecraft:air','minecraft:stone'],
         runs=[[index,2,0,1],[index+2,2,2,3]],cells=4)
-    unowned=dict(version=1,frame=frame,cx=100,cz=100,mode='building_delta',
+    unowned=dict(version=1,frame=frame,cx=probe_chunk[0]+400,cz=probe_chunk[1]+400,mode='building_delta',
                  palette=['minecraft:air','minecraft:stone'],runs=[[index,1,0,1]],cells=1)
-    source_regions={p.name:sha(p) for p in (source/'region').glob('r.*.*.mca')}
     runs=[];all_results=[];compared=0
     for cycle in (1,2):
         start=time.monotonic();logpath=work/f'run-{cycle}.log';log=logpath.open('w')
@@ -64,7 +79,7 @@ def check(work):
             if 'building_delta' not in status.get('modes',[]):raise ValueError('Missing runtime capability')
             def command(value):process.stdin.write(value+'\n');process.stdin.flush()
             if cycle==1:
-                command('gamerule randomTickSpeed 0\nforceload add 0 0 15 15\nsetblock 2 900 2 minecraft:gray_concrete\nsetblock 3 900 2 minecraft:diamond_block\nsetblock 4 900 2 minecraft:air\nsetblock 5 900 2 minecraft:chest{LootTable:"minecraft:chests/simple_dungeon"}\nsay EARTHCRAFT_PROBE_SETUP')
+                command(f'gamerule randomTickSpeed 0\nforceload add {probe_chunk[0]*16} {probe_chunk[1]*16} {probe_chunk[0]*16+15} {probe_chunk[1]*16+15}\nsetblock {probe_x} 900 {probe_z} minecraft:gray_concrete\nsetblock {probe_x+1} 900 {probe_z} minecraft:diamond_block\nsetblock {probe_x+2} 900 {probe_z} minecraft:air\nsetblock {probe_x+3} 900 {probe_z} minecraft:chest{{LootTable:"minecraft:chests/simple_dungeon"}}\nsay EARTHCRAFT_PROBE_SETUP')
                 await_condition(process,lambda:'EARTHCRAFT_PROBE_SETUP' in logpath.read_text(),15,'probe setup')
             probe_id=publish(work/'exchange',{**probe,'provenance':{'test_cycle':cycle}})
             unowned_id=publish(work/'exchange',{**unowned,'provenance':{'test_cycle':cycle}})
@@ -105,9 +120,9 @@ def check(work):
                     for begin,count,old,target in p['runs']:
                         if not (expected[begin:begin+count]==p['palette'][old]).all():raise ValueError('Patch expectation differs from original')
                         expected[begin:begin+count]=p['palette'][target]
-                if key==(0,0):
+                if key==probe_chunk:
                     expected[index:index+4]=['minecraft:bricks','minecraft:diamond_block','minecraft:stone','minecraft:chest']
-                    entities=[b for b in saved[key]['block_entities'] if (int(b['x']),int(b['y']),int(b['z']))==(5,900,2)]
+                    entities=[b for b in saved[key]['block_entities'] if (int(b['x']),int(b['y']),int(b['z']))==(probe_x+3,900,probe_z)]
                     if len(entities)!=1 or str(entities[0]['LootTable'])!='minecraft:chests/simple_dungeon':raise ValueError('Chest data changed')
                 np.testing.assert_array_equal(block_volume(saved[key]),expected,err_msg=f'cycle {cycle}, chunk {key}')
                 cycle_cells+=len(expected)
@@ -126,5 +141,6 @@ def check(work):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('work',type=Path);a=p.parse_args()
-    print(json.dumps(check(a.work),indent=2))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('work',type=Path)
+    p.add_argument('--stage',type=Path,default=ROOT/'runs/building-delta-district-001');a=p.parse_args()
+    print(json.dumps(check(a.work,a.stage),indent=2))
