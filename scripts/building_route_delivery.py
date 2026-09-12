@@ -200,23 +200,28 @@ def run(route, stage_root, exchange, report_root, checkpoint, route_label, first
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     completed = []
     for tile in tiles:
-        wait_for_headroom(checkpoint)
-        _write_checkpoint(checkpoint, {'state': 'auditing', 'tile': tile, 'completed': completed})
-        base_stage = stage_root / tile
-        stage, baseline = select_stage(base_stage, exchange)
-        if baseline.get('ready_for_building_delta') is not True:
-            raise ValueError(f'Filtered stage did not become live-base-ready: {stage}')
-        _write_checkpoint(checkpoint, {'state': 'proving', 'tile': tile, 'stage': str(stage),
-                                       'completed': completed})
-        native, closed = ensure_proofs(stage, route_label, report_root)
-        _write_checkpoint(checkpoint, {'state': 'registering', 'tile': tile, 'stage': str(stage),
-                                       'native_proof': str(native), 'closed_proof': str(closed),
-                                       'completed': completed})
-        _request_for_stage(stage, exchange, native, closed)
-        result = await_publication(exchange, stage)
-        completed.append({'tile': tile, 'stage': str(stage), 'patches': result['total'],
-                          'written': result['written'], 'conflicts_preserved': result['conflicts_preserved']})
-        _write_checkpoint(checkpoint, {'state': 'delivered', 'tile': tile, 'completed': completed})
+        try:
+            wait_for_headroom(checkpoint)
+            _write_checkpoint(checkpoint, {'state': 'auditing', 'tile': tile, 'completed': completed})
+            base_stage = stage_root / tile
+            stage, baseline = select_stage(base_stage, exchange)
+            if baseline.get('ready_for_building_delta') is not True:
+                raise ValueError(f'Filtered stage did not become live-base-ready: {stage}')
+            _write_checkpoint(checkpoint, {'state': 'proving', 'tile': tile, 'stage': str(stage),
+                                           'completed': completed})
+            native, closed = ensure_proofs(stage, route_label, report_root)
+            _write_checkpoint(checkpoint, {'state': 'registering', 'tile': tile, 'stage': str(stage),
+                                           'native_proof': str(native), 'closed_proof': str(closed),
+                                           'completed': completed})
+            _request_for_stage(stage, exchange, native, closed)
+            result = await_publication(exchange, stage)
+            completed.append({'tile': tile, 'stage': str(stage), 'patches': result['total'],
+                              'written': result['written'], 'conflicts_preserved': result['conflicts_preserved']})
+            _write_checkpoint(checkpoint, {'state': 'delivered', 'tile': tile, 'completed': completed})
+        except BaseException as exc:
+            _write_checkpoint(checkpoint, {'state': 'requires_attention', 'tile': tile,
+                                           'completed': completed, 'error': str(exc)})
+            raise
     final = {'state': 'complete', 'completed': completed}
     _write_checkpoint(checkpoint, final)
     return final
