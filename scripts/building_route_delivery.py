@@ -181,9 +181,9 @@ def await_publication(exchange, stage):
         if record.exists():
             result = _read(record)
             state = result.get('state')
-            if state == 'complete' and result.get('conflicts_preserved', 0) == 0:
+            if state in {'complete', 'complete_with_conflicts'}:
                 return result
-            if state in {'complete_with_conflicts', 'receipt_requires_attention', 'rejected'}:
+            if state in {'receipt_requires_attention', 'rejected'}:
                 raise ValueError(f'Publisher stopped safely for {stage.name}: {state}')
         time.sleep(2)
 
@@ -234,9 +234,13 @@ def run(route, stage_root, exchange, report_root, checkpoint, route_label, first
                                            'completed': completed})
             _request_for_stage(stage, exchange, native, closed)
             result = await_publication(exchange, stage)
+            conflict_count = result.get('conflicts_preserved', 0)
             completed.append({'tile': tile, 'stage': str(stage), 'patches': result['total'],
-                              'written': result['written'], 'conflicts_preserved': result['conflicts_preserved']})
-            _write_checkpoint(checkpoint, {'state': 'delivered', 'tile': tile, 'completed': completed})
+                              'written': result['written'], 'conflicts_preserved': conflict_count,
+                              'publication_state': result['state']})
+            _write_checkpoint(checkpoint, {'state': ('delivered_with_conflicts_preserved' if conflict_count
+                                                      else 'delivered'),
+                                           'tile': tile, 'completed': completed})
         except BaseException as exc:
             _write_checkpoint(checkpoint, {'state': 'requires_attention', 'tile': tile,
                                            'completed': completed, 'error': str(exc)})

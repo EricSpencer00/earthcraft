@@ -1,11 +1,13 @@
+import json
 import unittest
+from unittest.mock import patch
 
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from building_route_delivery import _closed_ok, _fixture, _native_ok, route_tiles
+from building_route_delivery import _closed_ok, _fixture, _native_ok, await_publication, route_tiles
 
 
 class BuildingRouteDeliveryTests(unittest.TestCase):
@@ -32,6 +34,17 @@ class BuildingRouteDeliveryTests(unittest.TestCase):
 
     def test_disposable_native_fixture_uses_local_apfs_temp(self):
         self.assertEqual(_fixture('proof').parent, Path('/private/tmp'))
+
+    def test_completed_conflicted_publication_is_terminal_and_preserved(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder); (root / 'building-publications').mkdir()
+            stage = root / 'stage'; stage.mkdir(); (stage / 'manifest.json').write_text('{}')
+            import building_route_delivery
+            with patch.object(building_route_delivery, 'sha', return_value='a' * 64):
+                (root / 'building-publications' / ('a' * 64 + '.json')).write_text(json.dumps({
+                    'state': 'complete_with_conflicts', 'conflicts_preserved': 1}))
+                result = await_publication(root, stage)
+            self.assertEqual(result['conflicts_preserved'], 1)
 
 
 if __name__ == '__main__':
