@@ -3,6 +3,12 @@ name: Run Chicago generation on the LaCie worker
 on:
   workflow_dispatch:
     inputs:
+      plan_root:
+        description: Absolute path to the existing resumable run plan on the self-hosted runner
+        required: true
+      catalog:
+        description: Absolute path to the frozen source catalog on the self-hosted runner
+        required: true
       workers:
         description: Number of deterministic worker processes
         required: false
@@ -29,7 +35,9 @@ jobs:
     timeout-minutes: 1440
     env:
       EARTHCRAFT_BULK_ROOT: /Volumes/LaCie/Earthcraft
-      PYTHONPATH: scripts
+      EARTHCRAFT_PROGRAMMATIC_ONLY: "1"
+      EARTHCRAFT_LLM_INFERENCE: disabled
+      PYTHONPATH: ${{ github.workspace }}/scripts
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -43,6 +51,8 @@ jobs:
           test -f "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-ways-v1.sqlite"
           test -d "$EARTHCRAFT_BULK_ROOT/chicago/city-tiles-001"
           test "$(df -P "$EARTHCRAFT_BULK_ROOT" | tail -1 | awk '{print $5}')" != "100%"
+          test -f "${{ inputs.plan_root }}/jobs.sqlite"
+          test -f "${{ inputs.catalog }}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,8 +67,8 @@ jobs:
       - name: Run deterministic Chicago stages
         run: |
           python scripts/chicago_worker.py \
-            --plan runs/chicago-adaptation-city-001 \
-            --catalog runs/chicago-source-index-003/city-sources.json \
+            --plan "${{ inputs.plan_root }}" \
+            --catalog "${{ inputs.catalog }}" \
             --output "$EARTHCRAFT_BULK_ROOT/chicago/city-tiles-001" \
             --bulk "$EARTHCRAFT_BULK_ROOT/chicago/lidar-2022" \
             --source-cache "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-source-supertiles-v1" \
@@ -74,5 +84,5 @@ jobs:
           name: chicago-generation-evidence-${{ github.run_id }}
           if-no-files-found: warn
           path: |
-            runs/chicago-adaptation-city-001/*.json
-            runs/chicago-adaptation-city-001/*.log
+            ${{ inputs.plan_root }}/*.json
+            ${{ inputs.plan_root }}/*.log
