@@ -137,6 +137,7 @@ def main():
         signal.signal(signal.SIGINT, stop)
         publisher = publisher_log = workers = workers_log = None
         external_publisher = False
+        worker_queue_idle = False
         try:
             while not stopping:
                 try:
@@ -167,9 +168,12 @@ def main():
                                 env, args.output, args.bulk_root,
                                 PLAN / 'worker-supervisor.log')
                             log(log_handle, f'started worker pool pid={workers.pid}; pending={remaining}')
+                            worker_queue_idle = False
                         else:
                             workers = workers_log = None
-                            log(log_handle, 'worker queue is complete; supervisor remains alive for new work')
+                            if not worker_queue_idle:
+                                log(log_handle, 'worker queue is complete; supervisor remains alive for new work')
+                                worker_queue_idle = True
                 except Exception as error:
                     log(log_handle, f'launch check failed: {type(error).__name__}: {error}')
                 time.sleep(args.poll_seconds)
