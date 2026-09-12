@@ -231,6 +231,10 @@ def feed(exchange,journal,once=False,priority_manifest=None):
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     binding=json.loads((exchange/'binding.json').read_text());protected=set(binding['protected_chunks'])
     frame=binding['frame'];seen=set();checked={};processed=set();cache={};complete_regions={};grounds={}
+    # Kept inside the single producer loop.  It memoizes only immutable
+    # request validation; every actual patch still passes through the normal
+    # content-addressed inbox and importer compare-and-set checks.
+    building_requests={}
     priority,priority_record=priority_ranks(priority_manifest,frame)
     state=exchange/'published.json'
     if state.exists():
@@ -255,6 +259,11 @@ def feed(exchange,journal,once=False,priority_manifest=None):
         archive_bytes+=archive_receipted(exchange)
         if archive_bytes>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
         room=128-len(list((exchange/'inbox').glob('*.gz')))
+        # Detail is admitted only from proof-bound requests and takes at most
+        # 32 slots; the rest remains available for the northbound base stream.
+        from building_delivery import service_pending_requests
+        detail_published=service_pending_requests(exchange,binding,room,building_requests)
+        room-=detail_published
         rows=completed_geometry_rows(journal)
         rows.sort(key=lambda row:(0,priority[row[0]]) if row[0] in priority else (1,row[3],row[0]))
         published=0
@@ -315,9 +324,10 @@ def feed(exchange,journal,once=False,priority_manifest=None):
                     complete_regions[region_key]=h;save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)
-        if published:
+        if published or detail_published:
             save_state()
-            print(json.dumps({'queued_new_chunks':published,'total_published':len(seen),'time':time.time()}),flush=True)
+            print(json.dumps({'queued_new_chunks':published,'queued_building_deltas':detail_published,
+                              'total_published':len(seen),'time':time.time()}),flush=True)
         if once:
             lock.close();return
         time.sleep(PUBLISH_POLL_SECONDS)
