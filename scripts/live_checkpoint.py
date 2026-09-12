@@ -31,7 +31,7 @@ def hold(exchange):
 def checkpoint(exchange):
     world=ROOT/'runtime/traversal/saves/Earthcraft'
     mod=ROOT/'vendor/live/earthcraft-live-0.1.0.jar'
-    tested=ROOT/'runs/live-import-server-006'
+    tested=ROOT/'runs/live-import-server-007-fast'
     if not json.loads((tested/'verification.json').read_text())['passed'] or sha(mod)!=sha(tested/'mods'/mod.name):raise ValueError('Exact binary verification required')
     with (world/'session.lock').open('r+b') as lock:
         fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

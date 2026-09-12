@@ -133,6 +133,33 @@ class ChicagoTileTests(unittest.TestCase):
             self.assertEqual(journal.requeue_failed(('sources',)),0)
             journal.close()
 
+    def test_locked_owner_restart_requeues_its_abandoned_leases_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal=Journal(Path(folder)/'jobs.sqlite',fixture_plan())
+            abandoned=journal.claim('sources','restarted-owner',now=1)
+            other=journal.claim('sources','other-owner',now=1)
+            self.assertEqual(journal.requeue_owner_leases('restarted-owner'),1)
+            retry=journal.claim('sources','restarted-owner',now=2)
+            self.assertEqual(retry['tile'],abandoned['tile'])
+            state=journal.db.execute('SELECT state FROM jobs WHERE tile=? AND stage=0',(other['tile'],)).fetchone()[0]
+            self.assertEqual(state,'running')
+            journal.close()
+
+    def test_deferred_job_cools_down_while_worker_steals_other_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal=Journal(Path(folder)/'jobs.sqlite',fixture_plan())
+            delayed=journal.claim('sources','worker-a',now=1)
+            journal.defer(delayed,5,'shared source still building',now=1)
+            self.assertIsNone(journal.claim_exact('sources',delayed['tile'],'worker-b',now=5))
+            other=journal.claim('sources','worker-b',now=2)
+            self.assertNotEqual(other['tile'],delayed['tile'])
+            retry=journal.claim_exact('sources',delayed['tile'],'worker-c',now=6)
+            self.assertEqual(retry['tile'],delayed['tile'])
+            row=journal.db.execute('SELECT deferrals,defer_reason FROM jobs WHERE tile=? AND stage=0',
+                                   (delayed['tile'],)).fetchone()
+            self.assertEqual((row['deferrals'],row['defer_reason']),(1,'shared source still building'))
+            journal.close()
+
     def test_targeted_retry_leaves_other_failed_tiles_fenced(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); plan=fixture_plan(); journal=Journal(root/'jobs.sqlite',plan)

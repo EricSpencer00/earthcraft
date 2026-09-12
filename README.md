@@ -24,7 +24,25 @@ The whole-Earth direction is sparse and on demand, not a claim that every
 square metre has already been generated. See
 [docs/GLOBAL_GENERATION.md](docs/GLOBAL_GENERATION.md) for the scrape stages,
 parallel tile workers, precise-surface/repeated-substrate split, and the
-privacy-safe progress contract behind the dashboard.
+privacy-safe progress contract behind the dashboard. The deterministic page
+addressing, local projections, seam ownership, and navigation plan are in
+[docs/GLOBAL_PROJECTION_ATLAS.md](docs/GLOBAL_PROJECTION_ATLAS.md).
+Chicago's two-speed base/refinement pipeline, shared 1,024 m source cache, and
+measured local throughput are in
+[docs/FAST_GENERATION.md](docs/FAST_GENERATION.md).
+
+For unattended Chicago generation on the external data volume, use the
+supervisor in [scripts/earthcraft_supervisor.py](scripts/earthcraft_supervisor.py).
+It refuses to run without `/Volumes/LaCie/Earthcraft`, keeps the deterministic
+worker and live-import publisher alive, and resumes leased jobs after a child
+restart. A manually dispatched self-hosted runner workflow is in
+`.github/workflows/chicago-generation.yml`; it requires a runner labelled
+`earthcraft-lacie` because GitHub-hosted runners cannot see the LaCie volume.
+
+The next visual-quality lane is documented in
+[docs/CV_BUILDING_POLISH.md](docs/CV_BUILDING_POLISH.md). It uses registered
+imagery, LiDAR, and classical computer vision with bounded evidence masks; it
+does not use an LLM to invent building geometry or façade detail.
 
 ## Why not just use Arnis?
 
@@ -76,10 +94,14 @@ geometry-only route.
 Code, tests, synthetic fixtures, configuration contracts, and notes about
 what has actually been measured belong here. Generated worlds, raw geographic
 downloads, source photographs, model weights, archives, run logs, and
-machine-local paths do not. The `.gitignore` is deliberately strict; please
-do not work around it by committing a convenient copy of a local dataset. A
-project screenshot can be included when it is clearly labeled; source
-photographs still belong in the source-specific, rights-reviewed workflow.
+machine-local paths do not belong in source history. The `.gitignore` is
+deliberately strict; please do not work around it by committing a convenient
+copy of a local dataset. When a user explicitly asks for a playable snapshot,
+the current Java save may be published as a separate GitHub release asset with
+its own provenance and checksum, without adding the world to ordinary source
+commits. A project screenshot can be included when it is clearly labeled;
+source photographs still belong in the source-specific, rights-reviewed
+workflow.
 
 Source and derived-data licenses are separate questions. Before adding a
 provider, read [docs/SOURCE_LOSSINESS.md](docs/SOURCE_LOSSINESS.md) and record

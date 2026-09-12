@@ -129,6 +129,8 @@ class Journal:
               state TEXT NOT NULL DEFAULT 'pending',token TEXT,owner TEXT,expires REAL,
               attempts INTEGER NOT NULL DEFAULT 0,evidence TEXT,evidence_sha256 TEXT,
               source_key TEXT NOT NULL DEFAULT '',route_rank INTEGER,route_label TEXT,
+              not_before REAL NOT NULL DEFAULT 0,deferrals INTEGER NOT NULL DEFAULT 0,
+              defer_reason TEXT,
               PRIMARY KEY(tile,stage));
         ''')
         # Older journals predate the locality scheduler.  This additive
@@ -141,8 +143,14 @@ class Journal:
             self.db.execute('ALTER TABLE jobs ADD COLUMN route_rank INTEGER')
         if 'route_label' not in columns:
             self.db.execute('ALTER TABLE jobs ADD COLUMN route_label TEXT')
+        if 'not_before' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN not_before REAL NOT NULL DEFAULT 0')
+        if 'deferrals' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0')
+        if 'defer_reason' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN defer_reason TEXT')
         fingerprint=digest(plan)
-        self.db.execute('BEGIN IMMEDIATE')
+        self._begin_immediate()
         try:
             existing=self.db.execute("SELECT value FROM meta WHERE key='plan'").fetchone()
             if existing and existing[0]!=fingerprint:raise ValueError('Plan changed; retain this journal and start a new revision')
@@ -159,12 +167,21 @@ class Journal:
 
     def close(self):self.db.close()
 
+    def _begin_immediate(self):
+        """Absorb short SQLite writer races during parallel worker startup."""
+        for attempt in range(40):
+            try:
+                self.db.execute('BEGIN IMMEDIATE');return
+            except sqlite3.OperationalError as error:
+                if 'locked' not in str(error).lower() or attempt==39:raise
+                time.sleep(min(.05*(attempt+1),.5))
+
     def claim(self,stage,owner,now=None,lease_seconds=300,source_locality_after=None):
         index=STAGES.index(stage);now=time.time() if now is None else now
         if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:raise ValueError('Invalid worker lease')
         if source_locality_after is not None and (not math.isfinite(source_locality_after) or source_locality_after<0):
             raise ValueError('Invalid source locality threshold')
-        self.db.execute('BEGIN IMMEDIATE')
+        self._begin_immediate()
         try:
             if stage=='sources' and source_locality_after is not None:
                 # Keep the already-near playable frontier first.  Once that
@@ -178,11 +195,12 @@ class Journal:
                              CASE WHEN j.priority<=? THEN 0 ELSE 1 END,
                              CASE WHEN j.priority<=? THEN j.priority ELSE j.source_key END,
                              CASE WHEN j.priority<=? THEN j.tile ELSE printf('%020.6f:%s',j.priority,j.tile) END'''
-                params=(index,now,source_locality_after,source_locality_after,source_locality_after)
+                params=(index,now,now,source_locality_after,source_locality_after,source_locality_after)
             else:
-                ordering='ORDER BY CASE WHEN route_rank IS NULL THEN 1 ELSE 0 END, route_rank, priority,tile'; params=(index,now)
+                ordering='ORDER BY CASE WHEN route_rank IS NULL THEN 1 ELSE 0 END, route_rank, priority,tile'; params=(index,now,now)
             row=self.db.execute('''SELECT * FROM jobs j WHERE stage=? AND
               (state='pending' OR (state='running' AND expires<=?)) AND
+              COALESCE(not_before,0)<=? AND
               NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')
               '''+ordering+''' LIMIT 1''',params).fetchone()
             result=None
@@ -192,7 +210,7 @@ class Journal:
                     if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
                         raise ValueError('Prior stage evidence changed; do not advance tile')
                 token=uuid.uuid4().hex
-                self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,attempts=attempts+1 WHERE tile=? AND stage=?",
+                self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?",
                     (token,owner,now+lease_seconds,row['tile'],index))
                 result={'tile':row['tile'],'stage':stage,'token':token}
             self.db.execute('COMMIT');return result
@@ -208,12 +226,13 @@ class Journal:
         index=STAGES.index(stage);now=time.time() if now is None else now;tile=str(tile)
         if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:
             raise ValueError('Invalid worker lease')
-        self.db.execute('BEGIN IMMEDIATE')
+        self._begin_immediate()
         try:
             row=self.db.execute('''SELECT * FROM jobs j WHERE tile=? AND stage=? AND
               (state='pending' OR (state='running' AND expires<=?)) AND
+              COALESCE(not_before,0)<=? AND
               NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')''',
-                (tile,index,now)).fetchone()
+                (tile,index,now,now)).fetchone()
             result=None
             if row:
                 for prior in self.db.execute('SELECT evidence,evidence_sha256 FROM jobs WHERE tile=? AND stage<?',(tile,index)):
@@ -221,7 +240,7 @@ class Journal:
                     if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
                         raise ValueError('Prior stage evidence changed; do not advance tile')
                 token=uuid.uuid4().hex
-                self.db.execute('UPDATE jobs SET state=\'running\',token=?,owner=?,expires=?,attempts=attempts+1 WHERE tile=? AND stage=?',
+                self.db.execute('UPDATE jobs SET state=\'running\',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?',
                     (token,owner,now+lease_seconds,tile,index))
                 result={'tile':tile,'stage':stage,'token':token}
             self.db.execute('COMMIT');return result
@@ -252,6 +271,18 @@ class Journal:
             (str(receipt.resolve()),hashlib.sha256(raw).hexdigest(),job['tile'],STAGES.index(job['stage']),job['token'])).rowcount
         if changed!=1:raise ValueError('Stale worker cannot fail another attempt')
 
+    def defer(self,job,delay_seconds,reason,now=None):
+        """Release a busy dependency without consuming a worker or recording failure."""
+        now=time.time() if now is None else now
+        if (not math.isfinite(now) or not math.isfinite(delay_seconds) or
+                not 0<delay_seconds<=300 or not reason or len(reason)>240):
+            raise ValueError('Invalid bounded work deferral')
+        changed=self.db.execute("""UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL,
+            not_before=?,deferrals=deferrals+1,defer_reason=?
+            WHERE tile=? AND stage=? AND token=? AND state='running'""",
+            (now+delay_seconds,reason,job['tile'],STAGES.index(job['stage']),job['token'])).rowcount
+        if changed!=1:raise ValueError('Stale worker cannot defer another attempt')
+
     def requeue_failed(self, stages=('sources','geometry'), tiles=None):
         """Return fenced failures to pending for an explicit retry run.
 
@@ -272,9 +303,16 @@ class Journal:
             tile_clause=f' AND tile IN ({tile_marks})'
             params.extend(tiles)
         changed=self.db.execute(
-            f"UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL "
+            f"UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL,not_before=0 "
             f"WHERE state='failed' AND stage IN ({marks}){tile_clause}", params).rowcount
         return changed
+
+    def requeue_owner_leases(self, owner):
+        """Recover leases from an earlier process with the same locked owner ID."""
+        if not owner:raise ValueError('Worker owner is required')
+        return self.db.execute(
+            "UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL,not_before=0 "
+            "WHERE state='running' AND owner=?",(owner,)).rowcount
 
     def prioritize_tiles(self,tiles,label,stages=('sources','geometry'),replace=True):
         """Route pending work through a named, auditable geographic corridor.
@@ -292,7 +330,7 @@ class Journal:
         unknown=set(tiles)-known
         if unknown:raise ValueError('Unknown route tiles: '+','.join(sorted(unknown)))
         marks=','.join('?' for _ in indexes)
-        self.db.execute('BEGIN IMMEDIATE')
+        self._begin_immediate()
         try:
             if replace:
                 self.db.execute(f"UPDATE jobs SET route_rank=NULL,route_label=NULL WHERE state='pending' AND stage IN ({marks})",indexes)

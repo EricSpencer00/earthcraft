@@ -13,6 +13,19 @@ import cook_city_cache as cache
 
 
 class CacheTests(unittest.TestCase):
+    def test_checkpoint_discards_only_one_uncommitted_write_ahead_block(self):
+        with tempfile.TemporaryDirectory() as folder:
+            partial=Path(folder)/'source.part'
+            confirmed=cache.HEADER+b'confirmed'
+            partial.write_bytes(confirmed)
+            state={'compressed_bytes':len(b'confirmed'),'sha256':cache.sha(partial)}
+            with partial.open('ab') as stream:stream.write(b'uncommitted')
+            self.assertEqual(cache.resume_checkpoint(partial,state),len(b'confirmed'))
+            self.assertEqual(partial.read_bytes(),confirmed)
+            partial.write_bytes(cache.HEADER+b'tampered')
+            with self.assertRaisesRegex(ValueError,'preserve'):
+                cache.resume_checkpoint(partial,state)
+
     def test_original_deflate_rewrapped_losslessly_and_cache_tamper_rejected(self):
         original=b'LASF'+bytes(range(256))*20000
         buffer=io.BytesIO()
@@ -35,6 +48,18 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(gzip.decompress(path.read_bytes()),original)
             self.assertEqual(path.read_bytes()[10:-8],payload[30+len(info.filename):30+len(info.filename)+info.compress_size])
             self.assertEqual(record['bytes'],len(original))
+            partial=root/'crash-window.part';ready=root/'crash-window.ready'
+            partial.write_bytes(path.read_bytes()[:-8]);ready.write_bytes(path.read_bytes())
+            self.assertEqual(cache.verify_ready(ready,partial,asset),(len(original),record['sha256']))
+            ready.write_bytes(partial.read_bytes()[:100]+path.read_bytes()[-8:])
+            self.assertEqual(cache.prepare_ready(ready,partial,asset),(len(original),record['sha256']))
+            self.assertEqual(ready.read_bytes(),path.read_bytes())
+            ready.write_bytes(partial.read_bytes()[:100])
+            self.assertEqual(cache.prepare_ready(ready,partial,asset),(len(original),record['sha256']))
+            self.assertEqual(ready.read_bytes(),path.read_bytes())
+            ready.write_bytes(b'tampered'+path.read_bytes()[-8:])
+            with self.assertRaisesRegex(ValueError,'preserve'):
+                cache.prepare_ready(ready,partial,asset)
             with patch.object(cache,'bulk_root',return_value=root):
                 self.assertEqual(cache.acquire(asset,{},root,reserve_bytes=0),(path,record))
             with path.open('ab') as stream:stream.write(b'changed')

@@ -10,14 +10,31 @@ import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from live_city import cached_region, encode_chunk, validate, publish, digest, allowed, feed, sha, archive_receipted
+from live_city import cached_region, encode_chunk, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
 from metric_world import packed
+from geometry_layers import TOPOLOGY_SUPPORT_DEPTH
 
 
 class LiveTests(unittest.TestCase):
     def patch(self):
         return dict(version=1,frame='fixture',cx=-2,cz=3,mode='new_chunk',
                     palette=['minecraft:stone'],runs=[[0,4,0]],cells=4)
+
+    def test_publication_prefers_verified_async_refinement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);base=root/'geometry-receipt.json';base.write_text('{}')
+            (root/'world').mkdir()
+            world=root/'world.refined';(world/'region').mkdir(parents=True)
+            (world/'earthcraft.json').write_text('{}');(world/'region/r.0.0.mca').write_bytes(b'refined')
+            record={'result':'pass','critical_path':False,'llm_used':False,
+                    'base_geometry_receipt_sha256':sha(base),'world':str(world.resolve()),
+                    'world_manifest_sha256':sha(world/'earthcraft.json'),
+                    'regions':{'r.0.0.mca':sha(world/'region/r.0.0.mca')}}
+            receipt=root/'lidar-refinement-receipt.json';receipt.write_text(json.dumps(record))
+            selected,selected_record,selected_receipt,selected_sha,lane=publication_world(base,sha(base),{})
+            self.assertEqual(selected,world);self.assertEqual(selected_record,record)
+            self.assertEqual(selected_receipt,receipt);self.assertEqual(selected_sha,sha(receipt))
+            self.assertEqual(lane,'asynchronous-lidar-refinement')
 
     def test_run_bounds(self):
         for runs in ([[0,0,0]], [[0,4,0],[3,2,0]], [[262143,2,0]], [[-1,4,0]], [[0,4,2]]):
@@ -53,6 +70,24 @@ class LiveTests(unittest.TestCase):
         tag['sections'][0]['block_states']['palette'][1]['Properties']=n.Compound({'axis':n.String('x')})
         with self.assertRaises(ValueError):encode_chunk(tag,'fixture',{})
 
+    def test_layered_encoding_omits_uniform_subsurface_and_keeps_buildings(self):
+        values=np.zeros(4096,int)
+        tag=n.Compound({'xPos':n.Int(0),'zPos':n.Int(0),'sections':n.List[n.Compound]([
+            n.Compound({'Y':n.Byte(y),'block_states':n.Compound({'palette':n.List[n.Compound]([
+                n.Compound({'Name':n.String('minecraft:stone')})])})}) for y in range(-4,5)
+        ]+[n.Compound({'Y':n.Byte(5),'block_states':n.Compound({'palette':n.List[n.Compound]([
+            n.Compound({'Name':n.String('minecraft:air')}),n.Compound({'Name':n.String('minecraft:bricks')})]),
+            'data':packed(np.eye(1,4096,0,dtype=int).reshape(-1),4)})})])})
+        ground=np.full((16,16),79,np.int32)
+        p=encode_chunk(tag,'fixture',{'llm_used':False},ground=ground)
+        self.assertEqual(p['cells'],16*16*TOPOLOGY_SUPPORT_DEPTH+1)
+        self.assertTrue(p['provenance']['full_subsurface_fill_omitted'])
+        retained=np.zeros(262144,bool)
+        for start,count,_ in p['runs']:retained[start:start+count]=True
+        self.assertFalse(retained[0])
+        self.assertTrue(retained[(79-TOPOLOGY_SUPPORT_DEPTH+1+64)*256])
+        self.assertTrue(retained[(80+64)*256])
+
     def test_publication_is_replayable_and_atomic(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'inbox').mkdir();(root/'receipts').mkdir()
@@ -74,6 +109,16 @@ class LiveTests(unittest.TestCase):
             self.assertEqual((root/'archive/done.json.gz').read_bytes(),b'done')
             self.assertEqual((root/'inbox/pending.json.gz').read_bytes(),b'pending')
             self.assertFalse((root/'archive/old.json.gz').exists())
+
+    def test_priority_manifest_is_bound_to_plan_and_keeps_explicit_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'route.json'
+            path.write_text(json.dumps({'plan_sha256':'plan','llm_used':False,'tiles':['north-1','north-2']}))
+            ranks,record=priority_ranks(path,'plan')
+            self.assertEqual(ranks,{'north-1':0,'north-2':1})
+            self.assertEqual(record['sha256'],sha(path))
+            changed=json.loads(path.read_text());changed['llm_used']=True;path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):priority_ranks(path,'plan')
 
     def test_region_cache_hits_without_changing_encoded_output_and_rejects_mutation(self):
         tag=n.Compound({'xPos':n.Int(0),'zPos':n.Int(0),'sections':n.List[n.Compound]([

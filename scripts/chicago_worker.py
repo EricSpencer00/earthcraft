@@ -24,16 +24,27 @@ from chicago_tiles import Journal, digest
 from cook_city_cache import acquire, sha, save_json
 from city_point_crop import PointCache, crop_sources
 from metric_source_crop import crop
+from metric_source_cache import SourceCacheBusy, source_from_cache
 from metric_sources import prepare
 from metric_world import build
 from verify_metric_world import verify
-from local_paths import bulk_path,bulk_root
+from local_paths import bulk_path
 from osm_json_to_kml import building_tag
 from building_layer import compile_layer
 
 ROOT=Path(__file__).resolve().parents[1]
 TRANSIENT_HTTP={408,425,429,500,502,503,504}
 NON_FATAL_SOURCE_ERRORS=('Missing acquired source coverage; no geometry fallback',)
+CONTROL_PLANE_RESERVE = 1 * 2**30
+BULK_OUTPUT_RESERVE = 101 * 2**30
+
+
+def check_storage_capacity(plan_dir, output):
+    """Protect the small local journal and the volume receiving tile bytes."""
+    if shutil.disk_usage(plan_dir).free < CONTROL_PLANE_RESERVE:
+        raise ValueError('Control-plane free-space reserve reached')
+    if shutil.disk_usage(output).free < BULK_OUTPUT_RESERVE:
+        raise ValueError('Bulk output free-space reserve reached')
 
 
 def point_crop_required(source):
@@ -77,18 +88,31 @@ def retry_transient(operation, label, attempts=3):
             time.sleep(delay)
 
 
-def source_for_tile(tile,frame,destination,parent=None,way_index=None):
+def source_for_tile(tile,frame,destination,parent=None,way_index=None,
+                    source_cache=None,anchor_west=None,anchor_north=None):
     expected={'crs':frame['crs'],**{k:tile[k] for k in ('west','north','size')}}
     manifest=destination/'sources.json'
     if manifest.is_file():
         existing=json.loads(manifest.read_text())
         if any(existing[k]!=v for k,v in expected.items()):raise ValueError('Cached metric grid changed')
         return expected
+    if destination.exists():
+        # Only a signed sources.json admits a source directory. Preserve an
+        # interrupted derived attempt under an explicit name, then rebuild it
+        # atomically from the shared cache instead of failing forever.
+        incomplete=destination.with_name(f'{destination.name}.incomplete-{os.getpid()}-{time.time_ns()}')
+        destination.rename(incomplete)
     if parent:
         original=json.loads((parent/'sources.json').read_text())
         col=tile['west']-original['west'];row=original['north']-tile['north']
         if original['crs']==frame['crs'] and min(col,row)>=0 and max(col+tile['size'],row+tile['size'])<=original['size']:
             crop(parent,destination,col,row,tile['size']);return expected
+    if source_cache is not None:
+        if anchor_west is None or anchor_north is None:
+            raise ValueError('Source cache requires the frozen plan lattice anchors')
+        source_from_cache(tile,frame,destination,source_cache,anchor_west,anchor_north,
+                          way_index=way_index)
+        return expected
     prepare(destination,tile['size'],grid=expected,way_index=way_index)
     return expected
 
@@ -111,14 +135,36 @@ def promote_styled_shell(observed,source,world,compile_fn=compile_layer,verify_f
                    'styled_world':str(world.resolve()),'resumed':False}
 
 
+def build_or_resume_staging(source,staging,point_source,world_frame,
+                            build_fn=build,verify_fn=verify):
+    """Verify surviving derived output, or preserve and rebuild it if partial."""
+    source,staging=Path(source),Path(staging)
+    archived=None
+    if staging.exists():
+        try:
+            return verify_fn(staging),archived
+        except (OSError,ValueError):
+            archived=staging.with_name(
+                f'{staging.name}.incomplete-{os.getpid()}-{time.time_ns()}')
+            staging.rename(archived)
+    build_fn(source,staging,point_source=point_source,world_frame=world_frame)
+    return verify_fn(staging),archived
+
+
 def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_points=False,assembly=None,way_index=None,
         point_cache_bytes=16*2**30,source_locality_after=200.0,retry_failed=False,retry_tiles=(),styled_buildings=False,
-        worker_id='local-chicago-worker'):
+        worker_id='local-chicago-worker',lidar_mode='deferred',source_cache=None):
     plan=json.loads((plan_dir/'plan.json').read_text());catalog=json.loads(catalog_path.read_text())
     if catalog['world_plan_sha256']!=digest(plan):raise ValueError('Source catalog does not match city plan')
     tiles={t['id']:t for t in plan['tiles']};jobs={j['tile']:j for j in catalog['jobs']}
     assets={a['id']:a for a in catalog['assets']};cached={}
     output.mkdir(parents=True,exist_ok=True)
+    if lidar_mode not in ('deferred','inline'):
+        raise ValueError('LiDAR mode must be deferred or inline')
+    if source_cache is None and source_parent is None:
+        source_cache=output.parent/'cache'/'metric-source-supertiles-v1'
+    anchor_west=min(tile['west'] for tile in tiles.values())
+    anchor_north=max(tile['north'] for tile in tiles.values())
     if not worker_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.' for char in worker_id):
         raise ValueError('Worker id must be a nonempty filesystem-safe label')
     if assembly and worker_id != 'local-chicago-worker':
@@ -135,13 +181,20 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
     source_order={tile: min((str(value) for value in jobs[tile]['source_tiles']), default='~')
                   for tile in jobs}
     journal=Journal(plan_dir/'jobs.sqlite',plan,source_order=source_order)
+    # Holding worker-<id>.lock proves no earlier process with this owner can
+    # still publish. Recover its abandoned leases immediately instead of
+    # displaying or waiting on a full lease timeout after an orderly restart.
+    recovered_leases=journal.requeue_owner_leases(worker_id)
+    if recovered_leases:print(f'RECOVERED PREVIOUS OWNER LEASES: {recovered_leases}',flush=True)
     if retry_failed or retry_tiles:
         # A targeted retry never revives unrelated historical validation
         # failures. Broad retry remains an explicit recovery tool only.
         retried=journal.requeue_failed(('sources','geometry'),tiles=retry_tiles or None)
         print(f'REQUEUED FAILED JOBS: {retried}',flush=True)
     processed=0;failures=0;geometry_failures=0
-    point_cache=PointCache(point_cache_bytes)
+    # The fast base lane never instantiates or fills the multi-gigabyte decoded
+    # point cache. Raw LiDAR is an explicit, independent refinement concern.
+    point_cache=PointCache(point_cache_bytes) if lidar_mode=='inline' else None
     if assembly:
         initialize(assembly,ROOT/'worlds/Earthcraft-Chicago-City-Staging-001',plan)
         # Include successful jobs from earlier runs, even on the other volume.
@@ -162,13 +215,14 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
         print(f"GEOMETRY {job['tile']}",flush=True)
         if not observed.exists():
             staging=root/'world.building'
-            if not staging.exists():
-                point_manifest = root/'points/manifest.json'
-                point_source = point_manifest.parent if point_manifest.exists() else None
-                build(root/'sources',staging,point_source=point_source,world_frame=plan['frame'])
+            point_manifest = root/'points/manifest.json'
+            point_source = point_manifest.parent if lidar_mode=='inline' and point_manifest.exists() else None
             # A complete staging directory can survive an interrupted read-back.
-            # It is promoted only after the same full checks; nothing overwritten.
-            observed_checks=verify(staging);staging.rename(observed)
+            # Partial derived output is preserved, rebuilt, and subjected to the
+            # same full checks before anything is promoted.
+            observed_checks,_=build_or_resume_staging(
+                root/'sources',staging,point_source,plan['frame'])
+            staging.rename(observed)
         else:
             observed_checks=verify(observed)
         style=None
@@ -181,6 +235,8 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
             regions={p.name:sha(p) for p in sorted((world/'region').glob('r.*.*.mca'))},
             world_manifest_sha256=sha(world/'earthcraft.json'),
             observed_world_manifest_sha256=sha(observed/'earthcraft.json'),styled_shell=style,
+            geometry_profile='raw-lidar-voxels' if lidar_mode=='inline' else 'measured-footprint-height-shells',
+            lidar_critical_path=lidar_mode=='inline',
             physical_accuracy_verified=False,appearance_complete=False,installed=False))
         journal.finish(job,path)
         if assembly:append_tile(assembly,world,tiles[job['tile']],plan)
@@ -193,9 +249,7 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                 'points_sha256':receipt['point_sha256']})
     try:
         while processed<limit and not stopping:
-            if shutil.disk_usage(ROOT).free<20*2**30:raise ValueError('Internal free-space reserve reached')
-            if release_points and (not bulk_root().exists() or shutil.disk_usage(output).free<101*2**30):
-                raise ValueError('Bulk drive unavailable or free-space reserve reached')
+            check_storage_capacity(plan_dir,output)
             job=journal.claim('geometry',worker_id,lease_seconds=3600)
             if job:
                 try:
@@ -230,10 +284,18 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
             tile=tiles[job['tile']];tile_out=output/tile['id'];tile_out.mkdir(exist_ok=True)
             print(f"SOURCE {tile['id']}",flush=True);started=time.monotonic()
             try:
-                grid=retry_transient(lambda: source_for_tile(tile,plan['frame'],tile_out/'sources',source_parent,way_index),
+                grid=retry_transient(lambda: source_for_tile(
+                    tile,plan['frame'],tile_out/'sources',source_parent,way_index,
+                    source_cache,anchor_west,anchor_north),
                                      f'source-grid {tile["id"]}')
                 point_dir=tile_out/'points'
-                if (point_dir/'manifest.json').is_file():
+                if lidar_mode=='deferred':
+                    point_skip_reason='Raw LiDAR deferred to the independent refinement lane'
+                    points={'grid':grid,'crop_point_count':0,
+                            'coverage_role':'Not acquired in base lane; Cook County measured footprint, ground and maximum height supply deterministic shells',
+                            'points_sha256':None,'point_cache':None,
+                            'point_acquisition_skipped':True}
+                elif (point_dir/'manifest.json').is_file():
                     points=json.loads((point_dir/'manifest.json').read_text())
                     if points['grid']!=grid or sha(point_dir/'points.npz')!=points['points_sha256']:
                         raise ValueError('Existing city point crop changed')
@@ -264,9 +326,18 @@ def run(plan_dir,catalog_path,output,limit,source_parent=None,bulk=None,release_
                     point_sha256=points['points_sha256'],source_ids=jobs[tile['id']]['source_tiles'],
                     point_acquisition_skipped=bool(points.get('point_acquisition_skipped',False)),
                     point_skip_reason=point_skip_reason,seconds=time.monotonic()-started,
+                    lidar_mode=lidar_mode,lidar_critical_path=lidar_mode=='inline',
                     coverage_role=points['coverage_role'],point_count=points['crop_point_count'],
                     point_cache=points.get('point_cache')))
                 journal.finish(job,receipt);failures=0
+            except SourceCacheBusy as error:
+                # Do not let several neighboring tiles serialize behind one
+                # missing shared source. The owner keeps building it; waiters
+                # release their leases and steal unrelated work immediately.
+                journal.defer(job,error.retry_after,str(error))
+                print(f"DEFERRED {tile['id']}: {error}",flush=True)
+                progress()
+                continue
             except Exception as error:
                 receipt=tile_out/'sources-failure.json'
                 save_json(receipt,dict(job,result='failed',error_type=type(error).__name__,error=str(error)))
@@ -328,16 +399,18 @@ def spawn_workers(args):
                 '--bulk',str(args.bulk),'--limit',str(budget),'--workers','1',
                 '--worker-id',f'parallel-{index+1}']
             if args.source_parent:command.extend(['--source-parent',str(args.source_parent)])
+            if args.source_cache:command.extend(['--source-cache',str(args.source_cache)])
             if args.way_index:command.extend(['--way-index',str(args.way_index)])
             if args.point_cache_gib is not None:command.extend(['--point-cache-gib',str(args.point_cache_gib)])
             command.extend(['--source-locality-after',str(args.source_locality_after)])
             if args.release_derived_points:command.append('--release-derived-points')
             if args.styled_buildings:command.append('--styled-buildings')
+            command.extend(['--lidar-mode',args.lidar_mode])
             # Requeue is a queue-wide mutation; perform it once before the
             # parallel workers start claiming jobs.
             if index==0 and args.retry_failed:command.append('--retry-failed')
             for tile in args.retry_tile:
-                if index==0:command.extend(['--retry-tile',tile])
+                if index==0:command.append(f'--retry-tile={tile}')
             children.append(subprocess.Popen(command))
         failed=None
         while children:
@@ -363,6 +436,8 @@ if __name__=='__main__':
     p.add_argument('--catalog',type=Path,default=ROOT/'runs/chicago-source-index-003/city-sources.json')
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--source-parent',type=Path)
+    p.add_argument('--source-cache',type=Path,
+                   help='Shared 1024 m source cache (default: <output-parent>/cache/metric-source-supertiles-v1)')
     p.add_argument('--bulk',type=Path,default=bulk_path('chicago','lidar-2022'))
     p.add_argument('--limit',type=int,default=1,help='Total bounded worker-loop budget; with --workers it is divided across workers')
     p.add_argument('--workers',type=int,default=1,help='Independent tile processes sharing the lease journal (default: 1)')
@@ -371,7 +446,9 @@ if __name__=='__main__':
     p.add_argument('--assembly',type=Path,help='Closed continuous city world on the bulk volume; never the installed save')
     p.add_argument('--way-index',type=Path,help='Verified read-only OSM spatial index for this exact source and city frame')
     p.add_argument('--point-cache-gib',type=float,default=16.0,
-                   help='Bounded decoded LAS-member cache in GiB (0 disables; default 16)')
+                   help='Inline-LiDAR compatibility cache in GiB; unused by the default fast lane')
+    p.add_argument('--lidar-mode',choices=('deferred','inline'),default='deferred',
+                   help='Default deferred keeps raw LiDAR off the base-generation critical path')
     p.add_argument('--source-locality-after',type=float,default=200.0,
                    help='Keep near tiles priority-ordered, then batch by shared LAS member (default 200)')
     p.add_argument('--retry-failed',action='store_true',
@@ -405,7 +482,8 @@ if __name__=='__main__':
                     raise ValueError('--source-locality-after must be between 0 and 1e9')
                 run(a.plan,a.catalog,a.output,a.limit,a.source_parent,a.bulk,a.release_derived_points,
                     a.assembly,index,int(a.point_cache_gib*2**30),a.source_locality_after,
-                    a.retry_failed,a.retry_tile,a.styled_buildings,a.worker_id)
+                    a.retry_failed,a.retry_tile,a.styled_buildings,a.worker_id,
+                    a.lidar_mode,a.source_cache)
             finally:
                 if index:index.close()
                 sys.stdout=sys.stdout.original;sys.stderr=sys.stderr.original

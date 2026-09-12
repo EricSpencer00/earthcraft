@@ -3,37 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Earthcraft · Global cell progress</title>
+  <title>Earthcraft · Chunk ledger</title>
   <link rel="stylesheet" href="./style.css">
-  <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js" defer></script>
-  <script src="./app.js?v=cell-globe-8" defer></script>
+  <script src="./app.js?v=chicago-atlas-5" defer></script>
 </head>
 <body>
   <header>
-    <a href="./" class="brand">earthcraft<span>GLOBAL CELL PROGRESS / 01</span></a>
+    <a href="./" class="brand">earthcraft<span>CHUNK LEDGER / 01</span></a>
     <div id="connection" role="status">Reading the latest progress…</div>
   </header>
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">EARTHCRAFT / WORLD PROGRESS</p>
-        <h1>The world, cell by cell.</h1>
-        <p>Each mark is a 256 metre generation cell. Open one to see its 256 Minecraft chunks and the stage each one has reached.</p>
+        <p class="eyebrow">EARTHCRAFT / CHICAGO EXTENT</p>
+        <h1>Chicago, built and playable.</h1>
+        <p>Playable shows exactly what Minecraft has accepted. Build pipeline shows work on disk. The two views never imply that generated tiles are already in the game.</p>
       </div>
-      <div class="scope-note"><span>World target</span><strong>Entire Earth</strong><small>Unmeasured cells stay unmarked.</small></div>
+      <div class="scope-note"><span>Current area</span><strong id="grid-size">Waiting</strong><small id="grid-count">No chunk atlas yet.</small></div>
     </section>
     <div class="toolbar">
       <div><strong id="phase">Reading progress…</strong><span id="updated"></span></div>
-      <div class="actions"><label>View <select id="layer"><option value="cells">Cells</option><option value="regions">Regions</option><option value="workstreams">Workstreams</option></select></label><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
+      <div class="actions"><label>View <select id="area"><option value="live">Playable in Minecraft now</option><option value="queue">Full Chicago build pipeline</option><option value="installed">Original installed footprint</option></select></label><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
     </div>
     <div id="warning" role="status" hidden></div>
     <div class="workspace">
       <section class="atlas">
-        <div class="maphead"><div><p class="eyebrow">256 METRE CELLS / 16 × 16 CHUNKS</p><h2>Global cell grid</h2></div><span class="north">N ↑</span></div>
-        <div class="mapwrap"><div id="map" role="img" aria-label="Interactive Earth globe showing materialized generation cells"></div><div id="workstream-list" class="globe-list" hidden></div><div class="mapnote" id="mapnote">Waiting for the first cell</div></div>
-        <div class="legend" aria-label="Cell status legend"><span><i class="sourced"></i>Source ready</span><span><i class="generated"></i>Generated</span><span><i class="verified"></i>Verified</span><span><i class="failed"></i>Failed</span></div>
-        <p class="caption">Queued cells stay in the ledger. Globe marks begin when a cell has evidence.</p>
-        <p id="cell" aria-live="polite">Move over the globe to inspect a cell.</p>
+        <div class="maphead"><div><p class="eyebrow" id="map-unit">16 × 16 BLOCK CHUNKS</p><h2 id="map-title">Playable in Minecraft now</h2></div><span id="map-updated" class="map-updated"></span></div>
+        <div class="mapwrap"><canvas id="map" role="img" aria-label="Chunk status map"></canvas><div class="mapnote" id="mapnote">Waiting for the first chunk atlas</div></div>
+        <div class="legend" aria-label="Map status legend"><span id="legend-outside"><i class="outside"></i><span id="legend-outside-label">Not playable yet</span></span><span id="legend-queued"><i class="nothing"></i>White · queued</span><span id="legend-source"><i class="source"></i>Gray · source data in</span><span id="legend-finished"><i class="finished"></i><span id="legend-finished-label">Green · playable now</span></span><span id="legend-installed"><i class="installed"></i>Amber · original install</span></div>
+        <p class="caption" id="map-caption">The Water Tower marks the coordinate origin. Green chunks are present in the running Minecraft world.</p>
+        <p id="cell" aria-live="polite">Move over the atlas to inspect a tile.</p>
+        <p id="map-summary" class="sr-only"></p>
       </section>
       <aside>
         <p class="eyebrow">CURRENT STATE</p>
@@ -41,15 +41,16 @@
           <div><dt>World status</dt><dd id="rollup">Pending</dd></div>
           <div><dt>Built tiles</dt><dd id="geometry">Pending</dd></div>
           <div><dt>Source tiles</dt><dd id="sources">Pending</dd></div>
-          <div><dt>Materialized cells</dt><dd id="cells">Pending</dd></div>
-          <div><dt>Addressed chunks</dt><dd id="chunks">Pending</dd></div>
+          <div><dt>Mapped cells</dt><dd id="chunk-count">Pending</dd></div>
+          <div><dt>World border</dt><dd id="border">Pending</dd></div>
+          <div><dt>Worker leases</dt><dd id="leases">Pending</dd></div>
         </dl>
         <p id="recovery" class="note"></p>
-        <p class="note">The globe uses the same cell ledger as generation. Surface data stays precise; the substrate below it can repeat.</p>
+        <p class="note">Playable coverage comes from exact in-game import receipts. Build progress is tracked separately.</p>
         <details><summary>Local activity</summary><pre id="log">No local run connected.</pre></details>
       </aside>
     </div>
   </main>
-  <footer>EARTHCRAFT / GLOBAL CELL PROGRESS<span id="footer-state">Awaiting first observation</span></footer>
+  <footer>EARTHCRAFT / CHUNK STATUS<span id="footer-state">Awaiting first observation</span></footer>
 </body>
 </html>

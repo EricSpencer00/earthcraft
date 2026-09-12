@@ -30,12 +30,30 @@ from batch_point_geometry import load_batch_points
 from world_templates import height_template
 from point_ground_materials import load as load_ground_materials
 from metric_frame import tile_layout
+from world_border import bounds_for_tiles, update_world_border
+from geometry_layers import TOPOLOGY_SUPPORT_DEPTH, geometry_layer_masks
 
 ROOT = Path(__file__).resolve().parents[1]
 PALETTE = ['air', 'bedrock', 'stone', 'dirt', 'grass_block', 'sand', 'water',
            'snow_block', 'gray_concrete', 'stone_bricks', 'bricks', 'sandstone', 'clay']
 PALETTE += [block for block in APPEARANCE_BLOCKS if block not in PALETTE]
 BLOCK = {name: i for i, name in enumerate(PALETTE)}
+OUTPUT_FREE_SPACE_RESERVE = 20 * 1024**3
+
+
+def output_volume(destination):
+    """Nearest existing ancestor whose free space backs a new destination."""
+    volume = Path(destination).parent
+    while not volume.exists() and volume != volume.parent:
+        volume = volume.parent
+    return volume
+
+
+def check_output_capacity(destination, reserve=OUTPUT_FREE_SPACE_RESERVE):
+    volume = output_volume(destination)
+    if shutil.disk_usage(volume).free < reserve:
+        raise ValueError(f'Preserve 20 GiB free-space reserve on output volume {volume}')
+    return volume
 
 
 def packed(values, bits):
@@ -87,11 +105,45 @@ def roof_shell_floor(tops, mask, ground):
     return np.maximum(ground + 1, np.minimum(tops, neighbors + 1))
 
 
+def select_spawn_cell(ground, footprint_union, surface, water_code, buildings=(), point_cells=None):
+    """Choose a deterministic, non-mutating tile preview spawn.
+
+    Fully occupied industrial/airport tiles may have no exterior raster cell.
+    In that case use the lowest measured surface top instead of failing the
+    geometry job; assembled and live worlds retain their own global spawn.
+    """
+    size = len(ground)
+    free = np.argwhere(~footprint_union & (surface != water_code))
+    target_cells = np.argwhere(footprint_union)
+    target = target_cells.mean(axis=0) if len(target_cells) else np.array([size/2,size/2])
+    viewing = free[(free[:,0]>=3)&(free[:,0]<size-3)&(free[:,1]>=3)&(free[:,1]<size-3)]
+    if point_cells is not None and len(point_cells):
+        occupied = np.zeros_like(footprint_union)
+        occupied[point_cells[:,2],point_cells[:,0]] = True
+        viewing = viewing[~occupied[viewing[:,0],viewing[:,1]]]
+    candidates = viewing if len(viewing) else free
+    distance = min(20.0,size/3)
+    if len(candidates):
+        z,x = min(candidates, key=lambda p:(abs(float(np.linalg.norm(p-target))-distance),int(p[0]),int(p[1])))
+        return int(z),int(x),int(ground[z,x]),target_cells
+
+    surface_top = np.asarray(ground,dtype=np.int32).copy()
+    for building in buildings:
+        mask = building['mask']
+        surface_top[mask] = np.maximum(surface_top[mask], int(building['high']))
+    if point_cells is not None and len(point_cells):
+        np.maximum.at(surface_top,(point_cells[:,2],point_cells[:,0]),point_cells[:,1])
+    lowest = np.argwhere(surface_top == surface_top.min())
+    z,x = min(lowest, key=lambda p:(abs(float(np.linalg.norm(p-target))-distance),int(p[0]),int(p[1])))
+    return int(z),int(x),int(surface_top[z,x]),target_cells
+
+
 def build(source, destination, surface_source=None, point_source=None, world_frame=None):
+    source = Path(source)
+    destination = Path(destination)
     if destination.exists():
         raise FileExistsError(destination)
-    if shutil.disk_usage(ROOT).free < 20*1024**3:
-        raise ValueError('Preserve 20 GiB free-space reserve')
+    check_output_capacity(destination)
     meta = json.loads((source/'sources.json').read_text())
     data = np.load(source/'rasters.npz')
     elevation, cover = data['elevation'], data['cover']
@@ -190,16 +242,22 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         # Validate vertical attribute units independently against USGS terrain.
         feet_to_m=1200/3937
         ground_m=attrs['Ground_Z']*feet_to_m
-        error=ground_m-float(np.median(elevation[mask]))
+        topology_ground_m=float(np.median(elevation[mask]))
+        error=ground_m-topology_ground_m
         county_ground_errors.append(error)
         height=attrs['Height']*feet_to_m
         if abs((attrs['Max_Point']-attrs['Ground_Z'])-attrs['Height'])>.05:
             raise ValueError('County height is inconsistent with its elevations')
-        low=math.floor(ground_m+offset);high=math.ceil(ground_m+offset+height)-1
+        # Topology and structures are independent layers. County Ground_Z and
+        # USGS terrain use separately documented vertical products and can
+        # disagree locally; anchor the shell to the shared topology while
+        # retaining the county's directly measured building height.
+        low=math.floor(topology_ground_m+offset);high=math.ceil(topology_ground_m+offset+height)-1
         inner=geom.buffer(-1)
         inside=rasterize([(inner,1)],out_shape=(size,size),transform=Affine.identity()).astype(bool) if not inner.is_empty else np.zeros_like(mask)
         county_buildings.append({'id':attrs['OBJECTID'],'mask':mask,'wall':mask & ~inside,
-            'low':low,'high':high,'block':BLOCK['stone_bricks'],'height':height})
+            'low':low,'high':high,'block':BLOCK['stone_bricks'],'height':height,
+            'county_ground_m':ground_m,'topology_ground_m':topology_ground_m})
         # Measured building footprint takes precedence over a coarse water class.
         surface[mask & (surface==BLOCK['water'])]=BLOCK['gray_concrete']
     osm_geometry = meta.get('building_source_kind')=='osm-explicit'
@@ -213,8 +271,6 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         raise ValueError('OSM geometry profile cannot silently mix county or scan geometry')
     if terrain_only and county_buildings:
         raise ValueError('Terrain-only metadata conflicts with supplied building geometry')
-    if not terrain_only and not osm_geometry and county['features'] and (not county_ground_errors or np.median(np.abs(county_ground_errors))>3):
-        raise ValueError('County ground elevations fail independent terrain/unit check')
     if not osm_geometry:buildings=county_buildings
     point_cells = point_report = None
     if point_source is not None:
@@ -274,20 +330,9 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     settings = d['WorldGenSettings']['dimensions']['minecraft:overworld']['generator']['settings']
     settings['layers'] = n.List[n.Compound]([n.Compound({'height':n.Int(1),'block':n.String('minecraft:air')})])
     settings['structure_overrides'] = n.List[n.String]([])
-    free = np.argwhere(~footprint_union & (surface != BLOCK['water']))
-    target_cells = np.argwhere(footprint_union)
-    target = target_cells.mean(axis=0) if len(target_cells) else np.array([size/2,size/2])
-    # Prefer an exterior viewing distance, not the closest doorway to tile centre.
-    # Keep a margin from the data edge and exclude observed elevated blocks.
-    viewing = free[(free[:,0]>=3)&(free[:,0]<size-3)&(free[:,1]>=3)&(free[:,1]<size-3)]
-    if point_cells is not None:
-        occupied = np.zeros_like(footprint_union)
-        occupied[point_cells[:,2],point_cells[:,0]] = True
-        viewing = viewing[~occupied[viewing[:,0],viewing[:,1]]]
-    candidates = viewing if len(viewing) else free
-    distance = min(20.0,size/3)
-    spawn_z, spawn_x = min(candidates, key=lambda p:(abs(float(np.linalg.norm(p-target))-distance),int(p[0]),int(p[1])))
-    spawn = [int(spawn_x)+.5,int(ground[spawn_z,spawn_x])+1,int(spawn_z)+.5]
+    spawn_z,spawn_x,spawn_top,target_cells = select_spawn_cell(
+        ground,footprint_union,surface,BLOCK['water'],buildings,point_cells)
+    spawn = [spawn_x+.5,spawn_top+1,spawn_z+.5]
     player = d['Player']
     # Face the observed structure from the safe terrain spawn, without moving blocks.
     yaw = 0.0
@@ -320,6 +365,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     d['DataPacks']=n.Compound({'Enabled':n.List[n.String](['vanilla','file/earthcraft_height']), 'Disabled':n.List[n.String]([])})
     d['ScheduledEvents']=n.List[n.Compound]([])
     level.save(destination/'level.dat')
+    update_world_border(destination, bounds_for_tiles([{'world_offset_xz':world_offset,'size_m':size}]))
     records = {}
     count = 0
     written_sections = 0
@@ -346,9 +392,12 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             if point_cells is not None:
                 local_points = point_cells[(point_cells[:,0]//16 == cx) & (point_cells[:,2]//16 == cz)]
             column_top = g.copy()
-            for building in local_buildings:
-                mask = building['mask'][zs,xs]
-                column_top[mask] = np.maximum(column_top[mask],building['high'])
+            # Point observations are the exclusive structure source in this
+            # branch below; county shells are not written alongside them.
+            if local_points is None:
+                for building in local_buildings:
+                    mask = building['mask'][zs,xs]
+                    column_top[mask] = np.maximum(column_top[mask],building['high'])
             if lidar_report is not None:
                 local_roof_mask = roof_mask[zs,xs]
                 local_roof_top = roof_top[zs,xs]
@@ -356,22 +405,23 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             if local_points is not None and len(local_points):
                 np.maximum.at(column_top,(local_points[:,2]%16,local_points[:,0]%16),local_points[:,1])
             # Empty space above the highest observed surface does not need a
-            # serialized section.  Beneath it remains an ordinary repeated
-            # substrate block, while the surface section stays exact.
-            chunk_height = max(16,math.ceil((int(column_top.max())-min_y+1)/16)*16)
-            if chunk_height > world_height:
+            # serialized section. Terrain is a compact, measured topology slab;
+            # structures remain sparse cells above the local ground.
+            chunk_bottom = max(min_y, math.floor((int(g.min())-TOPOLOGY_SUPPORT_DEPTH+1)/16)*16)
+            chunk_top = math.ceil((int(column_top.max())+1)/16)*16
+            chunk_height = max(16, chunk_top-chunk_bottom)
+            if chunk_top > min_y+world_height:
                 raise ValueError('Chunk surface exceeds declared world height')
-            tallest_chunk_height = max(tallest_chunk_height,chunk_height)
-            omitted_air_sections += world_height//16 - chunk_height//16
-            volume = np.zeros((chunk_height,16,16),np.uint8)
-            yy = np.arange(min_y,min_y+chunk_height)[:,None,None]
-            volume[:] = np.where(yy<=g, BLOCK['stone'],BLOCK['air'])
-            volume[0] = BLOCK['bedrock']
+            tallest_chunk_height = max(tallest_chunk_height,chunk_top-min_y)
+            volume = np.full((chunk_height,16,16), BLOCK['air'], np.uint8)
+            yy = np.arange(chunk_bottom,chunk_bottom+chunk_height)[:,None,None]
+            topology, _ = geometry_layer_masks(g, chunk_bottom, chunk_height)
+            volume[topology] = BLOCK['stone']
             zz,xx=np.mgrid[:16,:16]
-            volume[g-min_y,zz,xx] = surface[zs,xs]
-            volume[g-min_y-1,zz,xx] = BLOCK['dirt']
+            volume[g-chunk_bottom,zz,xx] = surface[zs,xs]
+            volume[g-chunk_bottom-1,zz,xx] = BLOCK['dirt']
             if local_points is not None:
-                volume[local_points[:,1]-min_y, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
+                volume[local_points[:,1]-chunk_bottom, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
             elif lidar_report is not None:
                 exposed = (roof_mask[zs,xs] & (yy >= roof_floor[zs,xs]) &
                            (yy <= roof_top[zs,xs]))
@@ -380,8 +430,8 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
                 for b in local_buildings:
                     mask,wall=b['mask'][zs,xs],b['wall'][zs,xs]
                     if mask.any():
-                        volume[b['low']-min_y:b['high']-min_y+1,wall]=b['block']
-                        volume[b['high']-min_y,mask]=b['block']
+                        volume[b['low']-chunk_bottom:b['high']-chunk_bottom+1,wall]=b['block']
+                        volume[b['high']-chunk_bottom,mask]=b['block']
             # Route appearance only onto occupied building cells; never fill gaps.
             structure = ((volume != BLOCK['air']) & (yy > g)) if osm_geometry else volume == BLOCK['stone_bricks']
             for layer in appearance:
@@ -404,14 +454,18 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             tag['isLightOn']=n.Byte(0)
             sections=[]
             for si in range(chunk_height//16):
-                values,inverse=palette_indices(volume[si*16:si*16+16])
+                section = volume[si*16:si*16+16]
+                if np.all(section == BLOCK['air']):
+                    continue
+                values,inverse=palette_indices(section)
                 states=n.Compound({'palette':n.List[n.Compound]([n.Compound({'Name':n.String('minecraft:'+PALETTE[v])}) for v in values])})
                 if len(values)>1:
                     states['data']=packed(inverse,max(4,(len(values)-1).bit_length()))
-                sections.append(n.Compound({'Y':n.Byte(si+min_y//16),'block_states':states,
+                sections.append(n.Compound({'Y':n.Byte(si+chunk_bottom//16),'block_states':states,
                     'biomes':n.Compound({'palette':n.List[n.String](['minecraft:plains'])})}))
             tag['sections']=n.List[n.Compound](sections)
             written_sections += len(sections)
+            omitted_air_sections += world_height//16 - len(sections)
             top = column_top-min_y+1
             heightmap=packed(top,(world_height).bit_length())
             tag['Heightmaps']=n.Compound({name:heightmap for name in ('WORLD_SURFACE','MOTION_BLOCKING','MOTION_BLOCKING_NO_LEAVES','OCEAN_FLOOR')})
@@ -422,7 +476,10 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     for (rx,rz),values in records.items():
         region_write(destination/'region'/f'r.{rx}.{rz}.mca',values)
     report={'status':'populated_not_game_verified','source':meta,'chunks':count,'spawn':spawn,
-        'storage_strategy':'Exact surface and admitted structures; repeated substrate below the surface; air sections above each chunk top omitted',
+        'storage_strategy':'Two-block topology support slab plus sparse admitted structures; all other subsurface and air cells omitted',
+        'geometry_layers':{'topology':'measured ground surface with deterministic support slab',
+            'topology_support_depth_blocks':TOPOLOGY_SUPPORT_DEPTH,
+            'buildings':'sparse occupied cells above local measured ground','atomic_chunk_output':True},
         'written_sections':written_sections,'omitted_air_sections':omitted_air_sections,
         'tallest_chunk_height':tallest_chunk_height,'declared_world_height':world_height,
         'world_offset_xz':world_offset,'world_frame':world_frame,
@@ -430,13 +487,14 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             'spawn_rotation':[yaw,0], 'coverage_edge':'Unscanned surroundings are void; use Human at spawn to return.',
         'dem_path':str((source/meta.get('elevation_raster','usgs-elevation.tif')).resolve()),
         'vertical_offset_m':offset,'dimension_min_y':min_y,'dimension_height':world_height,
-        'buildings':[{'county_objectid':b['id'],'height_m':b['height'],'base_y':b['low'],'roof_y':b['high']} for b in buildings],
+        'buildings':[{'county_objectid':b['id'],'height_m':b['height'],'base_y':b['low'],'roof_y':b['high'],
+            'county_ground_m':b.get('county_ground_m'),'topology_ground_m':b.get('topology_ground_m')} for b in buildings],
         'skipped_county_buildings':county_skipped,'osm_incomplete_extrusions_replaced':len(skipped),
         'county_ground_vs_usgs_median_abs_error_m':float(np.median(np.abs(county_ground_errors))) if county_ground_errors else None,
-        'county_height_units':'not used' if terrain_only else 'US survey feet; numeric ground elevation cross-check against USGS passed; attribute unit metadata not explicit',
+        'county_height_units':'not used' if terrain_only else 'US survey feet; measured Height retained; shell base anchored to the independent USGS topology surface',
         'inference_used':False,'user_build_commands_required':False,
         'limitations':['Extruded shells approximate mapped buildings; roof forms and facades unverified.',
-            'Subsurface stone, soil depth, material palette and plains biome are gameplay representations.',
+            'The two-block terrain support slab, soil depth, material palette and plains biome are gameplay representations.',
             'ESA tree cover does not supply individual tree geometry; no invented trees placed.',
             'ESA water pixels are ambiguous in this urban area and shown as neutral stone unless OSM confirms water; no invented lakes.',
             'Confirmed water uses observed terrain surface; bathymetry unknown.',

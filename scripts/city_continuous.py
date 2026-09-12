@@ -14,6 +14,7 @@ from cook_city_cache import save_json,sha
 from inspect_world import chunks
 from metric_world import region_write
 from chicago_tiles import digest
+from world_border import bounds_for_plan, update_world_border
 
 
 def initialize(destination,seed,plan):
@@ -35,10 +36,13 @@ def initialize(destination,seed,plan):
     for name in ('server-verification.json','city-assembly.json'):
         path=destination/name
         if path.exists():path.rename(prior/name)
+    planned_border = bounds_for_plan(plan)
     state={'world_plan_sha256':digest(plan),'frame':plan['frame'],'tiles':{},'region_sha256':{},
         'planned_tiles':len(plan['tiles']),'full_chicago_geometry_complete':False,
         'appearance_complete':False,'installed':False,'block_scale_m':1,
+        'world_border':planned_border,
         'seed_world':str(seed.resolve()),'seed_world_manifest_sha256':sha(seed/'earthcraft.json')}
+    update_world_border(destination, planned_border)
     save_json(destination/'city-coverage.json',state)
 
 
@@ -101,13 +105,10 @@ def append_tile(destination,world,tile,plan):
         'coverage_manifest':'city-coverage.json','appearance_complete':False,'full_chicago_complete':False}
     metadata['buildings_source_scope']='Seed building records only; each city tile retains its own source features and observation report'
     save_json(destination/'earthcraft.json',metadata)
-    # Expand only the traversal envelope, never the map scale or elevations.
-    all_tiles=list(state['tiles'].values());x0=min(t['world_offset_xz'][0] for t in all_tiles);z0=min(t['world_offset_xz'][1] for t in all_tiles)
-    x1=max(t['world_offset_xz'][0]+t['size_m'] for t in all_tiles);z1=max(t['world_offset_xz'][1]+t['size_m'] for t in all_tiles)
-    level=n.load(destination/'level.dat');data=level['Data']
-    data['BorderCenterX']=n.Double((x0+x1)/2);data['BorderCenterZ']=n.Double((z0+z1)/2)
-    data['BorderSize']=n.Double(max(x1-x0,z1-z0)+2048);data['BorderSizeLerpTarget']=data['BorderSize']
-    level.save(destination/'level.dat')
+    # The border describes the frozen Chicago plan. It must not hug the small
+    # materialized cluster and move every time another tile is appended.
+    state['world_border'] = bounds_for_plan(plan)
+    update_world_border(destination, state['world_border'])
     save_json(destination/'city-coverage.json',state)
     pending.unlink()
     print(f"ASSEMBLED {tile['id']}: {state['generated_tiles']}/{state['planned_tiles']} tiles in one closed city world",flush=True)

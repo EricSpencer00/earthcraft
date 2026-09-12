@@ -44,8 +44,8 @@ class MappedWorldTests(unittest.TestCase):
             self.assertEqual(result['top_y_range'],[64,68])
             report=json.loads((world/'earthcraft.json').read_text())
             level=nbtlib.load(world/'level.dat')['Data']
-            self.assertEqual(float(level['BorderSize']),2064)
-            self.assertEqual(float(level['BorderSizeLerpTarget']),2064)
+            self.assertEqual(float(level['BorderSize']),4112)
+            self.assertEqual(float(level['BorderSizeLerpTarget']),4112)
             self.assertEqual(int(level['BorderSizeLerpTime']),0)
             self.assertFalse(level['Player']['abilities']['flying'])
             np.testing.assert_allclose(level['Player']['Rotation'],report['spawn_rotation'],atol=1e-5)

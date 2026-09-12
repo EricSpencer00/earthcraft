@@ -20,6 +20,15 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def bounded_json(url,limit=8*1024**2):
+    request=urllib.request.Request(url,headers={'User-Agent':'Earthcraft/0.1 deterministic geographic reconstruction'})
+    with urllib.request.urlopen(request,timeout=60) as response:raw=response.read(limit+1)
+    if len(raw)>limit:raise ValueError('Source response exceeds bounded download')
+    value=json.loads(raw)
+    if 'error' in value:raise ValueError('Source service returned an error')
+    return value,raw
+
+
 def prepare(out, size=512, lat=41.89720, lon=-87.62443, grid=None,way_index=None):
     if size % 16 or not 16 <= size <= 1024:
         raise ValueError('First gate supports 16–1024 metres in full chunks')
@@ -126,16 +135,37 @@ def prepare(out, size=512, lat=41.89720, lon=-87.62443, grid=None,way_index=None
             distances.append(geod.inv(lons[z,x], lats[z,x], lons[z+dz,x+dx], lats[z+dz,x+dx])[2])
     np.savez_compressed(out / 'rasters.npz', elevation=heights, cover=cover)
     county_path = out/'cook-buildings-2022.json'
-    county_url = 'https://gis.cookcountyil.gov/traditional/rest/services/buildingFootprint_2022/MapServer/0/query?' + urllib.parse.urlencode({
+    county_endpoint='https://gis.cookcountyil.gov/traditional/rest/services/buildingFootprint_2022/MapServer/0/query?'
+    county_query={
         'where':'1=1','geometry':','.join(map(str,[lons.min(),lats.min(),lons.max(),lats.max()])),
-        'geometryType':'esriGeometryEnvelope','inSR':4326,'outSR':4326,
-        'spatialRel':'esriSpatialRelIntersects','outFields':'OBJECTID,Year,Ground_Z,Max_Point,Height','f':'json'})
+        'geometryType':'esriGeometryEnvelope','inSR':4326,
+        'spatialRel':'esriSpatialRelIntersects','f':'json'}
+    county_url=county_endpoint+urllib.parse.urlencode({**county_query,'returnIdsOnly':'true'})
     if not county_path.exists():
-        with urllib.request.urlopen(county_url,timeout=60) as response:
-            raw=response.read(8*1024**2+1)
-        if len(raw)>8*1024**2:raise ValueError('County subset exceeds bounded download')
-        county_path.write_bytes(raw)
-        (out/'cook-buildings-request.json').write_text(json.dumps({'url':county_url}))
+        identifier_document,identifier_raw=bounded_json(county_url)
+        identifiers=sorted(identifier_document.get('objectIds') or [])
+        if len(identifiers)!=len(set(identifiers)) or any(type(value) is not int for value in identifiers):
+            raise ValueError('County object ID inventory is invalid')
+        features=[];requests=[]
+        for start in range(0,len(identifiers),500):
+            batch=identifiers[start:start+500]
+            url=county_endpoint+urllib.parse.urlencode({'objectIds':','.join(map(str,batch)),
+                'outSR':4326,'outFields':'OBJECTID,Year,Ground_Z,Max_Point,Height',
+                'returnGeometry':'true','orderByFields':'OBJECTID','f':'json'})
+            document,raw=bounded_json(url)
+            if document.get('exceededTransferLimit') or not isinstance(document.get('features'),list):
+                raise ValueError('County source page is incomplete')
+            observed=[feature.get('attributes',{}).get('OBJECTID') for feature in document['features']]
+            if sorted(observed)!=batch:
+                raise ValueError('County source changed between ID inventory and feature pages')
+            features.extend(document['features'])
+            requests.append({'url':url,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+        county={'objectIdFieldName':identifier_document.get('objectIdFieldName','OBJECTID'),
+                'features':features}
+        county_path.write_text(json.dumps(county))
+        (out/'cook-buildings-request.json').write_text(json.dumps({'url':county_url,
+            'id_inventory_bytes':len(identifier_raw),'id_inventory_sha256':hashlib.sha256(identifier_raw).hexdigest(),
+            'object_ids':identifiers,'feature_pages':requests},indent=2))
     county_url=json.loads((out/'cook-buildings-request.json').read_text())['url']
     county=json.loads(county_path.read_text())
     if 'error' in county or county.get('exceededTransferLimit') or not isinstance(county.get('features'),list):

@@ -34,6 +34,87 @@ def save_json(path,record):
     temporary.write_text(json.dumps(record,indent=2));temporary.replace(path)
 
 
+def resume_checkpoint(partial,state):
+    """Recover the single write-ahead block left by a stopped downloader."""
+    partial=Path(partial);completed=state.get('compressed_bytes')
+    if type(completed) is not int or completed<0:raise ValueError('Invalid download checkpoint length')
+    expected_size=len(HEADER)+completed;actual_size=partial.stat().st_size
+    # Payload is flushed before its atomic checkpoint. A stop in that narrow
+    # window can leave exactly one uncommitted block, which is safe to discard.
+    if expected_size<actual_size<=expected_size+BLOCK:
+        with partial.open('r+b') as stream:stream.truncate(expected_size)
+        actual_size=expected_size
+    if actual_size!=expected_size or sha(partial)!=state.get('sha256'):
+        raise ValueError('Interrupted cache changed; preserve it')
+    return completed
+
+
+def verify_ready(ready, partial, asset):
+    """Prove a crash-window ready file is the completed current partial."""
+    ready,partial=Path(ready),Path(partial)
+    partial_size=partial.stat().st_size
+    if ready.stat().st_size!=partial_size+8:
+        raise ValueError('Prior verified-file staging changed; preserve for inspection')
+    digest=hashlib.sha256();remaining=partial_size
+    with ready.open('rb') as stream:
+        while remaining:
+            chunk=stream.read(min(BLOCK,remaining))
+            if not chunk:raise ValueError('Prior verified-file staging changed; preserve for inspection')
+            digest.update(chunk);remaining-=len(chunk)
+        trailer=stream.read()
+    expected=struct.pack('<II',int(asset['crc32'],16),asset['uncompressed_bytes']%(2**32))
+    if digest.hexdigest()!=sha(partial) or trailer!=expected:
+        raise ValueError('Prior verified-file staging changed; preserve for inspection')
+    uncompressed=hashlib.sha256();count=0
+    with gzip.open(ready,'rb') as stream:
+        while chunk:=stream.read(BLOCK):
+            count+=len(chunk)
+            if count>asset['uncompressed_bytes']:
+                raise ValueError('Decompression exceeds indexed size')
+            uncompressed.update(chunk)
+    if count!=asset['uncompressed_bytes']:raise ValueError('Incomplete decompressed LAS')
+    return count,uncompressed.hexdigest()
+
+
+def _same_prefix(left, right, length):
+    remaining=length
+    with Path(left).open('rb') as a,Path(right).open('rb') as b:
+        while remaining:
+            size=min(BLOCK,remaining);first=a.read(size);second=b.read(size)
+            if len(first)!=size or first!=second:return False
+            remaining-=size
+    return True
+
+
+def prepare_ready(ready, partial, asset):
+    """Create or deterministically recover the final verified gzip staging."""
+    ready,partial=Path(ready),Path(partial)
+    trailer=struct.pack('<II',int(asset['crc32'],16),asset['uncompressed_bytes']%(2**32))
+    if ready.exists() and ready.stat().st_size!=partial.stat().st_size+len(trailer):
+        # An older downloader could copy a then-current partial and append the
+        # final trailer before another process completed the shared partial, or
+        # stop during that copy before appending the trailer. Replace either
+        # form only when every surviving payload byte is an exact prefix.
+        ready_size=ready.stat().st_size;partial_size=partial.stat().st_size
+        payload_size=ready_size-len(trailer)
+        with ready.open('rb') as stream:
+            stream.seek(max(0,payload_size));observed_trailer=stream.read()
+        interrupted_copy=(len(HEADER)<=ready_size<=partial_size and _same_prefix(ready,partial,ready_size))
+        older_ready=(len(HEADER)<=payload_size<partial_size and observed_trailer==trailer and
+                     _same_prefix(ready,partial,payload_size))
+        if not (interrupted_copy or older_ready):
+            raise ValueError('Prior verified-file staging changed; preserve for inspection')
+        replacement=ready.with_name(ready.name+'.replacement')
+        if replacement.exists():raise ValueError('Prior replacement staging exists; preserve for inspection')
+        shutil.copyfile(partial,replacement)
+        with replacement.open('ab') as target:target.write(trailer)
+        replacement.replace(ready)
+    elif not ready.exists():
+        shutil.copyfile(partial,ready)
+        with ready.open('ab') as target:target.write(trailer)
+    return verify_ready(ready,partial,asset)
+
+
 def validate_asset(asset):
     if not re.fullmatch(r'\d{8}',asset['id']):raise ValueError('Invalid survey ID')
     if not re.fullmatch(re.escape(BASE)+r'cook-las[1-5]\.zip',asset['url']):raise ValueError('Not the public Cook source')
@@ -99,8 +180,8 @@ def acquire(asset,publisher,root,reserve_bytes=100*2**30):
             start=remote.tell();completed=0
             if partial.exists() or checkpoint.exists():
                 state=json.loads(checkpoint.read_text())
-                if state['asset']!=asset or sha(partial)!=state['sha256']:raise ValueError('Interrupted cache changed; preserve it')
-                completed=state['compressed_bytes']
+                if state['asset']!=asset:raise ValueError('Interrupted cache changed; preserve it')
+                completed=resume_checkpoint(partial,state)
                 if not 0<=completed<=asset['compressed_bytes'] or partial.stat().st_size!=len(HEADER)+completed:
                     raise ValueError('Invalid download checkpoint length')
                 with partial.open('rb') as stream:
@@ -121,18 +202,9 @@ def acquire(asset,publisher,root,reserve_bytes=100*2**30):
                         print(f"{asset['id']}: {completed//2**20}/{asset['compressed_bytes']//2**20} MiB cached",flush=True)
             # Keep resumable payload untouched until the entire gzip has been verified.
             ready=path.with_suffix('.gz.ready')
-            if ready.exists():raise ValueError('Prior verified-file staging exists; preserve for inspection')
-            shutil.copyfile(partial,ready)
-            with ready.open('ab') as target:target.write(struct.pack('<II',int(asset['crc32'],16),asset['uncompressed_bytes']%(2**32)))
-            uncompressed=hashlib.sha256();count=0
-            with gzip.open(ready,'rb') as stream:
-                while chunk:=stream.read(BLOCK):
-                    count+=len(chunk)
-                    if count>asset['uncompressed_bytes']:raise ValueError('Decompression exceeds indexed size')
-                    uncompressed.update(chunk)
-            if count!=asset['uncompressed_bytes']:raise ValueError('Incomplete decompressed LAS')
+            count,uncompressed_sha256=prepare_ready(ready,partial,asset)
             record={'url':asset['url'],'member':asset['member'],'archive_etag':asset['archive_etag'],
-                'bytes':count,'sha256':uncompressed.hexdigest(),'compressed_sha256':sha(ready),
+                'bytes':count,'sha256':uncompressed_sha256,'compressed_sha256':sha(ready),
                 'zip_crc32_verified':asset['crc32'],'capture_interval':publisher['capture_interval'],
                 'publisher':publisher,'license':'No access or use restrictions per publisher XML',
                 'storage':'Original ZIP DEFLATE bytes wrapped as gzip; lossless LAS recovery',

@@ -58,6 +58,7 @@ __pycache__/
 /docs/photos/
 
 # Local build and acquisition output.
+/artifacts/
 *.log
 *.sqlite
 *.sqlite-shm

@@ -12,6 +12,7 @@ from metric_world import region_write
 from metric_frame import tile_layout
 from world_replay import canonical_section,file_hash
 from verify_metric_world import verify
+from world_border import bounds_for_tiles, update_world_border
 
 
 def chunk_payload(tag):
@@ -59,9 +60,8 @@ def assemble(worlds,source,destination,spawn_world=None):
     shutil.copytree(worlds[selected]/'datapacks',destination/'datapacks')
     level=n.load(worlds[selected]/'level.dat');data=level['Data']
     data['LevelName']=n.String('Earthcraft')
-    data['BorderCenterX']=n.Double(ox+size/2);data['BorderCenterZ']=n.Double(oz+size/2)
-    data['BorderSize']=n.Double(size+2048);data['BorderSizeLerpTarget']=n.Double(size+2048)
     level.save(destination/'level.dat')
+    update_world_border(destination, bounds_for_tiles([{'world_offset_xz':[ox,oz],'size_m':size}]))
     report=dict(reports[selected],source=meta,world_offset_xz=[ox,oz],chunks=len(expected),
         dem_path=str((source/meta.get('elevation_raster','usgs-elevation.tif')).resolve()),buildings=list(buildings.values()),
         assembly={'tiles':[str(w.resolve()) for w in worlds],'generated_area_m2':size**2,

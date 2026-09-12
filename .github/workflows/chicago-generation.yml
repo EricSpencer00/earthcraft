@@ -1,0 +1,78 @@
+name: Run Chicago generation on the LaCie worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: Number of deterministic worker processes
+        required: false
+        default: "8"
+      limit:
+        description: Maximum jobs for this invocation
+        required: false
+        default: "10000"
+
+# GitHub-hosted runners cannot see the local LaCie source volume. Register a
+# self-hosted runner on the Mac that owns the volume with this exact label.
+# Keeping this workflow manual prevents a push from unexpectedly consuming the
+# machine or rewriting the live world.
+permissions:
+  contents: read
+
+concurrency:
+  group: earthcraft-chicago-generation
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: [self-hosted, macOS, earthcraft-lacie]
+    timeout-minutes: 1440
+    env:
+      EARTHCRAFT_BULK_ROOT: /Volumes/LaCie/Earthcraft
+      PYTHONPATH: scripts
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Verify the LaCie source and output volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$EARTHCRAFT_BULK_ROOT/chicago/lidar-2022"
+          test -d "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-source-supertiles-v1"
+          test -f "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-ways-v1.sqlite"
+          test -d "$EARTHCRAFT_BULK_ROOT/chicago/city-tiles-001"
+          test "$(df -P "$EARTHCRAFT_BULK_ROOT" | tail -1 | awk '{print $5}')" != "100%"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements-test.txt
+
+      - name: Run deterministic Chicago stages
+        run: |
+          python scripts/chicago_worker.py \
+            --plan runs/chicago-adaptation-city-001 \
+            --catalog runs/chicago-source-index-003/city-sources.json \
+            --output "$EARTHCRAFT_BULK_ROOT/chicago/city-tiles-001" \
+            --bulk "$EARTHCRAFT_BULK_ROOT/chicago/lidar-2022" \
+            --source-cache "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-source-supertiles-v1" \
+            --way-index "$EARTHCRAFT_BULK_ROOT/chicago/cache/metric-ways-v1.sqlite" \
+            --lidar-mode deferred \
+            --workers "${{ inputs.workers }}" \
+            --limit "${{ inputs.limit }}"
+
+      - name: Upload resumable control-plane evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chicago-generation-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            runs/chicago-adaptation-city-001/*.json
+            runs/chicago-adaptation-city-001/*.log

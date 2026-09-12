@@ -33,12 +33,14 @@ public final class LiveImport implements ModInitializer {
     Future<Job> loading;
     Job active;
     int runIndex, runOffset, written, skipped, already, conflicts, ticks;
-    long maxBatchNanos;
+    int tickBudgetMs=3;
+    long tickBudgetNanos=3_000_000L, maxBatchNanos;
     boolean enabled;
     static final class Job {
         Path path; JsonObject data; String id, key, mode;
         int cx, cz; int[][] runs; class_2680[] states; class_2680 pavement;
     }
+    record Pending(Path path,long modified) {}
     @Override public void onInitialize() {
         ServerLifecycleEvents.SERVER_STARTED.register(this::start);
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> {
@@ -55,12 +57,20 @@ public final class LiveImport implements ModInitializer {
         try(FileChannel c=FileChannel.open(temp, StandardOpenOption.WRITE)){c.force(true);}
         Files.move(temp,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
     }
+    static void telemetry(Path path, JsonObject value) throws IOException {
+        Path temp = path.resolveSibling(path.getFileName()+".partial");
+        Files.writeString(temp, JSON.toJson(value));
+        Files.move(temp,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+    }
     void start(MinecraftServer server) {
         stop(); protectedChunks.clear(); deferred.clear(); ticks=0;
         Path config = FabricLoader.getInstance().getConfigDir().resolve("earthcraft-live.json");
         if(!Files.isRegularFile(config))return;
         try {
             JsonObject c=JsonParser.parseString(Files.readString(config)).getAsJsonObject();
+            tickBudgetMs=c.has("budget_ms")?c.get("budget_ms").getAsInt():3;
+            if(tickBudgetMs<1||tickBudgetMs>10)throw new IOException("Live tick budget must be 1..10 ms");
+            tickBudgetNanos=tickBudgetMs*1_000_000L;
             // MinecraftServer.getSavePath(WorldSavePath.ROOT): exact physical save binding.
             Path save=server.method_27050(class_5218.field_24188).toRealPath();
             if(!save.equals(Path.of(c.get("world").getAsString()).toRealPath()))return;
@@ -86,21 +96,32 @@ public final class LiveImport implements ModInitializer {
         JsonObject s=new JsonObject();s.addProperty("state",state);s.addProperty("time",java.time.Instant.now().toString());
         if(error!=null)s.addProperty("error",error);
         if(active!=null){s.addProperty("chunk",active.key);s.addProperty("written",written);}
-        s.addProperty("budget_ms",3);s.addProperty("max_batch_ms",maxBatchNanos/1e6);
+        s.addProperty("budget_ms",tickBudgetMs);s.addProperty("max_batch_ms",maxBatchNanos/1e6);
         s.addProperty("capability_version",1);JsonArray modes=new JsonArray();
         for(String mode:List.of("new_chunk","pavement","building_delta"))modes.add(mode);s.add("modes",modes);
-        atomic(root.resolve("status.json"),s);
+        telemetry(root.resolve("status.json"),s);
     }
     static String sha(byte[] b)throws Exception{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(b));}
     Job next()throws Exception{
-        List<Path> files;
-        try(var stream=Files.list(inbox)){files=stream.filter(p->p.getFileName().toString().matches("[0-9a-f]{64}\\.json\\.gz")).sorted().toList();}
+        List<Pending> files=new ArrayList<>();
+        try(var stream=Files.list(inbox)){
+            for(Path path:stream.filter(p->p.getFileName().toString().matches("[0-9a-f]{64}\\.json\\.gz")).toList()){
+                // The publisher may archive a newly receipted file while this
+                // immutable metadata snapshot is being built. That is already
+                // completed work, so a vanished entry can be ignored safely.
+                try{files.add(new Pending(path,Files.getLastModifiedTime(path).toMillis()));}
+                catch(NoSuchFileException ignored){}
+            }
+        }
         if(files.size()>256)throw new IOException("Queue exceeds 256-file bound");
         // Oldest first: lexical content hashes would starve some older patches
-        // when fresh chunks continuously enter the bounded queue.
-        files=new ArrayList<>(files);
-        files.sort(Comparator.comparingLong(p->p.toFile().lastModified()));
-        for(Path p:files){
+        // when fresh chunks continuously enter the bounded queue. Snapshot the
+        // timestamps before sorting: a comparator that stats concurrently moved
+        // files can change its answer mid-sort and violate TimSort's contract.
+        files.sort(Comparator.comparingLong(Pending::modified)
+                .thenComparing(p->p.path().getFileName().toString()));
+        for(Pending pending:files){
+            Path p=pending.path();
             String id=p.getFileName().toString().substring(0,64);
             if(Files.exists(receipts.resolve(id+".json")))continue;
             if(deferred.getOrDefault(id,0L)>System.currentTimeMillis())continue;
@@ -159,9 +180,10 @@ public final class LiveImport implements ModInitializer {
     }
     void begin(class_3218 world,Job j)throws Exception{
         written=skipped=already=conflicts=runIndex=runOffset=0;maxBatchNanos=0;
-        if(Files.exists(root.resolve("started-"+j.id+".json"))){receipt(j,"interrupted_requires_review");return;}
-        if(j.mode.equals("new_chunk")&&protectedChunks.contains(j.key)){receipt(j,"protected_existing_chunk");return;}
         Path claim=root.resolve("claimed-"+j.key+".json");
+        Path started=root.resolve("started-"+j.id+".json");
+        if(!j.mode.equals("new_chunk")&&Files.exists(started)){receipt(j,"interrupted_requires_review");return;}
+        if(j.mode.equals("new_chunk")&&protectedChunks.contains(j.key)){receipt(j,"protected_existing_chunk");return;}
         if(j.mode.equals("building_delta")&&!protectedChunks.contains(j.key)&&!Files.exists(claim)){receipt(j,"unowned_chunk_preserved");return;}
         if(j.mode.equals("new_chunk")&&Files.exists(claim)){receipt(j,"previously_claimed_chunk_preserved");return;}
         var chunk=world.method_8497(j.cx,j.cz); // World.getChunk: load on server thread.
@@ -174,8 +196,9 @@ public final class LiveImport implements ModInitializer {
         j.pavement=class_7923.field_41175.method_63535(class_2960.method_60654("minecraft:gray_concrete")).method_9564();
         JsonObject intent=new JsonObject();intent.addProperty("chunk",j.key);intent.addProperty("mode",j.mode);
         intent.addProperty("recovery","Do not replay interrupted mutations over possible player edits");
-        atomic(root.resolve("started-"+j.id+".json"),intent);
-        if(j.mode.equals("new_chunk"))atomic(claim,intent);
+        // A new-chunk claim is also its durable interruption fence; writing a
+        // second forced intent record only adds latency without more safety.
+        if(j.mode.equals("new_chunk"))atomic(claim,intent);else atomic(started,intent);
         active=j;status("applying",null);
     }
     void tick(MinecraftServer server){
@@ -193,12 +216,15 @@ public final class LiveImport implements ModInitializer {
                     }
                 }
                 if(active==null&&loading==null&&++ticks%2==0)loading=io.submit(this::next);
-                return;
+                // A completed async read can begin and apply its first bounded
+                // block batch in this same server tick. If there is no job,
+                // leave immediately as before.
+                if(active==null)return;
             }
             Job j=active;
             if((j.mode.equals("new_chunk")||j.mode.equals("building_delta"))&&nearPlayer(world,j)){receipt(j,"player_approached_partial_preserved");active=null;return;}
             long start=System.nanoTime();int count=0;
-            while(runIndex<j.runs.length&&count<16384&&System.nanoTime()-start<3_000_000){
+            while(runIndex<j.runs.length&&count<16384&&System.nanoTime()-start<tickBudgetNanos){
                 int[] r=j.runs[runIndex];int index=r[0]+runOffset;
                 class_2338 pos=new class_2338(j.cx*16+(index&15),(index>>8)-64,j.cz*16+((index>>4)&15));
                 var old=world.method_8320(pos);var target=j.states[j.mode.equals("building_delta")?r[3]:r[2]];
@@ -213,7 +239,12 @@ public final class LiveImport implements ModInitializer {
                 count++;runOffset++;if(runOffset==r[1]){runIndex++;runOffset=0;}
             }
             maxBatchNanos=Math.max(maxBatchNanos,System.nanoTime()-start);
-            if(runIndex==j.runs.length){receipt(j,"applied_in_memory");active=null;status("ready",null);}
+            if(runIndex==j.runs.length){
+                receipt(j,"applied_in_memory");active=null;status("ready",null);
+                // Overlap the next bounded file read with the following tick;
+                // block mutation itself remains exclusively on the server.
+                if(loading==null)loading=io.submit(this::next);
+            }
         }catch(Exception e){fail(e);}
     }
 }

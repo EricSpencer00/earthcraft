@@ -17,11 +17,13 @@ import fcntl
 import numpy as np
 from city_save_update import read_region
 from verify_metric_world import unpack
+from geometry_layers import TOPOLOGY_SUPPORT_DEPTH, geometry_layer_masks
 
 ROOT=Path(__file__).resolve().parents[1]
 BASE=set('stone dirt grass_block sand water snow_block gray_concrete stone_bricks bricks sandstone clay bedrock iron_block'.split())
 COLORS=set('white orange magenta light_blue yellow lime pink gray light_gray cyan purple blue brown green red black'.split())
 STAINED_GLASS={f'{c}_stained_glass' for c in COLORS}
+PUBLISH_POLL_SECONDS=1
 
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -41,7 +43,7 @@ def allowed(name,mode):
     return concrete if mode=='pavement' else concrete or local in BASE or local in STAINED_GLASS or (mode=='building_delta' and local=='air')
 
 
-def encode_chunk(tag,frame,provenance):
+def encode_chunk(tag,frame,provenance,ground=None):
     if tag.get('block_entities'):raise ValueError('Source block entities unsupported')
     palette=[];volume=np.full(262144,-1,np.int16);seen=set()
     for s in tag['sections']:
@@ -59,6 +61,14 @@ def encode_chunk(tag,frame,provenance):
             mapping.append(palette.index(name))
         values=np.zeros(4096,int) if len(mapping)==1 else unpack(bs['data'],max(4,(len(mapping)-1).bit_length()),4096)
         volume[(sy+4)*4096:(sy+5)*4096]=np.asarray(mapping)[values]
+    if ground is not None:
+        topology,structures=geometry_layer_masks(np.asarray(ground),-64,1024)
+        keep=(topology|structures).reshape(-1)
+        volume[~keep]=-1
+        provenance=dict(provenance,
+            geometry_layers=['topology_support_slab','sparse_above_ground_structures'],
+            topology_support_depth_blocks=TOPOLOGY_SUPPORT_DEPTH,
+            full_subsurface_fill_omitted=True)
     starts=np.r_[0,np.flatnonzero(volume[1:]!=volume[:-1])+1]
     lengths=np.diff(np.r_[starts,len(volume)])
     runs=[[int(s),int(n),int(volume[s])] for s,n in zip(starts,lengths) if volume[s]>=0]
@@ -162,18 +172,51 @@ def cached_region(region,expected,checked,cache):
     return chunks
 
 
-def feed(exchange,journal,once=False):
+def priority_ranks(path,frame):
+    """Load a frozen, no-inference tile order for the live publisher."""
+    if path is None:return {},None
+    path=Path(path);manifest=json.loads(path.read_text())
+    tiles=manifest.get('tiles')
+    if manifest.get('plan_sha256')!=frame or manifest.get('llm_used') is not False:
+        raise ValueError('Priority manifest does not match the live world plan')
+    if not isinstance(tiles,list) or not tiles or any(not isinstance(tile,str) for tile in tiles) or len(set(tiles))!=len(tiles):
+        raise ValueError('Priority manifest needs unique tile IDs')
+    return {tile:index for index,tile in enumerate(tiles)},{'path':str(path.resolve()),'sha256':sha(path)}
+
+
+def publication_world(base_receipt,base_sha,base_record):
+    """Prefer a completed optional detail sibling before a tile is published."""
+    base_receipt=Path(base_receipt);refinement=base_receipt.parent/'lidar-refinement-receipt.json'
+    if not refinement.exists():
+        return base_receipt.parent/'world',base_record,base_receipt,base_sha,'base'
+    refinement_sha=sha(refinement);record=json.loads(refinement.read_text())
+    world=base_receipt.parent/'world.refined'
+    if (record.get('result')!='pass' or record.get('critical_path') is not False or
+            record.get('llm_used') is not False or
+            record.get('base_geometry_receipt_sha256')!=base_sha or
+            Path(record.get('world','')).resolve()!=world.resolve() or
+            sha(world/'earthcraft.json')!=record.get('world_manifest_sha256')):
+        raise ValueError('LiDAR refinement receipt does not match the base tile')
+    regions={path.name:sha(path) for path in sorted((world/'region').glob('r.*.*.mca'))}
+    if regions!=record.get('regions'):
+        raise ValueError('LiDAR refinement regions changed')
+    return world,record,refinement,refinement_sha,'asynchronous-lidar-refinement'
+
+
+def feed(exchange,journal,once=False,priority_manifest=None):
     lock=(exchange/'publisher.lock').open('a+')
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     binding=json.loads((exchange/'binding.json').read_text());protected=set(binding['protected_chunks'])
-    frame=binding['frame'];seen=set();checked={};processed=set();cache={};complete_regions={}
+    frame=binding['frame'];seen=set();checked={};processed=set();cache={};complete_regions={};grounds={}
+    priority,priority_record=priority_ranks(priority_manifest,frame)
     state=exchange/'published.json'
     if state.exists():
         previous=json.loads(state.read_text());seen=set(previous['chunks'])
         complete_regions=dict(previous.get('complete_regions',{}))
 
     def save_state():
-        atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,'time':time.time()}).encode())
+        atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,'time':time.time(),
+                                 'priority_manifest':priority_record}).encode())
     # Archived content is bounded to 1 GiB. Originals remain at their immutable source paths.
     while True:
         if (exchange/'pause').exists():
@@ -185,14 +228,18 @@ def feed(exchange,journal,once=False):
         if sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
         room=128-len(list((exchange/'inbox').glob('*.gz')))
         with sqlite3.connect(f'file:{journal}?mode=ro',uri=True) as db:
-            rows=db.execute("SELECT tile,evidence,evidence_sha256 FROM jobs WHERE stage=1 AND state='complete' ORDER BY priority,tile").fetchall()
+            rows=db.execute("SELECT tile,evidence,evidence_sha256,priority FROM jobs WHERE stage=1 AND state='complete'").fetchall()
+        rows.sort(key=lambda row:(0,priority[row[0]]) if row[0] in priority else (1,row[3],row[0]))
         published=0
-        for tile,evidence,expected in rows:
+        for tile,evidence,expected,_ in rows:
             if room<=0:break
             if tile in processed:continue
             path=Path(evidence)
             if sha(path)!=expected:raise ValueError('Geometry receipt changed')
-            r=json.loads(path.read_text());world=path.parent/'world';report_path=world/'earthcraft.json'
+            base_record=json.loads(path.read_text())
+            world,r,source_receipt,source_receipt_sha,detail_lane=publication_world(
+                path,expected,base_record)
+            report_path=world/'earthcraft.json'
             if sha(report_path)!=r['world_manifest_sha256']:raise ValueError('World manifest changed')
             report=json.loads(report_path.read_text());f=binding['coordinate_frame'];ox,oz=report['world_offset_xz']
             if (report['source']['crs']!=f['crs'] or report['vertical_offset_m']!=f['vertical_offset_m'] or
@@ -215,24 +262,46 @@ def feed(exchange,journal,once=False):
                     key=f'{cx},{cz}'
                     if key in protected or key in seen:continue
                     if room<=0:all_done=False;break
-                    p=encode_chunk(tag,frame,{'tile':tile,'receipt':str(path),'receipt_sha256':expected,
-                                            'region_sha256':h,'physical_accuracy_verified':False,'llm_used':False})
+                    if tile not in grounds:
+                        source_grid=path.parent/'sources/rasters.npz'
+                        with np.load(source_grid,allow_pickle=False) as data:
+                            elevation=np.asarray(data['elevation'])
+                        size=report['source']['size']
+                        if elevation.shape!=(size,size) or not np.isfinite(elevation).all():
+                            raise ValueError('Missing exact topology grid')
+                        grounds[tile]=np.floor(elevation+report['vertical_offset_m']).astype(np.int32)
+                    ground=grounds[tile]
+                    local_x=(cx-ox//16)*16;local_z=(cz-oz//16)*16
+                    chunk_ground=ground[local_z:local_z+16,local_x:local_x+16]
+                    if chunk_ground.shape!=(16,16):raise ValueError('Chunk outside exact topology grid')
+                    p=encode_chunk(tag,frame,{'tile':tile,'receipt':str(source_receipt),
+                                            'receipt_sha256':source_receipt_sha,
+                                            'base_receipt':str(path),'base_receipt_sha256':expected,
+                                            'detail_lane':detail_lane,'region_sha256':h,
+                                            'physical_accuracy_verified':False,'llm_used':False},
+                                   ground=chunk_ground)
                     publish(exchange,p);seen.add(key);room-=1;published+=1
-                    save_state()
+                    # Publication is content-addressed and idempotent. Commit
+                    # progress at the region boundary instead of forcing and
+                    # replacing published.json after every individual chunk.
                 if all(f'{cx},{cz}' in protected or f'{cx},{cz}' in seen for cx,cz in chunks):
                     complete_regions[region_key]=h;save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)
-        if published:print(json.dumps({'queued_new_chunks':published,'total_published':len(seen),'time':time.time()}),flush=True)
+        if published:
+            save_state()
+            print(json.dumps({'queued_new_chunks':published,'total_published':len(seen),'time':time.time()}),flush=True)
         if once:
             lock.close();return
-        time.sleep(5)
+        time.sleep(PUBLISH_POLL_SECONDS)
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('exchange',type=Path)
     p.add_argument('--initialize',type=Path);p.add_argument('--config',type=Path)
     p.add_argument('--paint',type=Path);p.add_argument('--once',action='store_true')
+    p.add_argument('--priority-manifest',type=Path,
+                   help='Frozen no-inference tile order, such as a named-road corridor')
     p.add_argument('--journal',type=Path,default=ROOT/'runs/chicago-adaptation-city-001/jobs.sqlite')
     a=p.parse_args()
     if a.initialize:print(json.dumps(initialize(a.exchange,a.initialize,a.config),indent=2));return
@@ -240,7 +309,7 @@ def main():
         frame=json.loads((a.exchange/'binding.json').read_text())['frame']
         for patch in paint_patches(a.paint,frame):print(publish(a.exchange,patch))
         return
-    feed(a.exchange,a.journal,a.once)
+    feed(a.exchange,a.journal,a.once,a.priority_manifest)
 
 
 if __name__=='__main__':main()

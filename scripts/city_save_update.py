@@ -19,6 +19,7 @@ from inspect_world import chunks
 from metric_world import packed,region_write
 from verify_metric_world import unpack
 from world_replay import files_snapshot,file_hash
+from world_border import bounds_for_tiles, update_world_border
 
 
 def read_region(path):
@@ -167,6 +168,14 @@ def stage(current,generated,baseline,destination,material_source=None):
         for field in ('BorderCenterX','BorderCenterZ','BorderSize','BorderSizeLerpTarget','BorderSizeLerpTime'):
             level['Data'][field]=generated_level[field]
         level['Data']['LevelName']=n.String('Earthcraft');level.save(destination/'level.dat')
+        coverage=json.loads((generated/'city-coverage.json').read_text()) if (generated/'city-coverage.json').exists() else {}
+        coverage_tiles=list(coverage.get('tiles',{}).values())
+        border=coverage.get('world_border')
+        if border is None:
+            border_tiles=coverage_tiles or [{'world_offset_xz':expanded.get('world_offset_xz',[0,0]),
+                'size_m':expanded['source']['size']}]
+            border=bounds_for_tiles(border_tiles)
+        update_world_border(destination,border)
         if level['Data']['Player']!=player:raise ValueError('Player data changed')
         expanded['spawn']=original['spawn'];expanded['spawn_rotation']=original.get('spawn_rotation',[0,0])
         expanded['installed_overlay']={'preserved_chunks':[list(key) for key in sorted(preserved)],

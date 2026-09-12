@@ -25,14 +25,17 @@ class ContinuousCityTests(unittest.TestCase):
                 region_write(world/'region/r.0.0.mca',[(x,0,tag)])
                 n.File({'Data':n.Compound({})},gzipped=True).save(world/'level.dat')
             target=root/'continuous';initialize(target,worlds[0],plan)
+            initial_state=json.loads((target/'city-coverage.json').read_text())
+            initial_border=initial_state['world_border']
             append_tile(target,worlds[0],tiles[0],plan)
             append_tile(target,worlds[0],tiles[0],plan)
-            with patch('city_continuous.n.load',side_effect=OSError('simulated interruption after region commit')):
+            with patch('world_border.n.load',side_effect=OSError('simulated interruption after region commit')):
                 with self.assertRaises(OSError):append_tile(target,worlds[1],tiles[1],plan)
             self.assertTrue((target/'pending-region.json').exists())
             append_tile(target,worlds[1],tiles[1],plan)
             state=json.loads((target/'city-coverage.json').read_text())
             self.assertEqual(state['generated_tiles'],2);self.assertTrue(state['full_chicago_geometry_complete'])
+            self.assertEqual(state['world_border'],initial_border)
             self.assertFalse(state['appearance_complete']);self.assertFalse((target/'pending-region.json').exists())
             self.assertEqual({int(t['xPos']) for _,t,_ in chunks(target/'region/r.0.0.mca')},{0,1})
             (target/'session.lock').write_bytes(b'opened')

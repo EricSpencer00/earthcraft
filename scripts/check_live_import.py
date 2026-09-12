@@ -35,7 +35,8 @@ def check(work):
     shutil.copy2(ROOT/'vendor/minecraft-server-1.21.10.jar',work/'server.jar')
     (work/'eula.txt').write_text('eula=true\n')
     (work/'server.properties').write_text('server-ip=127.0.0.1\nserver-port=25585\nlevel-name=world\nonline-mode=true\ngamemode=creative\ndifficulty=peaceful\nview-distance=2\nsimulation-distance=2\nmax-players=1\nenable-rcon=false\n')
-    binding={'world':str(work/'world'),'exchange':str(work/'exchange'),'frame':'live-test','protected_chunks':['0,0']}
+    binding={'world':str(work/'world'),'exchange':str(work/'exchange'),'frame':'live-test',
+             'budget_ms':8,'protected_chunks':['0,0']}
     (work/'config/earthcraft-live.json').write_text(json.dumps(binding))
     # A real source outside the fixture, at unchanged geospatial coordinates.
     source=bulk_path('chicago','city-tiles-001','-1_4','world')
@@ -88,7 +89,10 @@ def check(work):
                 second_patch=encode_chunk(originals[second_key],'live-test',{'source':str(source),'quit_probe':True})
                 second_id=publish(work/'exchange',second_patch)
                 deadline=time.monotonic()+10
-                while not (work/'exchange'/f'started-{second_id}.json').exists():
+                # New chunks use their durable ownership claim as the single
+                # interruption fence; other mutation modes retain patch markers.
+                claim=work/'exchange'/f'claimed-{second_key[0]},{second_key[1]}.json'
+                while not claim.exists():
                     if time.monotonic()>deadline:raise TimeoutError('Quit probe never began')
                     time.sleep(.005)
                 atomic(work/'exchange/pause',b'operator pause')
