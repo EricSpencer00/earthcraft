@@ -32,8 +32,11 @@ def log(handle, message):
 def pending_jobs(journal):
     with sqlite3.connect(f'file:{journal}?mode=ro', uri=True) as db:
         return db.execute(
-            "SELECT count(*) FROM jobs WHERE stage IN (0,1) "
-            "AND state IN ('pending','running')"
+            "SELECT count(*) FROM jobs j WHERE "
+            "(j.stage=0 AND j.state IN ('pending','running')) OR "
+            "(j.stage=1 AND j.state IN ('pending','running') AND EXISTS "
+            "(SELECT 1 FROM jobs source WHERE source.tile=j.tile AND source.stage=0 "
+            "AND source.state='complete'))"
         ).fetchone()[0]
 
 

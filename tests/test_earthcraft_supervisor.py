@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from earthcraft_supervisor import publisher_lock_held
+from earthcraft_supervisor import pending_jobs, publisher_lock_held
 
 
 def hold_publisher_lock(path, ready, release):
@@ -32,6 +32,23 @@ class SupervisorTests(unittest.TestCase):
             holder.join(5)
             self.assertEqual(holder.exitcode, 0)
             self.assertFalse(publisher_lock_held(exchange))
+
+    def test_only_actionable_source_and_geometry_jobs_keep_workers_alive(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / 'jobs.sqlite'
+            import sqlite3
+            with sqlite3.connect(journal) as db:
+                db.execute('CREATE TABLE jobs (tile TEXT, stage INTEGER, state TEXT)')
+                db.executemany('INSERT INTO jobs VALUES (?,?,?)', [
+                    ('source-ready', 0, 'pending'),
+                    ('geometry-ready', 0, 'complete'),
+                    ('geometry-ready', 1, 'pending'),
+                    ('source-rejected', 0, 'failed'),
+                    ('source-rejected', 1, 'pending'),
+                    ('geometry-failed', 0, 'complete'),
+                    ('geometry-failed', 1, 'failed'),
+                ])
+            self.assertEqual(pending_jobs(journal), 2)
 
 
 if __name__ == '__main__':
