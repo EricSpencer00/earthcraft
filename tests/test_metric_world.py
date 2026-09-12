@@ -77,6 +77,14 @@ class MetricWorldTests(unittest.TestCase):
         self.assertEqual(top,88)
         self.assertEqual(len(targets),16)
 
+    def test_water_bound_tile_prefers_mapped_nonwater_support(self):
+        ground=np.full((4,4),70,np.int32)
+        footprint=np.ones((4,4),bool)
+        water=9;surface=np.full((4,4),water,np.uint8)
+        surface[1,2]=3
+        z,x,top,_=select_spawn_cell(ground,footprint,surface,water)
+        self.assertEqual((z,x,top),(1,2,70))
+
 
 if __name__=='__main__':
     unittest.main()

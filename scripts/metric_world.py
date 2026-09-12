@@ -133,6 +133,14 @@ def select_spawn_cell(ground, footprint_union, surface, water_code, buildings=()
         surface_top[mask] = np.maximum(surface_top[mask], int(building['high']))
     if point_cells is not None and len(point_cells):
         np.maximum.at(surface_top,(point_cells[:,2],point_cells[:,0]),point_cells[:,1])
+    # County footprints can legitimately cover every dry metre of a lake-edge
+    # chart even when none has a usable building height.  Those mapped
+    # non-water cells are still the only safe preview support available; do
+    # not fall through to a water spawn merely because they are footprints.
+    dry = np.argwhere(surface != water_code)
+    if len(dry):
+        z,x = min(dry, key=lambda p:(abs(float(np.linalg.norm(p-target))-distance),int(p[0]),int(p[1])))
+        return int(z),int(x),int(surface_top[z,x]),target_cells
     lowest = np.argwhere(surface_top == surface_top.min())
     z,x = min(lowest, key=lambda p:(abs(float(np.linalg.norm(p-target))-distance),int(p[0]),int(p[1])))
     return int(z),int(x),int(surface_top[z,x]),target_cells
