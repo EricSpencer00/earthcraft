@@ -140,6 +140,20 @@ def archive_receipted(exchange):
     return moved
 
 
+def audited_archive_bytes(exchange, previous):
+    """Reuse the append-only archive total saved by the sole publisher.
+
+    Under the publisher lock only this process moves packets to ``archive``.
+    The persisted total is an exact accounting checkpoint and avoids an
+    O(history) directory stat scan after a supervised restart.  Older state
+    files deliberately fall back to one complete audit before this fast path.
+    """
+    value = previous.get('archive_bytes') if previous else None
+    if type(value) is int and value >= 0:
+        return value
+    return sum(packet.stat().st_size for packet in (exchange/'archive').glob('*.gz'))
+
+
 def initialize(exchange,world,config):
     if exchange.exists() or config.exists():raise FileExistsError('Live binding already exists')
     coverage=json.loads((world/'city-coverage.json').read_text())
@@ -264,6 +278,7 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
     building_requests={}
     priority,priority_record=priority_ranks(priority_manifest,frame)
     state=exchange/'published.json'
+    previous={}
     if state.exists():
         previous=json.loads(state.read_text());seen=set(previous['chunks'])
         complete_regions=dict(previous.get('complete_regions',{}))
@@ -271,10 +286,11 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
     # process moves receipted inbox files into the archive, so exact incremental
     # accounting preserves the one-GiB cap without an O(history) directory scan
     # on every one-second publication poll.
-    archive_bytes=sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))
+    archive_bytes=audited_archive_bytes(exchange,previous)
 
     def save_state():
-        atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,'time':time.time(),
+        atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,
+                                 'archive_bytes':archive_bytes,'time':time.time(),
                                  'priority_manifest':priority_record}).encode())
     # Archived content is bounded to 1 GiB. Originals remain at their immutable source paths.
     while True:
@@ -283,8 +299,11 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                 lock.close();return
             time.sleep(1);continue
         if shutil.disk_usage(ROOT).free<20*2**30:raise RuntimeError('Internal 20 GiB reserve reached')
-        archive_bytes+=archive_receipted(exchange)
+        archived=archive_receipted(exchange)
+        archive_bytes+=archived
         if archive_bytes>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
+        if archived:
+            save_state()
         room=128-len(list((exchange/'inbox').glob('*.gz')))
         # Detail is admitted only from proof-bound requests and takes at most
         # 32 slots; the rest remains available for the northbound base stream.

@@ -10,7 +10,7 @@ import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from live_city import cached_region, completed_geometry_rows, encode_chunk, protected_base_bootstrap, region_fully_published, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
+from live_city import audited_archive_bytes, cached_region, completed_geometry_rows, encode_chunk, protected_base_bootstrap, region_fully_published, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
 from metric_world import packed
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH
 
@@ -133,6 +133,13 @@ class LiveTests(unittest.TestCase):
             self.assertEqual((root/'archive/done.json.gz').read_bytes(),b'done')
             self.assertEqual((root/'inbox/pending.json.gz').read_bytes(),b'pending')
             self.assertFalse((root/'archive/old.json.gz').exists())
+
+    def test_archive_byte_checkpoint_avoids_repeat_history_scan(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);(root/'archive').mkdir()
+            (root/'archive/one.json.gz').write_bytes(b'1234')
+            self.assertEqual(audited_archive_bytes(root,{}),4)
+            self.assertEqual(audited_archive_bytes(root,{'archive_bytes':4}),4)
 
     def test_priority_manifest_is_bound_to_plan_and_keeps_explicit_order(self):
         with tempfile.TemporaryDirectory() as d:
