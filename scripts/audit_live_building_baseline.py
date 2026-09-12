@@ -11,6 +11,8 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import re
+import subprocess
 
 import numpy as np
 
@@ -30,6 +32,41 @@ def encoded_states(packet):
 def packet_identity(packet):
     raw=json.dumps(packet,sort_keys=True,separators=(',',':')).encode()
     return hashlib.sha256(gzip.compress(raw,mtime=0)).hexdigest()
+
+
+def historic_packets(exchange,chunks):
+    """Read archived new-chunk packets for just the requested chunk coordinates.
+
+    A world may already contain a successfully imported packet emitted by an
+    earlier compatible publisher revision.  Its content-addressed identity can
+    differ when harmless provenance or sparse-base policy evolves, so the gate
+    validates its actual expected cells instead of declaring it absent.
+    """
+    keys={f'{x},{z}' for x,z in chunks}
+    if not keys:return {}
+    pattern='"chunk": "(?:'+'|'.join(re.escape(key) for key in sorted(keys))+')"'
+    search=subprocess.run(['rg','-l','--glob','*.json',pattern,str(exchange/'receipts')],
+                          capture_output=True,text=True,check=False)
+    if search.returncode not in (0,1):raise RuntimeError(search.stderr.strip())
+    result={}
+    for raw_path in search.stdout.splitlines():
+        receipt_path=Path(raw_path);receipt=json.loads(receipt_path.read_text())
+        if receipt.get('mode')!='new_chunk' or receipt.get('result')!='applied_in_memory':continue
+        key=receipt.get('chunk')
+        if key not in keys:continue
+        coordinates=tuple(map(int,key.split(',')))
+        identity=receipt.get('patch')
+        if not isinstance(identity,str):continue
+        source=exchange/'archive'/(identity+'.json.gz')
+        if not source.is_file():source=exchange/'inbox'/(identity+'.json.gz')
+        if not source.is_file():continue
+        packet=validate(json.loads(gzip.decompress(source.read_bytes())))
+        if (packet.get('mode')!='new_chunk' or f"{packet['cx']},{packet['cz']}"!=key):continue
+        # Receipts are append-only.  Retain the newest compatible candidate
+        # when a chunk has been safely imported more than once.
+        if coordinates not in result or receipt.get('time','')>result[coordinates][0].get('time',''):
+            result[coordinates]=(receipt,packet)
+    return result
 
 
 def audit(stage,exchange):
@@ -60,9 +97,10 @@ def audit(stage,exchange):
         key=(patch['cx'],patch['cz'])
         if key in patches:raise ValueError('Duplicate staged chunk')
         patches[key]=patch
+    historic=historic_packets(exchange,patches)
     regions={path.name:sha(path) for path in sorted((source/'region').glob('r.*.*.mca'))}
     if source_record.get('regions')!=regions:raise ValueError('Source receipt regions changed')
-    results=[];changed=mismatched=delivered=queued=0
+    results=[];changed=mismatched=delivered=queued=historic_ready=0
     for region_name,region_hash in regions.items():
         chunks=read_region(source/'region'/region_name)
         for key,patch in sorted((key,value) for key,value in patches.items()
@@ -103,8 +141,25 @@ def audit(stage,exchange):
                     state='receipt_not_exact'
             elif inbox_path.is_file():
                 state='queued';queued+=1
+            elif key in historic:
+                receipt,historic_packet=historic[key]
+                historic_names,historic_codes=encoded_states(historic_packet)
+                historic_bad=0
+                for start,count,expected_code,_ in patch['runs']:
+                    observed=np.full(count,'minecraft:air',dtype=object)
+                    sent=historic_codes[start:start+count];present=sent>=0
+                    if present.any():observed[present]=historic_names[sent[present]]
+                    historic_bad+=int((observed!=patch['palette'][expected_code]).sum())
+                provenance=historic_packet.get('provenance',{})
+                if (historic_bad==0 and historic_packet.get('frame')==binding['frame'] and
+                        provenance.get('receipt_sha256')==source_receipt_hash and
+                        provenance.get('region_sha256')==region_hash):
+                    state='historic_compatible';delivered+=1;historic_ready+=1
+                else:
+                    state='historic_not_compatible'
             results.append({'chunk':list(key),'cells':cell_count,'baseline_mismatches':bad,'examples':examples,
-                            'source_region_sha256':region_hash,'base_patch':identity,'base_delivery':state})
+                            'source_region_sha256':region_hash,'base_patch':identity,'base_delivery':state,
+                            'delivered_base_patch':historic[key][0]['patch'] if state=='historic_compatible' else identity})
         if sha(source/'region'/region_name)!=region_hash:raise ValueError('Immutable source changed during audit')
     if len(results)!=len(patches):raise ValueError('Staged patch region was not audited')
     exact=mismatched==0;delivery_complete=delivered==len(results)
@@ -113,6 +168,7 @@ def audit(stage,exchange):
             'cells':changed,'baseline_mismatches':mismatched,'encoding_exact':exact,
             'base_delivery_complete':delivery_complete,'base_chunks_applied':delivered,
             'base_chunks_queued':queued,'base_chunks_missing':len(results)-delivered-queued,
+            'base_chunks_historic_compatible':historic_ready,
             'ready_for_building_delta':exact and delivery_complete,
             'patches':len(results),'llm_used':False,'records':results}
 
