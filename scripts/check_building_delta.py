@@ -11,7 +11,7 @@ import numpy as np
 
 from check_live_import import block_volume
 from city_save_update import read_region
-from live_city import ROOT, publish, sha
+from live_city import ROOT, atomic, publish, sha
 
 
 def await_condition(process,predicate,seconds,label):
@@ -20,6 +20,22 @@ def await_condition(process,predicate,seconds,label):
         if process.poll() is not None:raise RuntimeError('Server exited during '+label)
         if time.monotonic()>deadline:raise TimeoutError(label)
         time.sleep(.1)
+
+
+def stage_patch(source, inbox):
+    """Atomically expose one already-hashed fixture patch to the watched inbox.
+
+    A direct cross-file copy can be observed by Fabric before all bytes land;
+    the importer correctly rejects that truncated read.  The live publisher
+    publishes by write-then-rename, and the native verifier must exercise the
+    same boundary instead of introducing a test-only race.
+    """
+    source, inbox = Path(source), Path(inbox)
+    identity = source.name.removesuffix('.json.gz')
+    if len(identity) != 64 or sha(source) != identity:
+        raise ValueError('Fixture patch does not have a canonical checksum name')
+    raw = source.read_bytes()
+    atomic(inbox / source.name, raw)
 
 
 def check(work,stage=ROOT/'runs/building-delta-district-001'):
@@ -95,7 +111,7 @@ def check(work,stage=ROOT/'runs/building-delta-district-001'):
                 for offset in range(0,len(records),128):
                     batch=records[offset:offset+128]
                     for record in batch:
-                        shutil.copy2(stage/'inbox'/(record['patch']+'.json.gz'),work/'exchange/inbox')
+                        stage_patch(stage/'inbox'/(record['patch']+'.json.gz'),work/'exchange/inbox')
                     await_condition(process,lambda:all((work/'exchange/receipts'/(r['patch']+'.json')).exists() for r in batch),180,'district batch')
                     received=[json.loads((work/'exchange/receipts'/(r['patch']+'.json')).read_text()) for r in batch]
                     for r,receipt in zip(batch,received):

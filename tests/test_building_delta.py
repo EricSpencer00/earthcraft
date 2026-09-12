@@ -1,6 +1,10 @@
 import copy
+import gzip
+import hashlib
+import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 import nbtlib as n
@@ -9,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from building_delta import encode_delta, native_states
 from apply_building_stage_closed import mutate_chunk
 from check_live_import import assert_same_blocks
+from check_building_delta import stage_patch
 from live_city import validate
 from metric_world import packed
 
@@ -21,6 +26,18 @@ def chunk(values):
 
 
 class DeltaTests(unittest.TestCase):
+    def test_native_fixture_staging_is_atomic_and_checksum_bound(self):
+        raw = gzip.compress(b'{"fixture":true}', mtime=0)
+        identity = hashlib.sha256(raw).hexdigest()
+        with TemporaryDirectory() as folder:
+            root = Path(folder); source = root / f'{identity}.json.gz'; source.write_bytes(raw)
+            inbox = root / 'inbox'; inbox.mkdir()
+            stage_patch(source, inbox)
+            self.assertEqual((inbox / source.name).read_bytes(), raw)
+            bad = root / ('0' * 64 + '.json.gz'); bad.write_bytes(raw)
+            with self.assertRaisesRegex(ValueError, 'canonical checksum'):
+                stage_patch(bad, inbox)
+
     def test_exact_additions_recolors_negative_coordinates_and_replay(self):
         before=np.zeros(4096,int);before[1:4]=1;after=before.copy();after[:4]=2
         old,new=chunk(before),chunk(after);delta=encode_delta(old,new,'frame',{})
