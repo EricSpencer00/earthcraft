@@ -24,6 +24,22 @@ def point_provenance_matches(world, declared_hash):
     return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==declared_hash
 
 
+def preview_spawn_safe(volume, support_index, z, x, ids, declared_safe):
+    """Verify the explicit preview-spawn contract for an isolated tile.
+
+    A water-only tile can be valid city geography but has no standalone dry
+    preview spawn.  It remains non-playable on its own; the assembled city
+    supplies the player spawn.  Never silently call that water position safe.
+    """
+    support = volume[support_index,z,x]
+    if declared_safe:
+        assert support not in (ids['air'],ids['water'])
+        assert np.all(volume[support_index+1:support_index+3,z,x] == ids['air'])
+        return True
+    assert support == ids['water']
+    return False
+
+
 def verify(world):
     report=json.loads((world/'earthcraft.json').read_text())
     size=report['source']['size']; h=report['dimension_height']; bottom=report['dimension_min_y']
@@ -35,6 +51,7 @@ def verify(world):
     colors=np.zeros((size,size,3),np.uint8)
     water_mask=np.zeros((size,size),bool)
     seen=set(); ground_checks=0; heightmap_checks=0; spawn_checks=False
+    declared_preview_spawn_safe=bool(report.get('preview_spawn_safe',True))
     point_cells=np.load(world/'point-voxels.npy') if (world/'point-voxels.npy').exists() else None
     point_checks=0
     derived_checks=0
@@ -142,8 +159,8 @@ def verify(world):
             sx,sy,sz=map(math.floor,report['spawn'])
             sx-=ox;sz-=oz
             if sx//16==cx and sz//16==cz:
-                assert volume[sy-bottom-1,sz%16,sx%16] not in (ids['air'],ids['water'])
-                assert np.all(volume[sy-bottom:sy-bottom+2,sz%16,sx%16]==ids['air'])
+                preview_spawn_safe(volume,sy-bottom-1,sz%16,sx%16,ids,
+                                   declared_preview_spawn_safe)
                 spawn_checks=True
     assert len(seen)==(size//16)**2 and spawn_checks
     if building_layer is not None and derived_checks!=style['derived_added_cells']:
@@ -160,7 +177,7 @@ def verify(world):
     np.save(world/'top-heights.npy',tops)
     np.savez_compressed(world/'water-observations.npz',mask=water_mask,top_y=tops)
     result={'native_chunks':len(seen),'ground_support_cells':ground_checks,
-        'heightmap_cells':heightmap_checks,'safe_spawn':spawn_checks,
+        'heightmap_cells':heightmap_checks,'safe_spawn':declared_preview_spawn_safe and spawn_checks,
         'sampled_roof_cells':roof_checks,
         'observed_3d_voxels':point_checks,
         'derived_building_cells':derived_checks,

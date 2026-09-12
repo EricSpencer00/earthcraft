@@ -9,7 +9,7 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from metric_world import check_output_capacity, packed, region_write, select_spawn_cell
-from verify_metric_world import point_provenance_matches
+from verify_metric_world import point_provenance_matches, preview_spawn_safe
 from inspect_world import chunks
 from osm_json_to_kml import convert
 
@@ -84,6 +84,13 @@ class MetricWorldTests(unittest.TestCase):
         surface[1,2]=3
         z,x,top,_=select_spawn_cell(ground,footprint,surface,water)
         self.assertEqual((z,x,top),(1,2,70))
+
+    def test_all_water_preview_spawn_is_explicitly_not_safe(self):
+        volume=np.zeros((5,2,2),np.uint8);ids={'air':0,'water':1}
+        volume[1,0,0]=ids['water']
+        self.assertFalse(preview_spawn_safe(volume,1,0,0,ids,False))
+        with self.assertRaises(AssertionError):
+            preview_spawn_safe(volume,1,0,0,ids,True)
 
 
 if __name__=='__main__':

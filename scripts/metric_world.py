@@ -340,6 +340,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     settings['structure_overrides'] = n.List[n.String]([])
     spawn_z,spawn_x,spawn_top,target_cells = select_spawn_cell(
         ground,footprint_union,surface,BLOCK['water'],buildings,point_cells)
+    preview_spawn_safe = bool(surface[spawn_z,spawn_x] != BLOCK['water'])
     spawn = [spawn_x+.5,spawn_top+1,spawn_z+.5]
     player = d['Player']
     # Face the observed structure from the safe terrain spawn, without moving blocks.
@@ -484,6 +485,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     for (rx,rz),values in records.items():
         region_write(destination/'region'/f'r.{rx}.{rz}.mca',values)
     report={'status':'populated_not_game_verified','source':meta,'chunks':count,'spawn':spawn,
+        'preview_spawn_safe':preview_spawn_safe,
         'storage_strategy':'Two-block topology support slab plus sparse admitted structures; all other subsurface and air cells omitted',
         'geometry_layers':{'topology':'measured ground surface with deterministic support slab',
             'topology_support_depth_blocks':TOPOLOGY_SUPPORT_DEPTH,
@@ -492,7 +494,8 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         'tallest_chunk_height':tallest_chunk_height,'declared_world_height':world_height,
         'world_offset_xz':world_offset,'world_frame':world_frame,
             'observation_coordinate_frame':'tile-local X/Z, shared absolute Minecraft Y',
-            'spawn_rotation':[yaw,0], 'coverage_edge':'Unscanned surroundings are void; use Human at spawn to return.',
+            'spawn_rotation':[yaw,0],
+            'coverage_edge':'Unscanned surroundings are void; use Human at spawn to return.',
         'dem_path':str((source/meta.get('elevation_raster','usgs-elevation.tif')).resolve()),
         'vertical_offset_m':offset,'dimension_min_y':min_y,'dimension_height':world_height,
         'buildings':[{'county_objectid':b['id'],'height_m':b['height'],'base_y':b['low'],'roof_y':b['high'],
