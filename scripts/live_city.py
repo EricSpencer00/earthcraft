@@ -344,6 +344,14 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                 report['dimension_height']!=1024 or report['dimension_min_y']!=-64):raise ValueError('Tile frame mismatch')
             all_done=True
             for name,h in sorted(r['regions'].items()):
+                # A large legacy bootstrap audit can span thousands of
+                # regions.  Re-check the small request directory between
+                # regions so a newly proven façade stage does not wait for
+                # that background audit to finish before it reaches the
+                # dedicated detail admission lane on the next poll.
+                if protected_base_bootstrap_enabled and has_pending_delivery(exchange):
+                    all_done=False
+                    break
                 region=world/'region'/name
                 region_key=str(region)
                 # Even an already-complete region is admitted again on restart so a

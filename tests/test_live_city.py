@@ -223,6 +223,10 @@ class LiveTests(unittest.TestCase):
                 db.execute('CREATE TABLE jobs (tile, evidence, evidence_sha256, stage, state, priority)')
                 db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?)',('tile',str(evidence),sha(evidence),1,'complete',0))
             with patch('live_city.read_region',return_value={(0,0):object()}) as reader, \
+                    patch('building_delivery.has_pending_delivery',return_value=True):
+                feed(exchange,journal,once=True,protected_base_bootstrap_enabled=True)
+                reader.assert_not_called()
+            with patch('live_city.read_region',return_value={(0,0):object()}) as reader, \
                     patch('live_city.encode_chunk',return_value=dict(self.patch(),provenance={'llm_used':False})):
                 feed(exchange,journal,once=True,protected_base_bootstrap_enabled=True)
                 feed(exchange,journal,once=True,protected_base_bootstrap_enabled=True)
