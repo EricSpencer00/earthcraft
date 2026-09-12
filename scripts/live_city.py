@@ -184,6 +184,23 @@ def priority_ranks(path,frame):
     return {tile:index for index,tile in enumerate(tiles)},{'path':str(path.resolve()),'sha256':sha(path)}
 
 
+def completed_geometry_rows(journal):
+    """Read the current immutable geometry receipts without retaining FDs.
+
+    ``sqlite3.Connection``'s context manager commits or rolls back, but does
+    not close the descriptor.  The continuous publisher polls this query once
+    per second, so it must explicitly close every read-only connection instead
+    of eventually exhausting its file-descriptor budget.
+    """
+    db=sqlite3.connect(f'file:{journal}?mode=ro',uri=True)
+    try:
+        return db.execute(
+            "SELECT tile,evidence,evidence_sha256,priority FROM jobs WHERE stage=1 AND state='complete'"
+        ).fetchall()
+    finally:
+        db.close()
+
+
 def publication_world(base_receipt,base_sha,base_record):
     """Prefer a completed optional detail sibling before a tile is published."""
     base_receipt=Path(base_receipt);refinement=base_receipt.parent/'lidar-refinement-receipt.json'
@@ -227,8 +244,7 @@ def feed(exchange,journal,once=False,priority_manifest=None):
         archive_receipted(exchange)
         if sum(p.stat().st_size for p in (exchange/'archive').glob('*.gz'))>2**30:raise RuntimeError('Live archive 1 GiB cap reached')
         room=128-len(list((exchange/'inbox').glob('*.gz')))
-        with sqlite3.connect(f'file:{journal}?mode=ro',uri=True) as db:
-            rows=db.execute("SELECT tile,evidence,evidence_sha256,priority FROM jobs WHERE stage=1 AND state='complete'").fetchall()
+        rows=completed_geometry_rows(journal)
         rows.sort(key=lambda row:(0,priority[row[0]]) if row[0] in priority else (1,row[3],row[0]))
         published=0
         for tile,evidence,expected,_ in rows:

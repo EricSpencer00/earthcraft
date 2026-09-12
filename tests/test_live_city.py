@@ -5,12 +5,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from live_city import cached_region, encode_chunk, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
+from live_city import cached_region, completed_geometry_rows, encode_chunk, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
 from metric_world import packed
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH
 
@@ -54,6 +54,15 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(allowed('minecraft:light_gray_stained_glass','new_chunk'))
         self.assertTrue(allowed('minecraft:iron_block','new_chunk'))
         self.assertFalse(allowed('minecraft:light_gray_stained_glass','pavement'))
+
+    def test_completed_geometry_rows_closes_every_read_connection(self):
+        connection=MagicMock()
+        connection.execute.return_value.fetchall.return_value=[('tile','receipt','hash',0)]
+        with patch('live_city.sqlite3.connect',return_value=connection) as connect:
+            self.assertEqual(completed_geometry_rows('/immutable/jobs.sqlite'),
+                             [('tile','receipt','hash',0)])
+        connect.assert_called_once_with('file:/immutable/jobs.sqlite?mode=ro',uri=True)
+        connection.close.assert_called_once_with()
 
     def test_native_negative_coordinates_and_cell_order(self):
         values=np.zeros(4096,int);values[[0,15,16,256,4095]]=1
