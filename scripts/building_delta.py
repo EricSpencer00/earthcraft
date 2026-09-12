@@ -13,7 +13,7 @@ import numpy as np
 
 from city_save_update import read_region
 from live_city import atomic, encode_chunk, publish, sha, validate
-from verify_metric_world import verify
+from verify_metric_world import unpack, verify
 
 
 def native_states(tag):
@@ -26,24 +26,70 @@ def native_states(tag):
     return palette,values
 
 
+def section_map(tag):
+    """Validate and index the bounded vertical sections of one live chunk."""
+    result = {}
+    for section in tag['sections']:
+        sy = int(section['Y'])
+        if sy in result or not -4 <= sy < 60:
+            raise ValueError('Section height/duplicate')
+        result[sy] = section
+    return result
+
+
+def section_states(section):
+    """Return default-state names and 4,096 palette codes for one section.
+
+    Missing state data has the same all-air meaning as the bounded live codec.
+    Unlike ``native_states``, this does not allocate a 1,024-block-tall chunk
+    volume merely to compare a few changed building sections.
+    """
+    if section is None or 'block_states' not in section:
+        return ('minecraft:air',), np.zeros(4096, np.int16)
+    state = section['block_states']
+    names = []
+    for value in state['palette']:
+        if value.get('Properties'):
+            raise ValueError('Non-default block states not supported by live v1')
+        names.append(str(value['Name']))
+    if not names:
+        raise ValueError('Section has an empty block palette')
+    values = (np.zeros(4096, np.int16) if len(names) == 1 else
+              np.asarray(unpack(state['data'], max(4, (len(names)-1).bit_length()), 4096), np.int16))
+    return tuple(names), values
+
+
 def encode_delta(original,target,frame,provenance,protected_cells=()):
     if any(int(original[k])!=int(target[k]) for k in ('xPos','zPos')):
         raise ValueError('Delta chunk coordinates differ')
-    before_palette,before=native_states(original);after_palette,after=native_states(target)
-    palette=sorted(set(before_palette+after_palette));codes={name:i for i,name in enumerate(palette)}
-    before=np.asarray([codes[s] for s in before_palette],np.int16)[before]
-    after=np.asarray([codes[s] for s in after_palette],np.int16)[after]
-    different=before!=after
     cx,cz=int(original['xPos']),int(original['zPos'])
+    protected=set()
     for x,y,z in protected_cells:
         if x//16==cx and z//16==cz and -64<=y<960:
-            different[(y+64)*256+(z%16)*16+x%16]=False
-    changed=np.flatnonzero(different)
-    if not len(changed):return None
-    if (after[changed]==codes['minecraft:air']).any():raise ValueError('Building update removes source blocks')
-    used=sorted(set(before[changed])|set(after[changed]));remap=np.full(len(palette),-1,int)
-    remap[used]=np.arange(len(used));palette=[palette[i] for i in used]
-    before,after=remap[before[changed]],remap[after[changed]]
+            protected.add((y+64)*256+(z%16)*16+x%16)
+    pieces = []
+    for sy in sorted(set(section_map(original)) | set(section_map(target))):
+        before_names, before_values = section_states(section_map(original).get(sy))
+        after_names, after_values = section_states(section_map(target).get(sy))
+        before = np.asarray(before_names, dtype=object)[before_values]
+        after = np.asarray(after_names, dtype=object)[after_values]
+        changed = np.flatnonzero(before != after)
+        if protected and len(changed):
+            changed = changed[~np.isin(changed + (sy+4)*4096, tuple(protected))]
+        if not len(changed):
+            continue
+        if (after[changed] == 'minecraft:air').any():
+            raise ValueError('Building update removes source blocks')
+        pieces.append((changed + (sy+4)*4096, before[changed], after[changed]))
+    if not pieces:
+        return None
+    changed = np.concatenate([item[0] for item in pieces])
+    before = np.concatenate([item[1] for item in pieces])
+    after = np.concatenate([item[2] for item in pieces])
+    palette = sorted(set(before.tolist()) | set(after.tolist()))
+    codes = {name: index for index, name in enumerate(palette)}
+    before = np.asarray([codes[name] for name in before], np.int16)
+    after = np.asarray([codes[name] for name in after], np.int16)
     breaks=np.r_[0,np.flatnonzero((np.diff(changed)!=1)|(np.diff(before)!=0)|(np.diff(after)!=0))+1,len(changed)]
     runs=[[int(changed[a]),int(b-a),int(before[a]),int(after[a])] for a,b in zip(breaks[:-1],breaks[1:])]
     return validate(dict(version=1,frame=frame,cx=int(original['xPos']),cz=int(original['zPos']),

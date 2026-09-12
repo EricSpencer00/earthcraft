@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 import nbtlib as n
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -38,6 +39,13 @@ class DeltaTests(unittest.TestCase):
         for run in ([0,1,-1,0],[0,1,0,99],[0,1,0,0],[262144,1,0,1]):
             bad=copy.deepcopy(p);bad['runs']=[run];bad['cells']=1
             with self.assertRaises(ValueError):validate(bad)
+
+    def test_delta_compares_changed_sections_without_full_chunk_decoder(self):
+        before=np.zeros(4096,int);after=before.copy();after[7]=2
+        with patch('building_delta.native_states',side_effect=AssertionError('full decoder used')):
+            value=encode_delta(chunk(before),chunk(after),'f',{})
+        self.assertEqual(value['cells'],1)
+        self.assertEqual(value['runs'],[[(4+4)*4096+7,1,0,1]])
 
     def test_conflicting_player_state_is_not_expected_state(self):
         before=np.zeros(4096,int);after=before.copy();after[0]=2
