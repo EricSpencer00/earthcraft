@@ -39,6 +39,7 @@ def verify(world):
     point_checks=0
     derived_checks=0
     building_layer=None
+    building_baseline=None
     if (world/'building-layer.json').exists():
         from building_layer import shell_for_chunk
         style=json.loads((world/'building-layer.json').read_text())
@@ -53,6 +54,13 @@ def verify(world):
             raise ValueError('Building layer grid mismatch')
         if any(building_layer[k].shape!=(size,size) for k in ('geometry_owner','paint_top') if k in building_layer):
             raise ValueError('Building layer appearance/geometry grid mismatch')
+        # Deferred city tiles have no point-voxel observation.  Their styled
+        # candidate is still verifiable: compare the candidate against the
+        # immutable base world recorded by the building-layer receipt.
+        if point_cells is None:
+            building_baseline=Path(style['source_world'])
+            if not (building_baseline/'earthcraft.json').is_file():
+                raise ValueError('Building baseline world is unavailable')
     road_mask=np.load(world/'classified-road-mask.npy') if (world/'classified-road-mask.npy').exists() else None
     road_checks=0
     paint=json.loads((world/'ground-appearance.json').read_text()) if (world/'ground-appearance.json').exists() else None
@@ -66,6 +74,10 @@ def verify(world):
     names=list(rgb); ids={name:i for i,name in enumerate(names)}
     color_table=np.array([rgb[name] for name in names],np.uint8)
     for region in (world/'region').glob('r.*.*.mca'):
+        baseline_tags={}
+        if building_baseline is not None:
+            from city_save_update import read_region
+            baseline_tags=read_region(building_baseline/'region'/region.name)
         for _,tag,_ in chunks(region):
             cx,cz=int(tag['xPos'])-ox//16,int(tag['zPos'])-oz//16
             assert 0<=cx<size//16 and 0<=cz<size//16, 'Chunk outside declared tile'
@@ -88,6 +100,7 @@ def verify(world):
                 assert np.all(volume[yy,zz,xx][roads]==target[roads]), 'Observed pavement material differs'
                 road_checks+=int(roads.sum())
             ground_checks+=256
+            above_ground=np.arange(bottom,bottom+h)[:,None,None]>expected[zs,xs]
             if point_cells is not None:
                 local=point_cells[(point_cells[:,0]//16==cx)&(point_cells[:,2]//16==cz)]
                 expected_structure=np.zeros_like(volume,dtype=bool)
@@ -96,9 +109,29 @@ def verify(world):
                     shell=shell_for_chunk(building_layer,cx,cz,h,bottom,(ox,oz))
                     derived_checks+=int((shell & ~expected_structure).sum())
                     expected_structure|=shell
-                above_ground=np.arange(bottom,bottom+h)[:,None,None]>expected[zs,xs]
                 np.testing.assert_array_equal((volume!=ids['air'])&above_ground,expected_structure)
                 point_checks+=len(local)
+            elif building_layer is not None:
+                # Decode the corresponding base chunk so this check counts
+                # only newly occupied cells and proves that styling did not
+                # remove or invent anything outside the admitted shell.
+                source_tag=baseline_tags.get((int(tag['xPos']),int(tag['zPos'])))
+                if source_tag is None:
+                    raise ValueError('Building baseline chunk is missing')
+                baseline=np.zeros_like(volume)
+                for section in source_tag['sections']:
+                    state=section['block_states'];palette=state['palette']
+                    mapping=np.array([ids[str(p['Name']).removeprefix('minecraft:')] for p in palette],np.uint8)
+                    values=np.full(4096,mapping[0],np.uint8) if len(palette)==1 else mapping[unpack(state['data'],max(4,(len(palette)-1).bit_length()),4096)]
+                    sy=int(section['Y'])*16-bottom
+                    baseline[sy:sy+16]=values.reshape(16,16,16)
+                shell=shell_for_chunk(building_layer,cx,cz,h,bottom,(ox,oz))
+                before=(baseline!=ids['air'])&above_ground
+                after=(volume!=ids['air'])&above_ground
+                np.testing.assert_array_equal(before & ~after,np.zeros_like(before))
+                expected_added=shell & ~before
+                np.testing.assert_array_equal(after & ~before,expected_added)
+                derived_checks+=int(expected_added.sum())
             top=h-np.argmax((volume!=ids['air'])[::-1],axis=0)
             packed=unpack(tag['Heightmaps']['WORLD_SURFACE'],h.bit_length(),256).reshape(16,16)
             np.testing.assert_array_equal(top,packed)
