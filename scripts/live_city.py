@@ -246,6 +246,13 @@ def publication_world(base_receipt,base_sha,base_record):
     return world,record,refinement,refinement_sha,'asynchronous-lidar-refinement'
 
 
+def region_fully_published(chunks, protected, seen, protected_base_bootstrap_enabled):
+    """Whether a verified source region needs no further base publication."""
+    return all(f'{cx},{cz}' in seen or
+               (f'{cx},{cz}' in protected and not protected_base_bootstrap_enabled)
+               for cx,cz in chunks)
+
+
 def feed(exchange,journal,once=False,priority_manifest=None,protected_base_bootstrap_enabled=False):
     lock=(exchange/'publisher.lock').open('a+')
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -312,7 +319,17 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                     if sha(region)!=h:raise ValueError('Verified region changed')
                     checked[region_key]=stamp
                 if checked[region_key]!=stamp:raise ValueError('Immutable region changed since admission')
-                if complete_regions.get(region_key)==h:continue
+                if complete_regions.get(region_key)==h and not protected_base_bootstrap_enabled:
+                    continue
+                if complete_regions.get(region_key)==h:
+                    # Older publisher runs could mark a region complete solely
+                    # because all its chunks were protected and skipped.  When
+                    # the explicit CAS bootstrap lane is enabled, reopen only
+                    # those legacy regions whose source chunks were never sent.
+                    chunks=cached_region(region,h,checked,cache)
+                    if region_fully_published(chunks,protected,seen,protected_base_bootstrap_enabled):
+                        continue
+                    complete_regions.pop(region_key,None)
                 chunks=cached_region(region,h,checked,cache)
                 for (cx,cz),tag in chunks.items():
                     key=f'{cx},{cz}'
@@ -343,9 +360,7 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                     # Publication is content-addressed and idempotent. Commit
                     # progress at the region boundary instead of forcing and
                     # replacing published.json after every individual chunk.
-                if all(f'{cx},{cz}' in seen or
-                       (f'{cx},{cz}' in protected and not protected_base_bootstrap_enabled)
-                       for cx,cz in chunks):
+                if region_fully_published(chunks,protected,seen,protected_base_bootstrap_enabled):
                     complete_regions[region_key]=h;save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)

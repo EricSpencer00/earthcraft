@@ -10,7 +10,7 @@ import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from live_city import cached_region, completed_geometry_rows, encode_chunk, protected_base_bootstrap, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
+from live_city import cached_region, completed_geometry_rows, encode_chunk, protected_base_bootstrap, region_fully_published, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
 from metric_world import packed
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH
 
@@ -105,6 +105,12 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(packet['runs'],[[0,4,0,1]])
         self.assertEqual(packet['provenance']['detail_lane'],'protected_base_bootstrap')
         self.assertTrue(packet['provenance']['player_conflicts_preserved'])
+
+    def test_bootstrap_reopens_legacy_protected_skip_until_sent(self):
+        chunks={(2,3):object()}; protected={'2,3'}
+        self.assertTrue(region_fully_published(chunks,protected,set(),False))
+        self.assertFalse(region_fully_published(chunks,protected,set(),True))
+        self.assertTrue(region_fully_published(chunks,protected,{'2,3'},True))
 
     def test_publication_is_replayable_and_atomic(self):
         with tempfile.TemporaryDirectory() as d:
