@@ -204,6 +204,14 @@ def run(route, stage_root, exchange, report_root, checkpoint, route_label, first
             wait_for_headroom(checkpoint)
             _write_checkpoint(checkpoint, {'state': 'auditing', 'tile': tile, 'completed': completed})
             base_stage = stage_root / tile
+            if not (base_stage / 'manifest.json').is_file():
+                # The frozen route can extend beyond the currently rerun/staged
+                # city subset.  Do not fabricate a candidate or reorder later
+                # available tiles; record the gap and continue deterministically.
+                completed.append({'tile': tile, 'state': 'unstaged_candidate'})
+                _write_checkpoint(checkpoint, {'state': 'skipped_unstaged', 'tile': tile,
+                                               'completed': completed})
+                continue
             stage, baseline = select_stage(base_stage, exchange)
             if baseline.get('ready_for_building_delta') is not True:
                 raise ValueError(f'Filtered stage did not become live-base-ready: {stage}')
