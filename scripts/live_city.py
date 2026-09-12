@@ -273,6 +273,12 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     binding=json.loads((exchange/'binding.json').read_text());protected=set(binding['protected_chunks'])
     frame=binding['frame'];seen=set();checked={};processed=set();cache={};complete_regions={};grounds={}
+    # A protected-bootstrap restart must re-check legacy "complete" regions
+    # once: older state could mean every protected chunk was skipped.  Record
+    # the immutable region hash after that check so the publisher does not
+    # repeatedly decompress the same completed region on every one-second
+    # poll while a live detail request is waiting.
+    bootstrap_verified={}
     # Kept inside the single producer loop.  It memoizes only immutable
     # request validation; every actual patch still passes through the normal
     # content-addressed inbox and importer compare-and-set checks.
@@ -283,6 +289,10 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
     if state.exists():
         previous=json.loads(state.read_text());seen=set(previous['chunks'])
         complete_regions=dict(previous.get('complete_regions',{}))
+        saved_bootstrap=previous.get('protected_bootstrap_verified',{})
+        if isinstance(saved_bootstrap,dict):
+            bootstrap_verified={key:value for key,value in saved_bootstrap.items()
+                                if isinstance(key,str) and isinstance(value,str)}
     # Audit historic content once per publisher process.  After that, only this
     # process moves receipted inbox files into the archive, so exact incremental
     # accounting preserves the one-GiB cap without an O(history) directory scan
@@ -291,10 +301,12 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
 
     def save_state():
         atomic(state,json.dumps({'chunks':sorted(seen),'complete_regions':complete_regions,
+                                 'protected_bootstrap_verified':bootstrap_verified,
                                  'archive_bytes':archive_bytes,'time':time.time(),
                                  'priority_manifest':priority_record}).encode())
     # Archived content is bounded to 1 GiB. Originals remain at their immutable source paths.
     while True:
+        bootstrap_verified_changed=False
         if (exchange/'pause').exists():
             if once:
                 lock.close();return
@@ -348,10 +360,15 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                     # because all its chunks were protected and skipped.  When
                     # the explicit CAS bootstrap lane is enabled, reopen only
                     # those legacy regions whose source chunks were never sent.
+                    if bootstrap_verified.get(region_key)==h:
+                        continue
                     chunks=cached_region(region,h,checked,cache)
                     if region_fully_published(chunks,protected,seen,protected_base_bootstrap_enabled):
+                        if bootstrap_verified.get(region_key)!=h:
+                            bootstrap_verified[region_key]=h;bootstrap_verified_changed=True
                         continue
                     complete_regions.pop(region_key,None)
+                    bootstrap_verified.pop(region_key,None)
                 chunks=cached_region(region,h,checked,cache)
                 for (cx,cz),tag in chunks.items():
                     key=f'{cx},{cz}'
@@ -383,10 +400,14 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
                     # progress at the region boundary instead of forcing and
                     # replacing published.json after every individual chunk.
                 if region_fully_published(chunks,protected,seen,protected_base_bootstrap_enabled):
-                    complete_regions[region_key]=h;save_state()
+                    complete_regions[region_key]=h
+                    if protected_base_bootstrap_enabled:
+                        if bootstrap_verified.get(region_key)!=h:
+                            bootstrap_verified[region_key]=h;bootstrap_verified_changed=True
+                    save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)
-        if published or detail_published:
+        if published or detail_published or bootstrap_verified_changed:
             save_state()
             print(json.dumps({'queued_new_chunks':published,'queued_building_deltas':detail_published,
                               'total_published':len(seen),'time':time.time()}),flush=True)

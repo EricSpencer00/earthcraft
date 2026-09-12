@@ -203,5 +203,32 @@ class LiveTests(unittest.TestCase):
             state=json.loads((exchange/'published.json').read_text())
             self.assertEqual(state['complete_regions'][str(region)],sha(region))
 
+    def test_bootstrap_restart_check_is_persisted_after_protected_region_is_sent(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);exchange=root/'exchange';world=root/'world';region=world/'region'/'r.0.0.mca'
+            for path in (exchange/'inbox',exchange/'receipts',exchange/'archive',region.parent):path.mkdir(parents=True,exist_ok=True)
+            (root/'sources').mkdir()
+            np.savez(root/'sources/rasters.npz',elevation=np.zeros((16,16)))
+            region.write_bytes(b'immutable')
+            frame={'crs':'EPSG:26916','vertical_offset_m':0,'west':100,'north':200}
+            report={'world_offset_xz':[0,0],'source':{'crs':'EPSG:26916','west':100,'north':200,'size':16},
+                    'vertical_offset_m':0,'dimension_height':1024,'dimension_min_y':-64}
+            report_path=world/'earthcraft.json';report_path.write_text(json.dumps(report))
+            receipt={'world_manifest_sha256':sha(report_path),'regions':{region.name:sha(region)}}
+            evidence=root/'evidence.json';evidence.write_text(json.dumps(receipt))
+            (exchange/'binding.json').write_text(json.dumps({'protected_chunks':['0,0'],'frame':frame,'coordinate_frame':frame}))
+            journal=root/'jobs.sqlite'
+            import sqlite3
+            with sqlite3.connect(journal) as db:
+                db.execute('CREATE TABLE jobs (tile, evidence, evidence_sha256, stage, state, priority)')
+                db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?)',('tile',str(evidence),sha(evidence),1,'complete',0))
+            with patch('live_city.read_region',return_value={(0,0):object()}) as reader, \
+                    patch('live_city.encode_chunk',return_value=dict(self.patch(),provenance={'llm_used':False})):
+                feed(exchange,journal,once=True,protected_base_bootstrap_enabled=True)
+                feed(exchange,journal,once=True,protected_base_bootstrap_enabled=True)
+                self.assertEqual(reader.call_count,1)
+            state=json.loads((exchange/'published.json').read_text())
+            self.assertEqual(state['protected_bootstrap_verified'],{str(region):sha(region)})
+
 
 if __name__=='__main__':unittest.main()
