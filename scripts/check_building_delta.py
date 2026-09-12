@@ -38,6 +38,13 @@ def stage_patch(source, inbox):
     atomic(inbox / source.name, raw)
 
 
+def copy_fixture_tree(source, destination):
+    """Copy a world without preserving AppleDouble-generating metadata."""
+    return shutil.copytree(source, destination,
+                           ignore=shutil.ignore_patterns('._*', '.DS_Store'),
+                           copy_function=shutil.copyfile)
+
+
 def check(work,stage=ROOT/'runs/building-delta-district-001'):
     work=Path(work).resolve();stage=Path(stage).resolve()
     manifest=json.loads((stage/'manifest.json').read_text());records=manifest['patches']
@@ -63,13 +70,16 @@ def check(work,stage=ROOT/'runs/building-delta-district-001'):
     # External volumes can contain AppleDouble sidecars (``._*``).  They are
     # Finder metadata, not datapack content; copying them makes Fabric attempt
     # to parse names such as ``._overworld.json`` as a registry definition.
-    shutil.copytree(source,work/'world',ignore=shutil.ignore_patterns('._*','.DS_Store'))
+    # ``copy2`` also preserves xattrs and can *create* fresh sidecars on an
+    # external filesystem, so use byte-only copies for this disposable fixture.
+    copy_fixture_tree(source, work/'world')
     for folder in ('mods','config','exchange/inbox','exchange/receipts','exchange/archive'):
         (work/folder).mkdir(parents=True)
     mod=ROOT/'vendor/live/earthcraft-live-0.1.0.jar'
-    shutil.copy2(mod,work/'mods'/mod.name)
-    shutil.copy2(ROOT/'runtime/traversal/mods/fabric-api-0.138.4+1.21.10.jar',work/'mods')
-    shutil.copy2(ROOT/'vendor/minecraft-server-1.21.10.jar',work/'server.jar')
+    shutil.copyfile(mod,work/'mods'/mod.name)
+    shutil.copyfile(ROOT/'runtime/traversal/mods/fabric-api-0.138.4+1.21.10.jar',
+                    work/'mods'/'fabric-api-0.138.4+1.21.10.jar')
+    shutil.copyfile(ROOT/'vendor/minecraft-server-1.21.10.jar',work/'server.jar')
     (work/'eula.txt').write_text('eula=true\n')
     (work/'server.properties').write_text('server-ip=127.0.0.1\nserver-port=25586\nlevel-name=world\nonline-mode=true\nmax-players=1\nview-distance=2\nsimulation-distance=2\n')
     protected=sorted({f'{probe_chunk[0]},{probe_chunk[1]}',*(f'{x},{z}' for x,z in decoded)})

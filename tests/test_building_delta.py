@@ -3,6 +3,7 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -13,7 +14,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from building_delta import encode_delta, native_states
 from apply_building_stage_closed import mutate_chunk
 from check_live_import import assert_same_blocks
-from check_building_delta import stage_patch
+from check_building_delta import copy_fixture_tree, stage_patch
 from live_city import validate
 from metric_world import packed
 
@@ -26,6 +27,12 @@ def chunk(values):
 
 
 class DeltaTests(unittest.TestCase):
+    def test_external_fixture_copy_is_byte_only_and_filters_appledouble(self):
+        with patch('check_building_delta.shutil.copytree') as copied:
+            copy_fixture_tree(Path('/source'), Path('/destination'))
+        self.assertIs(copied.call_args.kwargs['copy_function'], shutil.copyfile)
+        self.assertIsNotNone(copied.call_args.kwargs['ignore'])
+
     def test_native_fixture_staging_is_atomic_and_checksum_bound(self):
         raw = gzip.compress(b'{"fixture":true}', mtime=0)
         identity = hashlib.sha256(raw).hexdigest()
