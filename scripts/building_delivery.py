@@ -215,6 +215,12 @@ def service_pending_requests(exchange, binding, room, cache):
         stamp = (request_path.stat().st_size, request_path.stat().st_mtime_ns)
         entry = cache.get(str(request_path))
         record_path = _record_path(exchange, request_path)
+        # Completed stages are immutable history.  On a publisher restart,
+        # do not reopen and decode every historic stage before admitting the
+        # first live request; its terminal receipt is already the durable
+        # proof that this publisher lane finished it.
+        if record_path.exists() and _read(record_path).get('state') in TERMINAL_PUBLICATIONS:
+            continue
         if entry is None or entry['stamp'] != stamp:
             try:
                 request, patches = admit_request(request_path, binding)

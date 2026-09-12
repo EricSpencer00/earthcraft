@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
@@ -88,6 +89,17 @@ class BuildingDeliveryTests(unittest.TestCase):
             final = json.loads((exchange / 'building-publications' / request_path.name).read_text())
         self.assertEqual(final['state'], 'complete')
         self.assertEqual(final['written'], 1)
+
+    def test_terminal_history_is_not_revalidated_before_pending_stage(self):
+        with TemporaryDirectory() as folder:
+            exchange, request_path, _ = self.fixture(folder)
+            pending=exchange/'building-requests'/'z-pending.json';request_path.rename(pending)
+            historic=exchange/'building-requests'/'a-history.json';historic.write_text('{}')
+            (exchange/'building-publications'/historic.name).write_text(json.dumps({'state':'complete'}))
+            binding=json.loads((exchange/'binding.json').read_text())
+            with patch('building_delivery.admit_request',wraps=admit_request) as admitted:
+                self.assertEqual(service_pending_requests(exchange,binding,1,{}),1)
+            self.assertEqual([call.args[0] for call in admitted.call_args_list],[pending])
 
     def test_conflicted_receipt_is_preserved_and_labeled(self):
         with TemporaryDirectory() as folder:
