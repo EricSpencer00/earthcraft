@@ -17,6 +17,7 @@ from live_city import atomic, publish, sha, validate
 REQUEST_SCHEMA = 'earthcraft.building-delivery-request-v1'
 TERMINAL_RESULTS = {'applied_in_memory'}
 TERMINAL_PUBLICATIONS = {'complete', 'complete_with_conflicts', 'receipt_requires_attention', 'rejected'}
+PUBLICATION_STATE_CACHE = {}
 
 
 def _read(path):
@@ -163,12 +164,44 @@ def _record_path(exchange, request_path):
     return exchange / 'building-publications' / request_path.name
 
 
+def publication_state(record_path):
+    """Read a publisher-owned terminal state without decoding historic receipts.
+
+    Publication records are atomically written by :func:`_save_record` with
+    sorted root keys, placing ``state`` after the potentially large receipt
+    map.  Inspecting a small tail is sufficient for those records and avoids
+    parsing every historic receipt whenever a live stage is waiting.  A
+    missing, changed, malformed, or unrecognized record deliberately returns
+    ``None`` so it remains pending and receives normal full validation.
+    """
+    record_path = Path(record_path)
+    try:
+        stat = record_path.stat()
+    except OSError:
+        return None
+    stamp = (stat.st_size, stat.st_mtime_ns)
+    key = str(record_path)
+    cached = PUBLICATION_STATE_CACHE.get(key)
+    if cached and cached['stamp'] == stamp:
+        return cached['state']
+    try:
+        with record_path.open('rb') as handle:
+            handle.seek(max(0, stat.st_size - 8192))
+            tail = handle.read()
+    except OSError:
+        return None
+    state = next((value for value in TERMINAL_PUBLICATIONS
+                  if f'"state": "{value}"'.encode() in tail), None)
+    PUBLICATION_STATE_CACHE[key] = {'stamp': stamp, 'state': state}
+    return state
+
+
 def has_pending_delivery(exchange):
     """Whether a proof-bound stage still needs a bounded inbox opportunity."""
     exchange = Path(exchange)
     for request_path in (exchange / 'building-requests').glob('*.json'):
         record_path = _record_path(exchange, request_path)
-        if not record_path.exists() or _read(record_path).get('state') not in TERMINAL_PUBLICATIONS:
+        if publication_state(record_path) not in TERMINAL_PUBLICATIONS:
             return True
     return False
 
@@ -219,7 +252,7 @@ def service_pending_requests(exchange, binding, room, cache):
         # do not reopen and decode every historic stage before admitting the
         # first live request; its terminal receipt is already the durable
         # proof that this publisher lane finished it.
-        if record_path.exists() and _read(record_path).get('state') in TERMINAL_PUBLICATIONS:
+        if publication_state(record_path) in TERMINAL_PUBLICATIONS:
             continue
         if entry is None or entry['stamp'] != stamp:
             try:

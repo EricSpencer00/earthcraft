@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from building_delivery import REQUEST_SCHEMA, admit_request, has_pending_delivery, service_pending_requests
+from building_delivery import REQUEST_SCHEMA, admit_request, has_pending_delivery, publication_state, service_pending_requests
 
 
 def digest(path):
@@ -26,6 +26,16 @@ class BuildingDeliveryTests(unittest.TestCase):
             self.assertFalse(has_pending_delivery(exchange))
             (exchange/'building-publications'/'a.json').write_text(json.dumps({'state':'awaiting_importer'}))
             self.assertTrue(has_pending_delivery(exchange))
+
+    def test_terminal_publication_state_is_cached_from_record_tail(self):
+        with TemporaryDirectory() as folder:
+            record=Path(folder)/'record.json'
+            record.write_text(json.dumps({'receipts':{'large':'x'*20_000},'state':'complete'},sort_keys=True))
+            self.assertEqual(publication_state(record),'complete')
+            with patch('building_delivery.Path.open',side_effect=AssertionError('cache miss')):
+                self.assertEqual(publication_state(record),'complete')
+            record.write_text(json.dumps({'state':'awaiting_importer'},sort_keys=True))
+            self.assertIsNone(publication_state(record))
 
     def fixture(self, folder):
         root = Path(folder)
