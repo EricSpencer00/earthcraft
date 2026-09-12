@@ -24,6 +24,7 @@ BASE=set('stone dirt grass_block sand water snow_block gray_concrete stone_brick
 COLORS=set('white orange magenta light_blue yellow lime pink gray light_gray cyan purple blue brown green red black'.split())
 STAINED_GLASS={f'{c}_stained_glass' for c in COLORS}
 PUBLISH_POLL_SECONDS=1
+DETAIL_INBOX_RESERVE=32
 
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -306,10 +307,12 @@ def feed(exchange,journal,once=False,priority_manifest=None,protected_base_boots
             save_state()
         room=128-len(list((exchange/'inbox').glob('*.gz')))
         # Detail is admitted only from proof-bound requests and takes at most
-        # 32 slots; the rest remains available for the northbound base stream.
-        from building_delivery import service_pending_requests
+        # 32 slots. When detail is pending, retain one future quota instead of
+        # letting the base stream refill all 128 slots before the next tick.
+        from building_delivery import has_pending_delivery, service_pending_requests
+        detail_pending=has_pending_delivery(exchange)
         detail_published=service_pending_requests(exchange,binding,room,building_requests)
-        room-=detail_published
+        room=max(0,room-detail_published-(DETAIL_INBOX_RESERVE if detail_pending else 0))
         rows=completed_geometry_rows(journal)
         rows.sort(key=lambda row:(0,priority[row[0]]) if row[0] in priority else (1,row[3],row[0]))
         published=0

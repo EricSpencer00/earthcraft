@@ -16,6 +16,7 @@ from live_city import atomic, publish, sha, validate
 
 REQUEST_SCHEMA = 'earthcraft.building-delivery-request-v1'
 TERMINAL_RESULTS = {'applied_in_memory'}
+TERMINAL_PUBLICATIONS = {'complete', 'complete_with_conflicts', 'receipt_requires_attention', 'rejected'}
 
 
 def _read(path):
@@ -160,6 +161,16 @@ def admit_request(path, binding):
 
 def _record_path(exchange, request_path):
     return exchange / 'building-publications' / request_path.name
+
+
+def has_pending_delivery(exchange):
+    """Whether a proof-bound stage still needs a bounded inbox opportunity."""
+    exchange = Path(exchange)
+    for request_path in (exchange / 'building-requests').glob('*.json'):
+        record_path = _record_path(exchange, request_path)
+        if not record_path.exists() or _read(record_path).get('state') not in TERMINAL_PUBLICATIONS:
+            return True
+    return False
 
 
 def _save_record(path, request_path, request, patches, completed, queued, status):

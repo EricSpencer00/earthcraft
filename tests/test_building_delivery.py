@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from building_delivery import REQUEST_SCHEMA, admit_request, service_pending_requests
+from building_delivery import REQUEST_SCHEMA, admit_request, has_pending_delivery, service_pending_requests
 
 
 def digest(path):
@@ -16,6 +16,16 @@ def digest(path):
 
 
 class BuildingDeliveryTests(unittest.TestCase):
+    def test_pending_delivery_ignores_terminal_history(self):
+        with TemporaryDirectory() as folder:
+            exchange=Path(folder);(exchange/'building-requests').mkdir();(exchange/'building-publications').mkdir()
+            request=exchange/'building-requests'/'a.json';request.write_text('{}')
+            self.assertTrue(has_pending_delivery(exchange))
+            (exchange/'building-publications'/'a.json').write_text(json.dumps({'state':'complete'}))
+            self.assertFalse(has_pending_delivery(exchange))
+            (exchange/'building-publications'/'a.json').write_text(json.dumps({'state':'awaiting_importer'}))
+            self.assertTrue(has_pending_delivery(exchange))
+
     def fixture(self, folder):
         root = Path(folder)
         exchange = root / 'exchange'
