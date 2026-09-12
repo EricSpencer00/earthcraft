@@ -10,7 +10,7 @@ import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from live_city import cached_region, completed_geometry_rows, encode_chunk, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
+from live_city import cached_region, completed_geometry_rows, encode_chunk, protected_base_bootstrap, validate, publish, digest, allowed, feed, sha, archive_receipted, priority_ranks, publication_world
 from metric_world import packed
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH
 
@@ -96,6 +96,15 @@ class LiveTests(unittest.TestCase):
         self.assertFalse(retained[0])
         self.assertTrue(retained[(79-TOPOLOGY_SUPPORT_DEPTH+1+64)*256])
         self.assertTrue(retained[(80+64)*256])
+
+    def test_protected_base_bootstrap_is_additive_air_cas_only(self):
+        base=self.patch();base['provenance']={'detail_lane':'base','llm_used':False}
+        packet=protected_base_bootstrap(base)
+        self.assertEqual(packet['mode'],'building_delta')
+        self.assertEqual(packet['palette'],['minecraft:air','minecraft:stone'])
+        self.assertEqual(packet['runs'],[[0,4,0,1]])
+        self.assertEqual(packet['provenance']['detail_lane'],'protected_base_bootstrap')
+        self.assertTrue(packet['provenance']['player_conflicts_preserved'])
 
     def test_publication_is_replayable_and_atomic(self):
         with tempfile.TemporaryDirectory() as d:

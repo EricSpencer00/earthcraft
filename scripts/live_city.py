@@ -78,6 +78,26 @@ def encode_chunk(tag,frame,provenance,ground=None):
     return result
 
 
+def protected_base_bootstrap(packet):
+    """Turn a verified sparse new-chunk payload into an additive CAS base.
+
+    Planned city chunks are protected so a normal ``new_chunk`` packet can
+    never replace player state.  Their source topology can still be introduced
+    safely by asking the importer to change only current air to the exact
+    source block.  A non-air player block becomes a conflict, not an overwrite.
+    """
+    packet = validate(dict(packet))
+    if packet['mode'] != 'new_chunk':
+        raise ValueError('Only an encoded source chunk can bootstrap a protected base')
+    result = dict(version=1, frame=packet['frame'], cx=packet['cx'], cz=packet['cz'],
+                  mode='building_delta', palette=['minecraft:air', *packet['palette']],
+                  runs=[[start, count, 0, code + 1] for start, count, code in packet['runs']],
+                  cells=packet['cells'], provenance=dict(packet['provenance'],
+                  detail_lane='protected_base_bootstrap', expected_current='minecraft:air',
+                  player_conflicts_preserved=True))
+    return validate(result)
+
+
 def validate(p):
     if p['version']!=1 or p['mode'] not in ('new_chunk','pavement','building_delta'):raise ValueError('Version/mode')
     if len(p['palette'])>64 or not all(allowed(s,p['mode']) for s in p['palette']):raise ValueError('Palette')
@@ -226,7 +246,7 @@ def publication_world(base_receipt,base_sha,base_record):
     return world,record,refinement,refinement_sha,'asynchronous-lidar-refinement'
 
 
-def feed(exchange,journal,once=False,priority_manifest=None):
+def feed(exchange,journal,once=False,priority_manifest=None,protected_base_bootstrap_enabled=False):
     lock=(exchange/'publisher.lock').open('a+')
     fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     binding=json.loads((exchange/'binding.json').read_text());protected=set(binding['protected_chunks'])
@@ -296,7 +316,8 @@ def feed(exchange,journal,once=False,priority_manifest=None):
                 chunks=cached_region(region,h,checked,cache)
                 for (cx,cz),tag in chunks.items():
                     key=f'{cx},{cz}'
-                    if key in protected or key in seen:continue
+                    if key in seen:continue
+                    if key in protected and not protected_base_bootstrap_enabled:continue
                     if room<=0:all_done=False;break
                     if tile not in grounds:
                         source_grid=path.parent/'sources/rasters.npz'
@@ -311,16 +332,20 @@ def feed(exchange,journal,once=False,priority_manifest=None):
                     chunk_ground=ground[local_z:local_z+16,local_x:local_x+16]
                     if chunk_ground.shape!=(16,16):raise ValueError('Chunk outside exact topology grid')
                     p=encode_chunk(tag,frame,{'tile':tile,'receipt':str(source_receipt),
-                                            'receipt_sha256':source_receipt_sha,
-                                            'base_receipt':str(path),'base_receipt_sha256':expected,
-                                            'detail_lane':detail_lane,'region_sha256':h,
-                                            'physical_accuracy_verified':False,'llm_used':False},
+                                   'receipt_sha256':source_receipt_sha,
+                                   'base_receipt':str(path),'base_receipt_sha256':expected,
+                                   'detail_lane':detail_lane,'region_sha256':h,
+                                   'physical_accuracy_verified':False,'llm_used':False},
                                    ground=chunk_ground)
+                    if key in protected:
+                        p=protected_base_bootstrap(p)
                     publish(exchange,p);seen.add(key);room-=1;published+=1
                     # Publication is content-addressed and idempotent. Commit
                     # progress at the region boundary instead of forcing and
                     # replacing published.json after every individual chunk.
-                if all(f'{cx},{cz}' in protected or f'{cx},{cz}' in seen for cx,cz in chunks):
+                if all(f'{cx},{cz}' in seen or
+                       (f'{cx},{cz}' in protected and not protected_base_bootstrap_enabled)
+                       for cx,cz in chunks):
                     complete_regions[region_key]=h;save_state()
                 if room<=0:all_done=False;break
             if all_done:processed.add(tile)
@@ -339,6 +364,8 @@ def main():
     p.add_argument('--paint',type=Path);p.add_argument('--once',action='store_true')
     p.add_argument('--priority-manifest',type=Path,
                    help='Frozen no-inference tile order, such as a named-road corridor')
+    p.add_argument('--protected-base-bootstrap',action='store_true',
+                   help='Add verified sparse source blocks to protected chunks only via air-to-block CAS')
     p.add_argument('--journal',type=Path,default=ROOT/'runs/chicago-adaptation-city-001/jobs.sqlite')
     a=p.parse_args()
     if a.initialize:print(json.dumps(initialize(a.exchange,a.initialize,a.config),indent=2));return
@@ -346,7 +373,7 @@ def main():
         frame=json.loads((a.exchange/'binding.json').read_text())['frame']
         for patch in paint_patches(a.paint,frame):print(publish(a.exchange,patch))
         return
-    feed(a.exchange,a.journal,a.once,a.priority_manifest)
+    feed(a.exchange,a.journal,a.once,a.priority_manifest,a.protected_base_bootstrap)
 
 
 if __name__=='__main__':main()

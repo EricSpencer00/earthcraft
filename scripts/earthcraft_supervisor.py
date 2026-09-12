@@ -87,7 +87,7 @@ def command_environment(bulk_root):
 def start_publisher(env, log_path):
     command = [sys.executable, str(ROOT / 'scripts/live_city.py'), str(EXCHANGE),
                '--journal', str(PLAN / 'jobs.sqlite'),
-               '--priority-manifest', str(PRIORITY)]
+               '--priority-manifest', str(PRIORITY), '--protected-base-bootstrap']
     handle = log_path.open('a', buffering=1)
     process = subprocess.Popen(command, cwd=ROOT, env=env,
                                stdout=handle, stderr=subprocess.STDOUT,

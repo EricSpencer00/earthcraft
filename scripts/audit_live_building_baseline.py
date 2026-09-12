@@ -17,7 +17,7 @@ import subprocess
 import numpy as np
 
 from city_save_update import read_region
-from live_city import ROOT, encode_chunk, sha, validate
+from live_city import ROOT, encode_chunk, protected_base_bootstrap, sha, validate
 
 
 def encoded_states(packet):
@@ -100,7 +100,7 @@ def audit(stage,exchange):
     historic=historic_packets(exchange,patches)
     regions={path.name:sha(path) for path in sorted((source/'region').glob('r.*.*.mca'))}
     if source_record.get('regions')!=regions:raise ValueError('Source receipt regions changed')
-    results=[];changed=mismatched=delivered=queued=historic_ready=0
+    results=[];changed=mismatched=delivered=queued=historic_ready=bootstrap_ready=0
     for region_name,region_hash in regions.items():
         chunks=read_region(source/'region'/region_name)
         for key,patch in sorted((key,value) for key,value in patches.items()
@@ -131,6 +131,9 @@ def audit(stage,exchange):
             changed+=cell_count;mismatched+=bad
             identity=packet_identity(packet);receipt_path=exchange/'receipts'/(identity+'.json')
             inbox_path=exchange/'inbox'/(identity+'.json.gz')
+            bootstrap=protected_base_bootstrap(packet);bootstrap_identity=packet_identity(bootstrap)
+            bootstrap_receipt_path=exchange/'receipts'/(bootstrap_identity+'.json')
+            bootstrap_inbox_path=exchange/'inbox'/(bootstrap_identity+'.json.gz')
             state='missing'
             if receipt_path.is_file():
                 receipt=json.loads(receipt_path.read_text())
@@ -139,8 +142,18 @@ def audit(stage,exchange):
                     state='applied';delivered+=1
                 else:
                     state='receipt_not_exact'
+            elif bootstrap_receipt_path.is_file():
+                receipt=json.loads(bootstrap_receipt_path.read_text())
+                if (receipt.get('mode')=='building_delta' and receipt.get('chunk')==f'{key[0]},{key[1]}' and
+                        receipt.get('result')=='applied_in_memory' and receipt.get('written')==bootstrap['cells'] and
+                        receipt.get('conflicts',0)==0 and receipt.get('already_target',0)==0):
+                    state='protected_bootstrap_applied';delivered+=1;bootstrap_ready+=1
+                else:
+                    state='protected_bootstrap_not_exact'
             elif inbox_path.is_file():
                 state='queued';queued+=1
+            elif bootstrap_inbox_path.is_file():
+                state='protected_bootstrap_queued';queued+=1
             elif key in historic:
                 receipt,historic_packet=historic[key]
                 historic_names,historic_codes=encoded_states(historic_packet)
@@ -159,7 +172,9 @@ def audit(stage,exchange):
                     state='historic_not_compatible'
             results.append({'chunk':list(key),'cells':cell_count,'baseline_mismatches':bad,'examples':examples,
                             'source_region_sha256':region_hash,'base_patch':identity,'base_delivery':state,
-                            'delivered_base_patch':historic[key][0]['patch'] if state=='historic_compatible' else identity})
+                            'bootstrap_base_patch':bootstrap_identity,
+                            'delivered_base_patch':historic[key][0]['patch'] if state=='historic_compatible' else
+                            (bootstrap_identity if state=='protected_bootstrap_applied' else identity)})
         if sha(source/'region'/region_name)!=region_hash:raise ValueError('Immutable source changed during audit')
     if len(results)!=len(patches):raise ValueError('Staged patch region was not audited')
     exact=mismatched==0;delivery_complete=delivered==len(results)
@@ -169,6 +184,7 @@ def audit(stage,exchange):
             'base_delivery_complete':delivery_complete,'base_chunks_applied':delivered,
             'base_chunks_queued':queued,'base_chunks_missing':len(results)-delivered-queued,
             'base_chunks_historic_compatible':historic_ready,
+            'base_chunks_protected_bootstrapped':bootstrap_ready,
             'ready_for_building_delta':exact and delivery_complete,
             'patches':len(results),'llm_used':False,'records':results}
 
