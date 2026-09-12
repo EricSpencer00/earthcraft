@@ -71,6 +71,35 @@ class BuildingDeltaBatchTests(unittest.TestCase):
             result = stage_batch(completed, binding, output, fake_stage, resume=True)
             self.assertEqual(result['tiles_staged'], 1)
 
+    def test_resume_recovers_completed_child_not_yet_in_parent_progress(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); source = root / 'source' / 'world'; candidate = root / 'candidates' / 'tile' / 'world'
+            (source / 'region').mkdir(parents=True); (candidate / 'region').mkdir(parents=True)
+            (source / 'earthcraft.json').write_text('{}'); (candidate / 'earthcraft.json').write_text('{}')
+            (candidate / 'building-layer.json').write_text('{}'); (candidate / 'region' / 'r.0.0.mca').write_bytes(b'candidate')
+            record = {'tile': 'tile', 'base_world': str(source), 'candidate_world': str(candidate)}
+            receipt = {'schema': 'building-rerun-receipt-v1', 'result': 'pass', 'llm_used': False,
+                'installed': False, 'baseline': record, 'candidate_world': str(candidate),
+                'candidate_manifest_sha256': digest(candidate / 'building-layer.json'),
+                'candidate_region_sha256': {'r.0.0.mca': digest(candidate / 'region' / 'r.0.0.mca')}}
+            (candidate.parent / 'building-rerun-receipt.json').write_text(json.dumps(receipt))
+            rerun = root / 'rerun'; rerun.mkdir(); completed = rerun / 'manifest.completed.json'
+            completed.write_text(json.dumps({'schema': 'building-rerun-manifest-v1', 'state': 'complete',
+                'llm_used': False, 'installed': False, 'tiles': [record], 'completed_tiles': 1, 'output_root': str(rerun)}))
+            binding = root / 'binding.json'; binding.write_text(json.dumps({'frame': 'frame'})); output = root / 'stages'; output.mkdir()
+            tile_output = output / 'tile'; tile_output.mkdir()
+            (tile_output / 'manifest.json').write_text(json.dumps({'schema': 'building-delta-stage-v1', 'frame': 'frame',
+                'source_world': str(source.resolve()), 'candidate_world': str(candidate.resolve()),
+                'candidate_manifest_sha256': receipt['candidate_manifest_sha256'], 'patches': [],
+                'changed_cells': 0, 'installed': False, 'llm_used': False}))
+            progress = {'schema': 'building-delta-batch-v1', 'state': 'staging',
+                'source_manifest': str(completed.resolve()), 'source_manifest_sha256': digest(completed),
+                'binding': str(binding.resolve()), 'binding_sha256': digest(binding), 'tiles_total': 1,
+                'tiles_staged': 0, 'records': [], 'installed': False, 'llm_used': False}
+            (output / 'progress.json').write_text(json.dumps(progress))
+            result = stage_batch(completed, binding, output, resume=True)
+            self.assertEqual(result['tiles_staged'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

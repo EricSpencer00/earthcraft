@@ -75,6 +75,35 @@ def progress_record(rerun_manifest_path, binding_path, records, staged, state='s
     }
 
 
+def recover_stage(record, binding_path, tile_output):
+    """Adopt a complete child stage whose worker finished before its parent died."""
+    original, candidate, receipt_path, receipt = check_candidate(record)
+    stage_manifest_path = tile_output / 'manifest.json'
+    if not stage_manifest_path.is_file():
+        raise ValueError(f"{record['tile']}: incomplete stage directory requires explicit cleanup")
+    stage_manifest = json.loads(stage_manifest_path.read_text())
+    binding = json.loads(Path(binding_path).read_text())
+    if (stage_manifest.get('schema') != 'building-delta-stage-v1' or
+            stage_manifest.get('frame') != binding.get('frame') or
+            stage_manifest.get('llm_used') is not False or stage_manifest.get('installed') is not False or
+            Path(stage_manifest.get('source_world', '')).resolve() != original or
+            Path(stage_manifest.get('candidate_world', '')).resolve() != candidate or
+            stage_manifest.get('candidate_manifest_sha256') != receipt['candidate_manifest_sha256'] or
+            not isinstance(stage_manifest.get('patches'), list) or
+            type(stage_manifest.get('changed_cells')) is not int):
+        raise ValueError(f"{record['tile']}: orphan stage does not match its receipt or live binding")
+    return {
+        'tile': record['tile'],
+        'candidate_receipt': str(receipt_path),
+        'candidate_receipt_sha256': sha(receipt_path),
+        'candidate_manifest_sha256': receipt['candidate_manifest_sha256'],
+        'stage': str(tile_output.resolve()),
+        'stage_manifest_sha256': sha(stage_manifest_path),
+        'patches': len(stage_manifest['patches']),
+        'changed_cells': stage_manifest['changed_cells'],
+    }
+
+
 def existing_stages(output, rerun_manifest_path, binding_path, records):
     progress_path = output / 'progress.json'
     if not progress_path.is_file():
@@ -97,7 +126,13 @@ def existing_stages(output, rerun_manifest_path, binding_path, records):
         if (not stage_manifest.is_file() or sha(stage_manifest) != record['stage_manifest_sha256'] or
                 not receipt.is_file() or sha(receipt) != record['candidate_receipt_sha256']):
             raise ValueError(f"{record['tile']}: completed stage changed")
-    return [known[record['tile']] for record in records if record['tile'] in known]
+    staged = []
+    for record in records:
+        if record['tile'] in known:
+            staged.append(known[record['tile']])
+        elif (output / record['tile']).exists():
+            staged.append(recover_stage(record, binding_path, output / record['tile']))
+    return staged
 
 
 def stage_batch(manifest_path, binding_path, output, stage_one=stage, workers=1, resume=False):
@@ -128,6 +163,7 @@ def stage_batch(manifest_path, binding_path, output, stage_one=stage, workers=1,
         if partial.exists():
             raise ValueError(f"{record['tile']}: incomplete stage directory requires explicit cleanup")
     progress = progress_record(rerun_manifest_path, binding_path, records, staged)
+    atomic(output / 'progress.json', json.dumps(progress, indent=2).encode())
 
     def append(value):
         nonlocal progress
