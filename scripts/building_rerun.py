@@ -7,7 +7,7 @@ candidates to a new output tree.  A later building-delta stage can compare the
 candidate against the recorded baseline without rewriting an open save.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
@@ -176,56 +176,79 @@ def load_and_check(manifest, root):
         raise ValueError('City plan changed since manifest creation')
 
 
-def build(manifest, root):
+def build_record(record, manifest):
+    """Compile one independently verified tile candidate.
+
+    Records have disjoint destinations and re-validate all frozen input hashes,
+    so a bounded process pool can accelerate city-scale detail generation
+    without sharing mutable geometry or a Minecraft save.
+    """
+    source_root = Path(record['source_root'])
+    base_world = Path(record['base_world'])
+    sources = Path(record['sources'])
+    if sha(base_world / 'earthcraft.json') != record['base_world_manifest_sha256']:
+        raise ValueError(f"{record['tile']}: base world changed after selection")
+    if sha(sources / 'sources.json') != record['source_manifest_sha256']:
+        raise ValueError(f"{record['tile']}: source manifest changed after selection")
+    if source_hashes(sources) != record['source_file_sha256']:
+        raise ValueError(f"{record['tile']}: source files changed after selection")
+    if region_hashes(base_world) != record['base_region_sha256']:
+        raise ValueError(f"{record['tile']}: base regions changed after selection")
+    receipt_path = source_root / 'geometry-receipt.json'
+    if sha(receipt_path) != record['geometry_receipt_sha256']:
+        raise ValueError(f"{record['tile']}: geometry receipt changed after selection")
+    destination = Path(record['candidate_world'])
+    if destination.exists():
+        raise FileExistsError(f'{record["tile"]}: refusing to overwrite {destination}')
+    started = time.monotonic()
+    compile_layer(base_world, sources, destination)
+    checks = verify(destination)
+    layer = json.loads((destination / 'building-layer.json').read_text())
+    if layer.get('llm_used') is not False or layer.get('source_world') != str(base_world):
+        raise ValueError(f"{record['tile']}: candidate provenance is invalid")
+    receipt = {
+        'schema': 'building-rerun-receipt-v1',
+        'tile': record['tile'],
+        'result': 'pass',
+        'code_revision': manifest['code_revision'],
+        'code_files_sha256': manifest['code_files_sha256'],
+        'baseline': record,
+        'candidate_world': str(destination),
+        'candidate_manifest_sha256': sha(destination / 'building-layer.json'),
+        'candidate_region_sha256': region_hashes(destination),
+        'checks': checks,
+        'building_count': len(layer.get('buildings', [])),
+        'derived_cells': checks.get('derived_building_cells', 0),
+        'appearance_cells': layer.get('appearance_cells', 0),
+        'llm_used': False,
+        'installed': False,
+        'seconds': time.monotonic() - started,
+    }
+    write_json(destination.parent / 'building-rerun-receipt.json', receipt)
+    return receipt
+
+
+def build(manifest, root, workers=1):
     load_and_check(manifest, root)
+    if not 1 <= workers <= 8:
+        raise ValueError('Building rerun workers must be between one and eight')
     output_root = Path(manifest['output_root'])
+    if workers == 1:
+        results = map(lambda record: build_record(record, manifest), manifest['tiles'])
+    else:
+        # Process isolation avoids a shared Python heap while allowing NumPy,
+        # NBT serialization and compression to use more than one CPU core.
+        pool = ProcessPoolExecutor(max_workers=workers)
+        results = pool.map(build_record, manifest['tiles'], (manifest for _ in manifest['tiles']))
     receipts = []
-    for index, record in enumerate(manifest['tiles'], 1):
-        source_root = Path(record['source_root'])
-        base_world = Path(record['base_world'])
-        sources = Path(record['sources'])
-        if sha(base_world / 'earthcraft.json') != record['base_world_manifest_sha256']:
-            raise ValueError(f"{record['tile']}: base world changed after selection")
-        if sha(sources / 'sources.json') != record['source_manifest_sha256']:
-            raise ValueError(f"{record['tile']}: source manifest changed after selection")
-        if source_hashes(sources) != record['source_file_sha256']:
-            raise ValueError(f"{record['tile']}: source files changed after selection")
-        if region_hashes(base_world) != record['base_region_sha256']:
-            raise ValueError(f"{record['tile']}: base regions changed after selection")
-        receipt_path = source_root / 'geometry-receipt.json'
-        if sha(receipt_path) != record['geometry_receipt_sha256']:
-            raise ValueError(f"{record['tile']}: geometry receipt changed after selection")
-        destination = Path(record['candidate_world'])
-        if destination.exists():
-            raise FileExistsError(f'{record["tile"]}: refusing to overwrite {destination}')
-        started = time.monotonic()
-        compile_layer(base_world, sources, destination)
-        checks = verify(destination)
-        layer = json.loads((destination / 'building-layer.json').read_text())
-        if layer.get('llm_used') is not False or layer.get('source_world') != str(base_world):
-            raise ValueError(f"{record['tile']}: candidate provenance is invalid")
-        receipt = {
-            'schema': 'building-rerun-receipt-v1',
-            'tile': record['tile'],
-            'result': 'pass',
-            'code_revision': manifest['code_revision'],
-            'code_files_sha256': manifest['code_files_sha256'],
-            'baseline': record,
-            'candidate_world': str(destination),
-            'candidate_manifest_sha256': sha(destination / 'building-layer.json'),
-            'candidate_region_sha256': region_hashes(destination),
-            'checks': checks,
-            'building_count': len(layer.get('buildings', [])),
-            'derived_cells': checks.get('derived_building_cells', 0),
-            'appearance_cells': layer.get('appearance_cells', 0),
-            'llm_used': False,
-            'installed': False,
-            'seconds': time.monotonic() - started,
-        }
-        write_json(destination.parent / 'building-rerun-receipt.json', receipt)
-        receipts.append(receipt)
-        print(f"BUILDING {index}/{len(manifest['tiles'])} {record['tile']} "
-              f"buildings={receipt['building_count']} derived={receipt['derived_cells']}", flush=True)
+    try:
+        for index, receipt in enumerate(results, 1):
+            receipts.append(receipt)
+            print(f"BUILDING {index}/{len(manifest['tiles'])} {receipt['tile']} "
+                  f"buildings={receipt['building_count']} derived={receipt['derived_cells']}", flush=True)
+    finally:
+        if workers != 1:
+            pool.shutdown(wait=True, cancel_futures=True)
     result = dict(manifest)
     result['state'] = 'complete'
     result['completed_tiles'] = len(receipts)
@@ -248,6 +271,8 @@ def parser():
     p.add_argument('--max-tx', type=int, required=True)
     p.add_argument('--min-tz', type=int, required=True)
     p.add_argument('--max-tz', type=int, required=True)
+    p.add_argument('--workers', type=int, default=1,
+                   help='Independent verified candidate processes for --build (1-8; default: 1)')
     p.add_argument('--select', action='store_true', help='Write a fresh immutable tile manifest')
     p.add_argument('--build', action='store_true', help='Build candidates from an existing manifest')
     return p
@@ -277,7 +302,7 @@ def main():
     else:
         if not Path(manifest_path).is_file():
             raise SystemExit(f'Manifest not found: {manifest_path}')
-        result = build(json.loads(Path(manifest_path).read_text()), args.root.resolve())
+        result = build(json.loads(Path(manifest_path).read_text()), args.root.resolve(), args.workers)
         print(json.dumps({
             'state': result['state'], 'output': result['output_root'],
             'tiles': result['completed_tiles'], 'buildings': result['completed_buildings'],
