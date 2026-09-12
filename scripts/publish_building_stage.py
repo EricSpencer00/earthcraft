@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import time
 
+from audit_live_building_baseline import audit as audit_live_baseline
 from live_city import ROOT, archive_receipted, atomic, publish, sha, validate
 
 
@@ -20,6 +21,9 @@ def run(stage,exchange,timeout=240):
     manifest=json.loads((stage/'manifest.json').read_text());binding=json.loads((exchange/'binding.json').read_text())
     if manifest['schema']!='building-delta-stage-v1' or manifest['frame']!=binding['frame'] or manifest['llm_used'] is not False:
         raise ValueError('Wrong staged update or coordinate frame')
+    baseline=audit_live_baseline(stage,exchange)
+    if not baseline['ready_for_building_delta']:
+        raise ValueError('Exact live base is not fully applied for this building stage')
     if sha(Path(manifest['candidate_world'])/'building-layer.json')!=manifest['candidate_manifest_sha256']:
         raise ValueError('Staged building candidate changed')
     patches={}
@@ -56,6 +60,8 @@ def run(stage,exchange,timeout=240):
                     'written':sum(r['written'] for r in completed.values()),
                     'conflicts_preserved':sum(r.get('conflicts',0) for r in completed.values()),
                     'already_target':sum(r.get('already_target',0) for r in completed.values()),
+                    'live_baseline':{key:baseline[key] for key in ('encoding_exact','base_delivery_complete',
+                        'base_chunks_applied','base_chunks_queued','base_chunks_missing')},
                     'saved_and_reloaded_verified':False,'receipts':list(completed)}
             atomic(stage/'live-publication.json',json.dumps(result,indent=2).encode())
             if len(completed)==len(patches):return result
