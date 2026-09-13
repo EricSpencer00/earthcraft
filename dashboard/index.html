@@ -3,36 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Earthcraft · Chunk ledger</title>
+  <title>Earthcraft · Chicago progress</title>
   <link rel="stylesheet" href="./style.css">
-  <script src="./app.js?v=chicago-atlas-5" defer></script>
+  <script src="./app.js?v=chicago-atlas-6" defer></script>
 </head>
 <body>
   <header>
-    <a href="./" class="brand">earthcraft<span>CHUNK LEDGER / 01</span></a>
-    <div id="connection" role="status">Reading the latest progress…</div>
+    <a href="./" class="brand">earthcraft<span>CHICAGO ATLAS</span></a>
+    <div id="connection" role="status">Loading published progress…</div>
   </header>
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">EARTHCRAFT / CHICAGO EXTENT</p>
-        <h1>Chicago, built and playable.</h1>
-        <p>Playable shows exactly what Minecraft has accepted. Build pipeline shows work on disk. The two views never imply that generated tiles are already in the game.</p>
+        <p class="eyebrow">EARTHCRAFT / CHICAGO</p>
+        <h1>Chicago, tile by tile.</h1>
+        <p>A live record of source intake, geometry, surface work, and Minecraft imports.</p>
       </div>
-      <div class="scope-note"><span>Current area</span><strong id="grid-size">Waiting</strong><small id="grid-count">No chunk atlas yet.</small></div>
+      <div class="scope-note"><span>Current view</span><strong id="grid-size">Loading</strong><small id="grid-count">Preparing the Chicago atlas.</small></div>
     </section>
     <div class="toolbar">
       <div><strong id="phase">Reading progress…</strong><span id="updated"></span></div>
-      <div class="actions"><label>View <select id="area"><option value="live">Playable in Minecraft now</option><option value="queue">Full Chicago build pipeline</option><option value="installed">Original installed footprint</option></select></label><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
+      <div class="actions"><label>View <select id="area"><option value="live">Playable in Minecraft</option><option value="queue">Chicago build pipeline</option><option value="installed">Installed footprint</option><option value="published">Published Chicago progress</option></select></label><label><input type="checkbox" id="auto" checked> Live updates</label><button id="refresh">Refresh</button></div>
     </div>
     <div id="warning" role="status" hidden></div>
     <div class="workspace">
       <section class="atlas">
-        <div class="maphead"><div><p class="eyebrow" id="map-unit">16 × 16 BLOCK CHUNKS</p><h2 id="map-title">Playable in Minecraft now</h2></div><span id="map-updated" class="map-updated"></span></div>
-        <div class="mapwrap"><canvas id="map" role="img" aria-label="Chunk status map"></canvas><div class="mapnote" id="mapnote">Waiting for the first chunk atlas</div></div>
-        <div class="legend" aria-label="Map status legend"><span id="legend-outside"><i class="outside"></i><span id="legend-outside-label">Not playable yet</span></span><span id="legend-queued"><i class="nothing"></i>White · queued</span><span id="legend-source"><i class="source"></i>Gray · source data in</span><span id="legend-finished"><i class="finished"></i><span id="legend-finished-label">Green · playable now</span></span><span id="legend-installed"><i class="installed"></i>Amber · original install</span></div>
-        <p class="caption" id="map-caption">The Water Tower marks the coordinate origin. Green chunks are present in the running Minecraft world.</p>
-        <p id="cell" aria-live="polite">Move over the atlas to inspect a tile.</p>
+        <div class="maphead"><div><p class="eyebrow" id="map-unit">16 × 16 BLOCK CHUNKS</p><h2 id="map-title">Playable in Minecraft</h2></div><span id="map-updated" class="map-updated"></span></div>
+        <div class="mapwrap"><canvas id="map" role="img" aria-label="Chicago progress map"></canvas><div class="mapnote" id="mapnote">Loading the Chicago atlas.</div></div>
+        <div class="legend" aria-label="Map status legend"><span id="legend-outside"><i class="outside"></i><span id="legend-outside-label">Outside the selected area</span></span><span id="legend-queued"><i class="nothing"></i><span id="legend-queued-label">Queued</span></span><span id="legend-source"><i class="source"></i><span id="legend-source-label">Source ready</span></span><span id="legend-finished"><i class="finished"></i><span id="legend-finished-label">Building layer ready</span></span><span id="legend-running" hidden><i class="running"></i><span id="legend-running-label">In progress</span></span><span id="legend-failed" hidden><i class="failed"></i><span id="legend-failed-label">Needs review</span></span><span id="legend-installed"><i class="installed"></i>Installed footprint</span></div>
+        <p class="caption" id="map-caption">The Water Tower marks the coordinate origin.</p>
+        <p id="cell" aria-live="polite">Move over the atlas to inspect a cell.</p>
         <p id="map-summary" class="sr-only"></p>
       </section>
       <aside>
@@ -46,11 +46,11 @@
           <div><dt>Worker leases</dt><dd id="leases">Pending</dd></div>
         </dl>
         <p id="recovery" class="note"></p>
-        <p class="note">Playable coverage comes from exact in-game import receipts. Build progress is tracked separately.</p>
+        <p class="note">Minecraft imports and build stages are shown as separate map views.</p>
         <details><summary>Local activity</summary><pre id="log">No local run connected.</pre></details>
       </aside>
     </div>
   </main>
-  <footer>EARTHCRAFT / CHUNK STATUS<span id="footer-state">Awaiting first observation</span></footer>
+  <footer>EARTHCRAFT / CHICAGO PROGRESS<span id="footer-state">Loading the latest observation</span></footer>
 </body>
 </html>
