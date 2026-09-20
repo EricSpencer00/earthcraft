@@ -1,4 +1,5 @@
 import json
+import copy
 from pathlib import Path
 import sqlite3
 import sys
@@ -8,6 +9,37 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from progress_snapshot import build_snapshot
+
+
+def public_cell_snapshot():
+    return {
+        'schema_version': 1,
+        'updated_utc': '2026-01-01T00:00:00+00:00',
+        'scope': {'id': 'earth', 'coverage_percent': None},
+        'cell_grid': {
+            'schema_version': 1,
+            'addressing': 'region/tile_id',
+            'cell_size_m': 256,
+            'minecraft_chunk_size_m': 16,
+            'chunks_per_cell': 256,
+            'materialized_cells': 1,
+            'materialized_cells_are_observed_or_queued': True,
+            'unmeasured_cells_omitted': True,
+        },
+        'rollup': {'generated_tiles': 1, 'materialized_cells': 1},
+        'cells': [{
+            'id': 'chicago/0_0', 'region_id': 'chicago', 'tile_id': '0_0',
+            'latitude': 41.88, 'longitude': -87.63, 'width_deg': 0.003,
+            'height_deg': 0.002, 'size_m': 256, 'chunks_total': 256,
+            'chunks_sourced': 256, 'chunks_generated': 256,
+            'chunks_styled': 0, 'chunks_verified': 0,
+            'source_state': 'complete', 'geometry_state': 'complete',
+            'appearance_state': 'pending', 'game_verify_state': 'pending',
+            'state': 'generated',
+        }],
+        'local': {'private_paths_included': False},
+        'claims': {'private_data_in_snapshot': False},
+    }
 
 
 class ProgressSnapshotTests(unittest.TestCase):
@@ -76,6 +108,32 @@ class ProgressSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot['local']['source_tiles_complete'], 14)
             self.assertEqual(snapshot['local']['state'], 'public_snapshot')
             self.assertEqual(snapshot['updated_utc'], '2026-01-02T00:00:00+00:00')
+
+    def test_ci_preserves_valid_cells_but_rejects_unsafe_or_malformed_cells(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'progress').mkdir()
+            seed = public_cell_snapshot()
+            (root / 'progress/earth.json').write_text(json.dumps(seed))
+            preserved = build_snapshot(root, datetime(2026, 1, 2, tzinfo=timezone.utc))
+            self.assertEqual(preserved['cells'][0]['tile_id'], '0_0')
+            self.assertEqual(preserved['rollup']['materialized_cells'], 1)
+
+            invalid = [
+                ('private field', lambda value: value.update(private_path='/Users/' + 'example/private')),
+                ('bad cell id', lambda value: value['cells'][0].update(tile_id='not-a-cell')),
+                ('bad stage state', lambda value: value['cells'][0].update(appearance_state='invented')),
+                ('bad cell dimensions', lambda value: value['cells'][0].update(size_m=0)),
+                ('non-finite grid', lambda value: value['cell_grid'].update(cell_size_m=float('nan'))),
+            ]
+            for label, mutate in invalid:
+                with self.subTest(label=label):
+                    candidate = copy.deepcopy(seed)
+                    mutate(candidate)
+                    (root / 'progress/earth.json').write_text(json.dumps(candidate))
+                    snapshot = build_snapshot(root, datetime(2026, 1, 3, tzinfo=timezone.utc))
+                    self.assertEqual(snapshot['local']['state'], 'no_local_run')
+                    self.assertEqual(snapshot['cells'], [])
 
 
 if __name__ == '__main__':
