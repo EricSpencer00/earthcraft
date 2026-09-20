@@ -7,7 +7,9 @@ machine paths, coordinates from private profiles, or raw source metadata.
 """
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
+import re
 import sqlite3
 import sys
 
@@ -16,6 +18,16 @@ STAGES = ('sources', 'geometry', 'appearance', 'game_verify')
 EARTH_SURFACE_M2 = 510_064_471 * 1_000_000
 CELL_SIZE_M = 256
 MINECRAFT_CHUNK_SIZE_M = 16
+CELL_STATES = frozenset(('queued', 'sourced', 'running', 'leased', 'generated', 'styled', 'verified', 'failed'))
+STAGE_STATES = frozenset(('pending', 'running', 'leased', 'complete', 'failed'))
+CELL_ID = re.compile(r'^-?\d+_-?\d+$')
+REGION_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+PRIVATE_BOOLEAN_FIELDS = frozenset(('private_paths_included', 'private_data_in_snapshot'))
+PRIVATE_KEY_MARKERS = ('path', 'secret', 'token', 'password', 'credential', 'private')
+PRIVATE_VALUE_MARKERS = (
+    '/Users/', '/home/', '\\Users\\', '/Volumes/', '/private/', '/tmp/',
+    'file://', 'sqlite://',
+)
 
 
 def _latest_journal(root):
@@ -29,6 +41,169 @@ def _latest_journal(root):
             continue
         return path
     return None
+
+
+def _is_integer(value, minimum=0):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+def _is_number(value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _privacy_safe_json(value):
+    """Reject private-looking fields and non-finite values in public data."""
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                return False
+            normalized = key.casefold()
+            if any(marker in normalized for marker in PRIVATE_KEY_MARKERS):
+                if key not in PRIVATE_BOOLEAN_FIELDS or nested is not False:
+                    return False
+            if not _privacy_safe_json(nested):
+                return False
+        return True
+    if isinstance(value, list):
+        return all(_privacy_safe_json(item) for item in value)
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, str):
+        return not any(marker in value for marker in PRIVATE_VALUE_MARKERS)
+    return True
+
+
+def _valid_timestamp(value):
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_cell(cell):
+    if not isinstance(cell, dict):
+        return False
+    region_id = cell.get('region_id')
+    tile_id = cell.get('tile_id')
+    if (not isinstance(region_id, str) or not REGION_ID.fullmatch(region_id)
+            or not isinstance(tile_id, str) or not CELL_ID.fullmatch(tile_id)
+            or cell.get('id') != f'{region_id}/{tile_id}'
+            or cell.get('state') not in CELL_STATES):
+        return False
+
+    for field in ('source_state', 'geometry_state', 'appearance_state', 'game_verify_state'):
+        if field in cell and cell[field] not in STAGE_STATES:
+            return False
+    size = cell.get('size_m')
+    if not _is_integer(size, 1) or size % MINECRAFT_CHUNK_SIZE_M:
+        return False
+    total = cell.get('chunks_total')
+    if total is not None:
+        if not _is_integer(total, 1) or total != (size // MINECRAFT_CHUNK_SIZE_M) ** 2:
+            return False
+    for field in ('chunks_sourced', 'chunks_generated', 'chunks_styled', 'chunks_verified'):
+        if field in cell:
+            value = cell[field]
+            if not _is_integer(value) or total is not None and value > total:
+                return False
+    for field, low, high in (
+            ('latitude', -90, 90), ('longitude', -180, 180)):
+        if field in cell and (not _is_number(cell[field]) or not low <= cell[field] <= high):
+            return False
+    for field in ('width_deg', 'height_deg'):
+        if field in cell and (not _is_number(cell[field]) or cell[field] <= 0):
+            return False
+    return True
+
+
+def _valid_cell_grid(grid, cell_count=None):
+    if not isinstance(grid, dict):
+        return False
+    cell_size = grid.get('cell_size_m')
+    chunk_size = grid.get('minecraft_chunk_size_m')
+    chunks_per_cell = grid.get('chunks_per_cell')
+    if (not _is_integer(cell_size, 1) or not _is_integer(chunk_size, 1)
+            or cell_size % chunk_size or not _is_integer(chunks_per_cell, 1)
+            or chunks_per_cell != (cell_size // chunk_size) ** 2):
+        return False
+    if grid.get('addressing', 'region/tile_id') != 'region/tile_id':
+        return False
+    for field in ('materialized_cells_are_observed_or_queued', 'unmeasured_cells_omitted'):
+        if field in grid and grid[field] is not True:
+            return False
+    materialized = grid.get('materialized_cells')
+    if materialized is not None:
+        if not _is_integer(materialized) or cell_count is not None and materialized != cell_count:
+            return False
+    for field in ('global_cell_count_estimate', 'global_chunk_count_estimate'):
+        if field in grid and not _is_integer(grid[field], 1):
+            return False
+    return True
+
+
+def _valid_rollup(rollup, cell_count=None):
+    if not isinstance(rollup, dict):
+        return False
+    for field in ('generated_tiles', 'materialized_cells', 'materialized_chunks', 'planned_tiles'):
+        if field in rollup and rollup[field] is not None and not _is_integer(rollup[field]):
+            return False
+    if (cell_count is not None and rollup.get('materialized_cells') is not None
+            and rollup['materialized_cells'] != cell_count):
+        return False
+    states = rollup.get('cell_states')
+    if states is not None:
+        if not isinstance(states, dict):
+            return False
+        if any(state not in CELL_STATES or not _is_integer(count)
+               for state, count in states.items()):
+            return False
+    known_area = rollup.get('known_area_km2')
+    if known_area is not None and (not _is_number(known_area) or known_area < 0):
+        return False
+    return True
+
+
+def _valid_public_snapshot(snapshot):
+    """Return whether a prior snapshot is safe to republish unchanged."""
+    if not isinstance(snapshot, dict) or not _privacy_safe_json(snapshot):
+        return False
+    if 'schema_version' in snapshot and snapshot['schema_version'] != 1:
+        return False
+    if not _valid_timestamp(snapshot.get('updated_utc')):
+        return False
+    scope = snapshot.get('scope')
+    if not isinstance(scope, dict) or scope.get('id') != 'earth':
+        return False
+    coverage = scope.get('coverage_percent')
+    if coverage is not None and (not _is_number(coverage) or not 0 <= coverage <= 100):
+        return False
+    local = snapshot.get('local')
+    claims = snapshot.get('claims')
+    if (not isinstance(local, dict) or local.get('private_paths_included') is not False
+            or not isinstance(claims, dict) or claims.get('private_data_in_snapshot') is not False):
+        return False
+
+    cells = snapshot.get('cells')
+    if cells is not None:
+        if not isinstance(cells, list) or not all(_valid_cell(cell) for cell in cells):
+            return False
+        identities = [(cell['region_id'], cell['tile_id']) for cell in cells]
+        if len(identities) != len(set(identities)):
+            return False
+    cell_grid = snapshot.get('cell_grid')
+    if cell_grid is not None and not _valid_cell_grid(cell_grid, len(cells) if cells is not None else None):
+        return False
+    if not _valid_rollup(snapshot.get('rollup', {}), len(cells) if cells is not None else None):
+        return False
+    return True
 
 
 def _journal_counts(root):
@@ -174,11 +349,7 @@ def _previous_public_snapshot(root):
         snapshot = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if snapshot.get('scope', {}).get('id') != 'earth':
-        return None
-    if snapshot.get('local', {}).get('private_paths_included') is not False:
-        return None
-    if snapshot.get('claims', {}).get('private_data_in_snapshot') is not False:
+    if not _valid_public_snapshot(snapshot):
         return None
     return snapshot
 
