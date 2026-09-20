@@ -124,6 +124,7 @@ class ProgressSnapshotTests(unittest.TestCase):
                 ('bad cell id', lambda value: value['cells'][0].update(tile_id='not-a-cell')),
                 ('bad stage state', lambda value: value['cells'][0].update(appearance_state='invented')),
                 ('bad cell dimensions', lambda value: value['cells'][0].update(size_m=0)),
+                ('oversized coordinate', lambda value: value['cells'][0].update(latitude=10**1000)),
                 ('non-finite grid', lambda value: value['cell_grid'].update(cell_size_m=float('nan'))),
             ]
             for label, mutate in invalid:
