@@ -49,7 +49,7 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
         'function earthcraft:travel/apply_scale with storage earthcraft:travel',
         'scoreboard players reset @s ec_scale'])
     function('apply_scale', ['$attribute @s minecraft:scale base set $(scale)',
-                             'tellraw @s {"text":"Player size updated. Press G for travel controls."}'])
+                             'tellraw @s {"text":"Player size updated. Open Earthcraft travel from the pause menu or run /function earthcraft:travel/open."}'])
     function('speed', [
         'execute if score @s ec_speed matches 21.. run scoreboard players set @s ec_speed 20',
         'execute store result storage earthcraft:travel speed double 0.1 run scoreboard players get @s ec_speed',
@@ -158,14 +158,14 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
         'exit_action': {'label': 'Back'}})
     document('data/minecraft/tags/function/load.json', {'values': ['earthcraft:travel/load']})
     document('data/minecraft/tags/function/tick.json', {'values': ['earthcraft:travel/tick']})
-    for tag in ('quick_actions', 'pause_screen_additions'):
-        document(f'data/minecraft/tags/dialog/{tag}.json', {'values': ['earthcraft:travel']})
+    document('data/minecraft/tags/dialog/pause_screen_additions.json',
+             {'values': ['earthcraft:travel']})
 
     level = n.load(world / 'level.dat')
     enabled = level['Data']['DataPacks']['Enabled']
     enabled.append(n.String('file/earthcraft_travel'))
     level.save(world / 'level.dat')
-    result = {'open': '/function earthcraft:travel/give_teleporter, then right-click; /function earthcraft:travel/open',
+    result = {'open': 'Pause menu → Travel; /function earthcraft:travel/open',
               'player_scale_range': [1, 10],
               'walk_speed_range': [1, 20], 'fast_flight': 'Spectator mode; mouse wheel adjusts speed',
               'city_count': len(cities), 'coordinate_teleport': True,

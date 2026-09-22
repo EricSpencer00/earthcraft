@@ -154,7 +154,7 @@ def main():
     native=(installed/'travel-controls.json').exists()
     print(json.dumps({'world':str(installed),'open_in':
         'Earthcraft — Geographic Explorer → Singleplayer' if modded else 'Minecraft Java 1.21.10 → Singleplayer',
-        'build_commands_required':False,'travel': 'Press G or Pause → Travel for player size, walking speed and fast flight.' if native else
+        'build_commands_required':False,'travel': 'Pause menu → Travel, or /function earthcraft:travel/open; use /function earthcraft:travel/give_teleporter for the item.' if native else
         'Double-tap Space to fly; B toggles Fly Mod. Configure speed under Mods → Fly Mod.' if modded
         else 'Double-tap jump for creative flight; initial speed is four times vanilla.'},indent=2))
 
