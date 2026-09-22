@@ -19,6 +19,7 @@ from global_projection import (
     page_geographic_bounds,
     page_manifest,
     rebase_coordinates,
+    transpose_position,
 )
 
 
@@ -75,6 +76,25 @@ class GlobalProjectionTests(unittest.TestCase):
         self.assertEqual(manifest["generation"]["tile_size_m"], 256)
         self.assertTrue(math.isfinite(manifest["projection"]["maximum_sampled_scale_error_ppm"]))
         self.assertEqual(atlas_summary()["page_count"], WORLD_PAGE_COUNT)
+
+    def test_transpose_preserves_vertical_state_and_motion_at_seam(self):
+        longitude, latitude = -87.6298, 41.8781
+        source = page_coordinates(longitude, latitude)
+        bounds = page_geographic_bounds(source["page"])
+        point = page_coordinates(bounds["east"] + 1e-6, latitude, source["page"])
+        transposed = transpose_position(source["page"], point["x"], 73.5, point["z"],
+                                         velocity=[4.0, -0.25, 1.0])
+        self.assertEqual(transposed["y"], 73.5)
+        self.assertEqual(len(transposed["velocity"]), 3)
+        self.assertAlmostEqual(transposed["velocity"][1], -0.25)
+        recovered = geographic_coordinates(transposed["page"], transposed["x"], transposed["z"])
+        self.assertAlmostEqual(recovered[0], bounds["east"] + 1e-6, places=8)
+        self.assertAlmostEqual(recovered[1], latitude, places=8)
+
+    def test_antimeridian_round_trip_uses_canonical_longitude(self):
+        mapped = page_coordinates(180.0, 0.0)
+        recovered = geographic_coordinates(mapped["page"], mapped["x"], mapped["z"])
+        self.assertAlmostEqual(recovered[0], -180.0, places=8)
 
 
 if __name__ == "__main__":

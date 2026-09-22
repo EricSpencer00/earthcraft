@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import nbtlib
@@ -39,13 +40,21 @@ def verified_snapshot(world):
     return {name:value for name,value in files_snapshot(world).items() if name!='server-verification.json'}
 
 
+def clone_world(source, destination):
+    """Make an isolated save copy without expanding APFS clone files."""
+    if sys.platform == 'darwin':
+        subprocess.run(['cp', '-cR', str(source), str(destination)], check=True)
+    else:
+        shutil.copytree(source, destination)
+
+
 def check(world,work,travel_probe=False,photo_probe=False,java=None):
     before=verified_snapshot(world)
     jar=ROOT/'vendor/minecraft-server-1.21.10.jar'
     if hashlib.sha1(jar.read_bytes()).hexdigest()!='95495a7f485eedd84ce928cef5e223b757d2f764':
         raise ValueError('Mojang server hash mismatch')
     work.mkdir(parents=True,exist_ok=False)
-    shutil.copytree(world,work/'world')
+    clone_world(world,work/'world')
     if photo_probe:
         with zipfile.ZipFile(world/'resources.zip') as archive:
             photo_records=json.loads(archive.read('earthcraft-skin-manifest.json'))

@@ -218,6 +218,7 @@ def page_manifest(address):
 
 def page_coordinates(longitude, latitude, address=None):
     """Map WGS84 into a page's non-negative X/Z generation frame."""
+    longitude = _canonical_longitude(longitude, latitude)
     address = address or address_for(longitude, latitude)
     easting, northing = Transformer.from_crs(
         4326, page_crs(address), always_xy=True
@@ -236,7 +237,7 @@ def geographic_coordinates(address, x, z):
     longitude, latitude = Transformer.from_crs(
         page_crs(address), 4326, always_xy=True
     ).transform(envelope["west"] + x, envelope["north"] - z)
-    return longitude, latitude
+    return _canonical_longitude(longitude, latitude), latitude
 
 
 def rebase_coordinates(source, x, z, destination=None):
@@ -244,6 +245,39 @@ def rebase_coordinates(source, x, z, destination=None):
     longitude, latitude = geographic_coordinates(source, x, z)
     destination = destination or address_for(longitude, latitude)
     return page_coordinates(longitude, latitude, destination)
+
+
+def transpose_position(source, x, y, z, destination=None, velocity=None):
+    """Transpose position and optional horizontal motion across atlas pages.
+
+    Minecraft's X/Z axes are page-local, while WGS84 is the durable globe
+    identity.  Position is therefore converted through WGS84 first.  Motion
+    is sampled one metre along the incoming heading and projected into the
+    destination page, which keeps heading and speed continuous at page seams
+    instead of copying a stale local vector through a changed projection.
+    The vertical coordinate and velocity are carried unchanged.
+    """
+    mapped = rebase_coordinates(source, x, z, destination)
+    result = {"page": mapped["page"], "x": mapped["x"], "y": y, "z": mapped["z"]}
+    if velocity is None:
+        return result
+    if len(velocity) != 3 or not all(math.isfinite(float(value)) for value in velocity):
+        raise ValueError("Velocity must be a finite [x, y, z] vector")
+    vx, vy, vz = (float(value) for value in velocity)
+    horizontal_speed = math.hypot(vx, vz)
+    if horizontal_speed == 0:
+        result["velocity"] = [0.0, vy, 0.0]
+        return result
+    sample_lon, sample_lat = geographic_coordinates(
+        source, x + vx / horizontal_speed, z + vz / horizontal_speed
+    )
+    sample = page_coordinates(sample_lon, sample_lat, mapped["page"])
+    result["velocity"] = [
+        (sample["x"] - mapped["x"]) * horizontal_speed,
+        vy,
+        (sample["z"] - mapped["z"]) * horizontal_speed,
+    ]
+    return result
 
 
 def main():

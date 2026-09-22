@@ -146,6 +146,31 @@ def select_spawn_cell(ground, footprint_union, surface, water_code, buildings=()
     return int(z),int(x),int(surface_top[z,x]),target_cells
 
 
+def water_polygon(tags):
+    """Return whether a closed mapped feature is a water surface.
+
+    OSM represents broad water bodies both as ``natural=water``/``water=*``
+    polygons and as ``waterway=riverbank`` polygons.  Keep the admission
+    rule explicit: a centreline without a measured width is not silently
+    widened into a river.
+    """
+    natural = tags.get('natural')
+    water = tags.get('water')
+    waterway = tags.get('waterway')
+    return (natural in ('water', 'wetland') or
+            water in ('yes','pond','lake','reservoir','river','canal','basin',
+                      'harbour','lagoon','wastewater','stormwater','aquaculture') or
+            waterway in ('riverbank','canal','basin','dock','harbour','boatyard',
+                         'lock','lock_gate'))
+
+
+def waterway_width(tags):
+    """Return an explicitly mapped waterway width in metres, if present."""
+    if tags.get('waterway') not in ('river','stream','canal','drain','ditch'):
+        return None
+    return metres(tags.get('width',''))
+
+
 def build(source, destination, surface_source=None, point_source=None, world_frame=None):
     source = Path(source)
     destination = Path(destination)
@@ -184,11 +209,18 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             material = None
             if tags.get('landuse') in ('grass','meadow') or tags.get('leisure') in ('garden','park') or tags.get('natural') in ('grassland','wood'):
                 material = 'grass_block'
-            if tags.get('natural')=='water' or tags.get('water'):
+            if water_polygon(tags):
                 material = 'water'
             if material:
                 mask = rasterize([(geom,1)], out_shape=(size,size), transform=Affine.identity()).astype(bool)
                 surface[mask] = BLOCK[material]
+        elif waterway_width(tags) and len(coords)>1:
+            # Linear rivers and streams are admitted only when OSM supplies a
+            # physical width.  Broad rivers normally arrive as riverbank
+            # polygons or multipolygon relations handled above.
+            water = LineString(coords).buffer(waterway_width(tags)/2, cap_style='flat')
+            mask = rasterize([(water,1)], out_shape=(size,size), transform=Affine.identity()).astype(bool)
+            surface[mask] = BLOCK['water']
         # Only mapped widths: a centreline alone supplies no measured pavement width.
         elif 'highway' in tags and tags.get('bridge') in (None,'no','false','0') and tags.get('tunnel') in (None,'no','false','0'):
             width = metres(tags.get('width',''))

@@ -6,7 +6,7 @@ import unittest
 import zipfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from earth_location import kml_location,select_cached,location
-from metric_chart import chart
+from metric_chart import chart, chart_in_frame
 
 
 class LocationTests(unittest.TestCase):
@@ -32,6 +32,18 @@ class LocationTests(unittest.TestCase):
             self.assertEqual(found['region'],'photo')
             found,_=select_cached(0,0,cat,resolve=lambda _:root)
             self.assertIsNone(found)
+
+    def test_shared_frame_chart_keeps_western_city_on_global_lattice(self):
+        frame = {
+            'crs': chart(-87.62443, 41.8972, 256)['crs'],
+            'west': -32,
+            'north': 33,
+        }
+        meta = chart_in_frame(-87.9403418, 41.8994745, 256, frame)
+        self.assertEqual(meta['crs'], frame['crs'])
+        self.assertEqual((meta['west'] - frame['west']) % 256, 0)
+        self.assertEqual((frame['north'] - meta['north']) % 256, 0)
+        self.assertTrue(meta['shared_frame'])
 
 
 if __name__=='__main__':unittest.main()

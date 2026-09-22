@@ -1,0 +1,25 @@
+{
+  "schema": "earthcraft-city-catalog-v1",
+  "coordinate_order": "WGS84 longitude, latitude",
+  "world_axes": "east +X, south +Z, elevation +Y",
+  "cities": [
+    {
+      "id": "chicago-il",
+      "name": "Chicago, IL",
+      "wgs84": [-87.62443, 41.8972],
+      "world": "Earthcraft",
+      "target": [47.5, 65.0, 23.5],
+      "status": "materialized",
+      "note": "Existing Chicago Water Tower-centered world"
+    },
+    {
+      "id": "elmhurst-il",
+      "name": "Elmhurst, IL",
+      "wgs84": [-87.9403418, 41.8994745],
+      "world": "Earthcraft",
+      "target": [-26239.5, 95.0, -433.5],
+      "status": "materialized",
+      "note": "Terrain tile built in the Chicago shared frame; mapped building heights were unavailable"
+    }
+  ]
+}

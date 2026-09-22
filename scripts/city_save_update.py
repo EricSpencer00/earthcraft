@@ -163,18 +163,37 @@ def stage(current,generated,baseline,destination,material_source=None):
         # those as malformed namespaces/JSON if they enter an unpacked datapack.
         shutil.copytree(generated/'datapacks/earthcraft_height',destination/'datapacks/earthcraft_height',
             dirs_exist_ok=True,ignore=shutil.ignore_patterns('._*'))
+        # Travel controls are world metadata, not generated geometry.  Copy the
+        # freshly catalogued city/coordinate list alongside the new tile so an
+        # expanded save can navigate to both the old Chicago coverage and the
+        # newly appended location.
+        if (generated/'datapacks/earthcraft_travel').is_dir():
+            shutil.copytree(generated/'datapacks/earthcraft_travel',
+                            destination/'datapacks/earthcraft_travel',
+                            dirs_exist_ok=True, ignore=shutil.ignore_patterns('._*'))
         level=n.load(destination/'level.dat');player=copy.deepcopy(level['Data']['Player'])
         generated_level=n.load(generated/'level.dat')['Data']
         for field in ('BorderCenterX','BorderCenterZ','BorderSize','BorderSizeLerpTarget','BorderSizeLerpTime'):
             level['Data'][field]=generated_level[field]
         level['Data']['LevelName']=n.String('Earthcraft');level.save(destination/'level.dat')
-        coverage=json.loads((generated/'city-coverage.json').read_text()) if (generated/'city-coverage.json').exists() else {}
-        coverage_tiles=list(coverage.get('tiles',{}).values())
-        border=coverage.get('world_border')
-        if border is None:
-            border_tiles=coverage_tiles or [{'world_offset_xz':expanded.get('world_offset_xz',[0,0]),
-                'size_m':expanded['source']['size']}]
-            border=bounds_for_tiles(border_tiles)
+        existing_coverage = json.loads((current/'city-coverage.json').read_text()) if (current/'city-coverage.json').exists() else {}
+        incoming_coverage = json.loads((generated/'city-coverage.json').read_text()) if (generated/'city-coverage.json').exists() else {}
+        coverage = dict(existing_coverage)
+        coverage.update({key: value for key, value in incoming_coverage.items() if key != 'tiles'})
+        coverage_tiles_by_id = dict(existing_coverage.get('tiles', {}))
+        coverage_tiles_by_id.update(incoming_coverage.get('tiles', {}))
+        tile_id = expanded.get('city_tile_id')
+        if tile_id is None:
+            ox, oz = expanded.get('world_offset_xz', [0, 0])
+            tile_id = f'{int(ox // 256)}_{int(oz // 256)}'
+        coverage_tiles_by_id.setdefault(tile_id, {
+            'id': tile_id, 'world_offset_xz': expanded.get('world_offset_xz', [0, 0]),
+            'size_m': expanded['source']['size'], 'status': 'verified_external_tile'})
+        coverage['tiles'] = coverage_tiles_by_id
+        coverage['generated_tiles'] = len(coverage_tiles_by_id)
+        coverage['generated_tile_area_m2'] = sum(int(tile['size_m']) ** 2 for tile in coverage_tiles_by_id.values())
+        coverage_tiles = list(coverage_tiles_by_id.values())
+        border = bounds_for_tiles(coverage_tiles)
         update_world_border(destination,border)
         if level['Data']['Player']!=player:raise ValueError('Player data changed')
         expanded['spawn']=original['spawn'];expanded['spawn_rotation']=original.get('spawn_rotation',[0,0])
@@ -184,8 +203,9 @@ def stage(current,generated,baseline,destination,material_source=None):
         expanded['installed_overlay']['pavement_material_update']=material_overlay
         (destination/'earthcraft.json').write_text(json.dumps(expanded,indent=2))
         # These are measurements of the generated base before the saved overlay.
-        for name in ('city-assembly.json','city-coverage.json','block-overview.png'):
+        for name in ('city-assembly.json','block-overview.png'):
             if (generated/name).exists():shutil.copyfile(generated/name,destination/name)
+        (destination/'city-coverage.json').write_text(json.dumps({**coverage, 'world_border': border}, indent=2))
         shutil.copyfile(generated/'block-verification.json',destination/'city-base-block-verification.json')
         # Do not leave the previous 64m sidecars looking like full-city evidence.
         legacy=destination/'pre-expansion-evidence'/file_hash(current/'earthcraft.json')[:16];legacy.mkdir(parents=True)

@@ -77,11 +77,11 @@ def fetch_tile(cache,zoom,x,y):
     return path,record
 
 
-def prepare(lon,lat,size,destination,cache=None):
+def prepare(lon,lat,size,destination,cache=None,chart_meta=None):
     destination=Path(destination);cache=Path(cache or ROOT/'runs/aws-terrain-cache')
     if destination.exists():raise FileExistsError(destination)
     if shutil.disk_usage(ROOT).free<22*1024**3:raise ValueError('Preserve 20 GiB free reserve plus working allowance')
-    meta=chart(lon,lat,size);lons,lats=geographic_centres(meta)
+    meta=chart_meta or chart(lon,lat,size);lons,lats=geographic_centres(meta)
     px,py=tile_pixels(lons,lats)
     pairs=np.unique(np.column_stack((px.ravel()//256,py.ravel()//256)),axis=0)
     if len(pairs)>32:raise ValueError('At most 32 AWS tiles per bounded run')

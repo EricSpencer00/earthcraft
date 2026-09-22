@@ -8,11 +8,19 @@ import urllib.parse
 import urllib.request
 
 from pyproj import Transformer
+from shapely.geometry import LineString
+from shapely.ops import polygonize, unary_union
 from aws_terrain import prepare as terrain
-from metric_chart import chart
+from metric_chart import chart, chart_in_frame
 from osm_json_to_kml import metres,building_tag
 
 ENDPOINT='https://overpass-api.de/api/interpreter'
+
+
+def _water_relation(tags):
+    return (tags.get('natural') in ('water','wetland') or
+            tags.get('water') in ('yes','pond','lake','reservoir','river','canal',
+                                  'basin','harbour','lagoon','wastewater','stormwater'))
 
 
 def frozen_terrain(source):
@@ -24,7 +32,7 @@ def frozen_terrain(source):
 def normalize(data):
     if data.get('remark') or 'elements' not in data:raise ValueError('Incomplete Overpass response')
     if len(data['elements'])>10000:raise ValueError('More than 10,000 map features')
-    ways=[];omitted=[]
+    ways=[];omitted=[];water_relations=0
     for element in data['elements']:
         kind=element.get('type');identifier=element.get('id')
         if kind!='way':
@@ -42,17 +50,52 @@ def normalize(data):
             coordinates.append([lon,lat])
         ways.append({'id':identifier,'tags':element.get('tags',{}),'coordinates':coordinates,
                      'closed':nodes[0]==nodes[-1]})
+    # Overpass returns relation members with their own geometry when `out geom`
+    # is used.  Preserve source-backed water multipolygons instead of silently
+    # dropping Lake Michigan and mapped river relations.  Building relations
+    # remain omitted because this bounded writer only admits complete way
+    # footprints.
+    for element in data['elements']:
+        if element.get('type')!='relation' or not _water_relation(element.get('tags',{})):
+            continue
+        outer=[];complete=True
+        for member in element.get('members',[]):
+            if member.get('role')!='outer':continue
+            geometry=member.get('geometry',[])
+            if len(geometry)<2:
+                complete=False;break
+            points=[]
+            for point in geometry:
+                lon,lat=float(point['lon']),float(point['lat'])
+                if not math.isfinite(lon+lat) or not -180<=lon<=180 or not -90<=lat<=90:
+                    raise ValueError('Invalid WGS84 water relation observation')
+                points.append((lon,lat))
+            outer.append(LineString(points))
+        if not complete or not outer:
+            omitted.append({'type':'relation','id':element.get('id'),'reason':'Incomplete water relation geometry'})
+            continue
+        polygons=list(polygonize(unary_union(outer)))
+        if not polygons:
+            omitted.append({'type':'relation','id':element.get('id'),'reason':'Water relation did not polygonize'})
+            continue
+        for index,polygon in enumerate(polygons):
+            coordinates=[[float(lon),float(lat)] for lon,lat in polygon.exterior.coords]
+            tags=dict(element.get('tags',{}));tags['source_relation_id']=element.get('id')
+            ways.append({'id':-(int(element['id'])*1000+index+1),'tags':tags,
+                         'coordinates':coordinates,'closed':True})
+        water_relations+=1
     buildings=[w for w in ways if building_tag(w['tags'])]
     known=[w for w in buildings if (metres(w['tags'].get('height','')) or 0)>0]
     return ways,{'way_features':len(ways),'building_way_features':len(buildings),
                  'explicit_height_features':len(known),'height_unknown_features':len(buildings)-len(known),
-                 'omitted_features':omitted,'coverage_is_complete':False}
+                 'water_relation_features':water_relations,'omitted_features':omitted,
+                 'coverage_is_complete':False}
 
 
-def prepare(lon,lat,size,destination,resume=False):
+def prepare(lon,lat,size,destination,resume=False,frame=None):
     destination=Path(destination)
     if destination.exists() and not resume:raise FileExistsError(destination)
-    meta=chart(lon,lat,size)
+    meta=chart_in_frame(lon,lat,size,frame) if frame else chart(lon,lat,size)
     inverse=Transformer.from_crs(meta['crs'],4326,always_xy=True)
     corners=[inverse.transform(x,y) for x in (meta['west']-16,meta['west']+size+16)
              for y in (meta['north']+16,meta['north']-size-16)]
@@ -60,9 +103,11 @@ def prepare(lon,lat,size,destination,resume=False):
     south,north=min(p[1] for p in corners),max(p[1] for p in corners)
     if east-west>1 or north-south>1:raise ValueError('Split dateline or overly broad query before acquisition')
     bbox=f'{south:.8f},{west:.8f},{north:.8f},{east:.8f}'
-    selectors=('building','building:part','highway','landuse','leisure','natural','water')
-    query='[out:json][timeout:30][maxsize:16777216];('+''.join(
-        f'way["{tag}"]({bbox});' for tag in selectors)+f'relation["building"]({bbox}););out body geom;'
+    selectors=('building','building:part','highway','landuse','leisure','natural','water','waterway')
+    query=('[out:json][timeout:30][maxsize:16777216];('+''.join(
+        f'way["{tag}"]({bbox});' for tag in selectors)+
+        f'relation["building"]({bbox});relation["natural"="water"]({bbox});'
+        f'relation["water"]({bbox}););out body geom;')
     state_path=destination.parent/(destination.name+'-acquisition.json')
     identity={'location_wgs84':[lon,lat],'size':size,'query':query,'endpoint':ENDPOINT}
     if destination.exists():
@@ -80,7 +125,8 @@ def prepare(lon,lat,size,destination,resume=False):
             return source
     else:
         if state_path.exists():raise FileExistsError(state_path)
-        source=terrain(lon,lat,size,destination)
+        source=(terrain(lon,lat,size,destination,chart_meta=meta) if frame else
+                terrain(lon,lat,size,destination))
         state={'request':identity,'terrain_sha256':frozen_terrain(source),'status':'terrain_ready'}
         state_path.write_text(json.dumps(state,indent=2))
     request=urllib.request.Request(ENDPOINT,data=urllib.parse.urlencode({'data':query}).encode(),

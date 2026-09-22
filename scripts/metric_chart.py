@@ -28,6 +28,52 @@ def chart(lon, lat, size):
         'global_continuity':'Separate local metric chart; not an undistorted global plane'}
 
 
+def chart_in_frame(lon, lat, size, frame):
+    """Return a chunk-aligned chart in an existing shared metric frame.
+
+    A normal ``chart`` is deliberately centered on the requested location,
+    which is useful for an isolated world but wrong for extending Chicago: it
+    would make every new city appear at local (0, 0).  This variant keeps the
+    frame's WGS84 projection and snaps the requested tile to the same 256 m
+    lattice used by the continuous world.
+    """
+    if not all(math.isfinite(v) for v in (lon, lat)) or not -180 <= lon < 180 or not -89 <= lat <= 89:
+        raise ValueError('Location outside supported local-chart domain')
+    if not isinstance(size, int) or size < 16 or size > 1024 or size % 16:
+        raise ValueError('Bounded chart must be 16–1024 m, aligned to 16 m chunks')
+    required = ('crs', 'west', 'north')
+    if any(key not in frame for key in required):
+        raise ValueError('Shared frame requires CRS, west and north')
+    crs = CRS.from_user_input(frame['crs'])
+    if not crs.is_projected or any(abs(axis.unit_conversion_factor - 1) > 1e-12 for axis in crs.axis_info):
+        raise ValueError('Shared frame must be projected in metres')
+    easting, northing = Transformer.from_crs(4326, crs, always_xy=True).transform(lon, lat)
+    global_x = easting - float(frame['west'])
+    global_z = float(frame['north']) - northing
+    tile_x = math.floor(global_x / size) * size
+    tile_z = math.floor(global_z / size) * size
+    west = float(frame['west']) + tile_x
+    north = float(frame['north']) - tile_z
+    inverse = Transformer.from_crs(crs, 4326, always_xy=True)
+    geod = Geod(ellps='WGS84')
+    distances = []
+    for x, y in ((west, north), (west + size - 1, north),
+                 (west, north - size + 1), (west + size - 1, north - size + 1)):
+        a, b = inverse.transform(x, y)
+        for dx, dy in ((1, 0), (0, -1)):
+            c, d = inverse.transform(x + dx, y + dy)
+            distances.append(geod.inv(a, b, c, d)[2])
+    if max(abs(distance - 1) for distance in distances) > 1e-5:
+        raise ValueError('Shared chart exceeds numerical ground-scale tolerance')
+    return {'size': size, 'west': int(west) if west.is_integer() else west,
+            'north': int(north) if north.is_integer() else north,
+            'crs': crs.to_wkt(), 'projection_origin': [lat, lon],
+            'axes': 'east +X, south -Z, elevation +Y', 'metres_per_block': 1,
+            'cell_ground_distances_m': distances, 'shared_frame': True,
+            'frame_origin': [frame['west'], frame['north']],
+            'global_continuity': 'Shared metric frame; WGS84 identity retained for globe transposition'}
+
+
 def geographic_centres(meta):
     row,col=np.mgrid[:meta['size'],:meta['size']]
     return Transformer.from_crs(meta['crs'],4326,always_xy=True).transform(
