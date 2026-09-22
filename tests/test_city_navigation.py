@@ -41,7 +41,17 @@ class CityNavigationTests(unittest.TestCase):
                                    for action in coordinates['actions']]
             self.assertIn('trigger ec_coord_ready set 1', coordinate_commands)
             self.assertEqual((pack / 'data/earthcraft/function/travel/city_menu.mcfunction').read_text().splitlines()[0],
-                             'dialog show @s earthcraft:cities')
+                             'function earthcraft:travel/cities')
+            self.assertIn('dialog show @s earthcraft:travel',
+                          (pack / 'data/earthcraft/function/travel/open.mcfunction').read_text())
+            teleporter = (pack / 'data/earthcraft/function/travel/give_teleporter.mcfunction').read_text()
+            self.assertIn('minecraft:carrot_on_a_stick', teleporter)
+            self.assertIn('earthcraft_teleporter:1b', teleporter)
+            load_lines = (pack / 'data/earthcraft/function/travel/load.mcfunction').read_text()
+            self.assertIn('minecraft.used:minecraft.carrot_on_a_stick', load_lines)
+            tick_lines = (pack / 'data/earthcraft/function/travel/tick.mcfunction').read_text()
+            self.assertIn('ec_tp_use', tick_lines)
+            self.assertEqual(result['teleporter_commands'][0], '/function earthcraft:travel/give_teleporter')
 
 
 if __name__ == '__main__':
