@@ -68,6 +68,11 @@ class CityNavigationTests(unittest.TestCase):
             self.assertIn('trigger ec_coord_ready set 1', coordinate_commands)
             self.assertEqual((pack / 'data/earthcraft/function/travel/city_menu.mcfunction').read_text().splitlines()[0],
                              'function earthcraft:travel/cities')
+            elmhurst_function = (pack / 'data/earthcraft/function/travel/city_2.mcfunction').read_text()
+            self.assertIn('tp @s -26182.701896609742 95.0 -267.8957291646485', elmhurst_function)
+            self.assertIn('terrain in this save is not confirmed', elmhurst_function)
+            travel = json.loads((pack / 'data/earthcraft/dialog/travel.json').read_text())
+            self.assertIn('Global page transposition is not yet active', travel['body'][0]['contents'])
             self.assertIn('dialog show @s earthcraft:travel',
                           (pack / 'data/earthcraft/function/travel/open.mcfunction').read_text())
             teleporter = (pack / 'data/earthcraft/function/travel/give_teleporter.mcfunction').read_text()

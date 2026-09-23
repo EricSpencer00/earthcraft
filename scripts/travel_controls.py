@@ -112,7 +112,7 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
     dialog = {'type': 'minecraft:multi_action', 'title': 'Earthcraft travel',
               'external_title': 'Travel', 'columns': 2, 'pause': True,
               'body': [{'type': 'minecraft:plain_message', 'width': 280,
-                        'contents': 'Cities use the shared Earthcraft globe frame. Coordinates are Minecraft X/Y/Z; the list keeps real-world city locations in one metre-scale world.'}],
+                        'contents': 'City coordinates map WGS84 into the current local metric frame. Global page transposition is not yet active.'}],
               'inputs': [
                   {'type': 'minecraft:number_range', 'key': 'scale', 'label': 'Player size (times human)',
                    'start': 1, 'end': 10, 'initial': 1, 'step': 1, 'width': 300},
@@ -124,7 +124,9 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
     city_actions = []
     for index, city in enumerate(cities, 1):
         target = city['target']
-        message = json.dumps({'text': 'Arrived at ' + city['name']}, separators=(',', ':'))
+        message_text = ('Arrived at ' + city['name'] if city.get('status') == 'materialized'
+                        else 'Teleported to ' + city['name'] + ' coordinate; terrain in this save is not confirmed.')
+        message = json.dumps({'text': message_text}, separators=(',', ':'))
         function(f'city_{index}', [f'tp @s {target[0]} {target[1]} {target[2]}',
                                    f'tellraw @s {message}'])
         city_actions.append(button(city['name'], f'trigger ec_city set {index}'))

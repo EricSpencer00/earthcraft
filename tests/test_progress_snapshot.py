@@ -11,6 +11,36 @@ from progress_snapshot import build_snapshot
 
 
 class ProgressSnapshotTests(unittest.TestCase):
+    def test_active_save_manifest_is_separate_and_not_claimed_as_block_fill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = root / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({'tiles': {
+                'one': {'size_m': 256, 'chunks': 256},
+                'two': {'size_m': 16, 'chunks': 1},
+            }}))
+            snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
+            coverage = snapshot['active_save_coverage']
+            self.assertEqual(coverage['state'], 'manifest_listed')
+            self.assertEqual(coverage['manifest_tiles'], 2)
+            self.assertEqual(coverage['manifest_chunk_declarations'], 257)
+            self.assertFalse(coverage['current_block_fill_verified'])
+            self.assertIsNone(coverage['unlisted_chunks'])
+            self.assertFalse(snapshot['claims']['active_save_fill_verified'])
+            self.assertNotIn(str(root), json.dumps(snapshot))
+
+    def test_missing_or_invalid_active_save_manifest_stays_unknown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
+            self.assertEqual(snapshot['active_save_coverage']['state'], 'unavailable')
+            manifest = root / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({'tiles': {'bad': {'size_m': 256, 'chunks': 1}}}))
+            snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
+            self.assertEqual(snapshot['active_save_coverage']['state'], 'invalid_manifest')
+
     def test_snapshot_exposes_stage_state_for_each_materialized_cell(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

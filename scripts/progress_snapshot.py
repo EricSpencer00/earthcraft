@@ -183,8 +183,57 @@ def _previous_public_snapshot(root):
     return snapshot
 
 
+def _active_save_coverage(root):
+    """Report save-manifest declarations without claiming current block fill.
+
+    Reading the live world's Anvil files while Minecraft is open can race its
+    writer. The versioned tile manifest is a bounded, read-only source, but it
+    describes tile declarations rather than a current physical chunk scan.
+    """
+    path = Path(root) / 'runtime' / 'traversal' / 'saves' / 'Earthcraft' / 'city-coverage.json'
+    try:
+        manifest = json.loads(path.read_text())
+        tiles = manifest['tiles']
+        if not isinstance(tiles, dict):
+            raise ValueError('tiles must be an object')
+        declarations = 0
+        for tile in tiles.values():
+            size = tile.get('size_m')
+            chunks = tile.get('chunks')
+            if (type(size) is not int or size <= 0 or size % MINECRAFT_CHUNK_SIZE_M or
+                    type(chunks) is not int or chunks < 0):
+                raise ValueError('invalid tile size or chunk declaration')
+            if chunks != (size // MINECRAFT_CHUNK_SIZE_M) ** 2:
+                raise ValueError('chunk declaration does not match tile dimensions')
+            declarations += chunks
+        return {
+            'state': 'manifest_listed',
+            'manifest_tiles': len(tiles),
+            'manifest_chunk_declarations': declarations,
+            'current_block_fill_verified': False,
+            'physical_chunk_scan': 'not performed; live-save writes may be in progress',
+            'unlisted_chunks': None,
+            'scope_note': 'Counts describe tile declarations in the active save manifest, not all pipeline artifacts or every chunk in the save.',
+        }
+    except FileNotFoundError:
+        return {
+            'state': 'unavailable', 'manifest_tiles': None,
+            'manifest_chunk_declarations': None,
+            'current_block_fill_verified': False,
+            'physical_chunk_scan': 'not performed', 'unlisted_chunks': None,
+        }
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return {
+            'state': 'invalid_manifest', 'manifest_tiles': None,
+            'manifest_chunk_declarations': None,
+            'current_block_fill_verified': False,
+            'physical_chunk_scan': 'not performed', 'unlisted_chunks': None,
+        }
+
+
 def build_snapshot(root, now=None):
     root = Path(root)
+    active_save_coverage = _active_save_coverage(root)
     journal_path = _latest_journal(root)
     counts = _journal_counts(root)
     source_complete = counts['sources'].get('complete', 0)
@@ -195,6 +244,7 @@ def build_snapshot(root, now=None):
     if previous:
         previous['updated_utc'] = (now or datetime.now(timezone.utc)).isoformat()
         previous.setdefault('local', {})['state'] = 'public_snapshot'
+        previous['active_save_coverage'] = active_save_coverage
         return previous
     local_state = _status(root) if has_local_journal else 'no_local_run'
     cells = _cell_rows(journal_path) if has_local_journal else []
@@ -233,6 +283,7 @@ def build_snapshot(root, now=None):
             'cell_states': cell_summary,
             'note': 'A global source catalog and coverage denominator are not complete.',
         },
+        'active_save_coverage': active_save_coverage,
         'workstreams': [
             {'id': 'catalog', 'label': 'Global source catalog', 'state': 'planned',
              'note': 'Build immutable spatial indexes before planetary batch work.'},
@@ -273,6 +324,7 @@ def build_snapshot(root, now=None):
         'claims': {
             'global_complete': False,
             'accuracy_verified': False,
+            'active_save_fill_verified': active_save_coverage['current_block_fill_verified'],
             'private_data_in_snapshot': False,
         },
     }
