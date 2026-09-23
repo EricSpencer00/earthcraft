@@ -44,26 +44,23 @@ The next visual-quality lane is documented in
 imagery, LiDAR, and classical computer vision with bounded evidence masks; it
 does not use an LLM to invent building geometry or façade detail.
 
-## Why not just use Arnis?
+## One world pipeline
 
-pros:
+Arnis is the geographic baseline generator already vendored in this project;
+Earthcraft is the one-save atlas, provenance, coverage, navigation, and safe
+Minecraft-import layer around it. They are not two competing world products.
+The consolidation target is for ordinary tiles to use Arnis for map-to-block
+generation, then pass through Earthcraft's fixed WGS84/page transform and
+receipt-checked import path. Earthcraft-specific hydrology and evidence-backed
+landmark layers remain overlays, not a second general city generator.
 
-- Turning geographic data into a playable Minecraft world without needing
-  Earthcraft's larger evidence pipeline.
-- Providing a straightforward baseline for checking scale, coordinates,
-  terrain, and game-version behaviour.
-- Being the better choice if the goal is simply to generate a place and start
-  walking around.
-
-cons:
-
-- Source provenance and uncertainty: which source produced a surface, and
-  what was measured versus inferred?
-- Whole-Earth operation: global tile addresses, sparse on-demand generation,
-  resumable parallel workers, and a progress ledger that does not invent a
-  planetary percentage.
-- Replayable fidelity boundaries: precise surfaces, repeated unseen interiors,
-  source-backed landmark/photo layers, and byte-for-byte regeneration.
+That adapter is not complete yet: the Elmhurst and generic location builders
+still contain an independent map-to-block path, and the installed live importer
+still accepts only the Chicago frame. See
+[Sparse Earth architecture](docs/SPARSE_EARTH_ARCHITECTURE.md) for the single
+architecture decision and its implementation status. For production tiles,
+Arnis output is staging input—not a separate destination save or a direct write
+to the open save. Isolated baseline fixtures remain separate experiments.
 
 ## Start here
 

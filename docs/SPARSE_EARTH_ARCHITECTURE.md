@@ -1,16 +1,58 @@
 # Sparse Earth architecture
 
+This is the source of truth for how Arnis and Earthcraft fit together. The
+reuse comparison lives in [REUSE_STRATEGY.md](REUSE_STRATEGY.md); it should not
+define a second world-generation architecture.
+
 ## Decision
 
-Earthcraft should not eagerly generate every square metre of Earth or produce
-one monolithic Minecraft save. It should build a globally addressable,
-deterministic world whose fidelity follows the information content of each
-place.
+Earthcraft should not eagerly generate every square metre of Earth. It should
+keep one Minecraft save, with globally addressable sparse pages and chunks
+materialized on demand. “One save” does not mean one fully pre-generated
+Overworld or one enormous region file.
 
-Arnis is the default generator for ordinary inhabited areas. Earthcraft adds
-the global tiling, source indexing, provenance, resumability, streaming, and
-landmark-override layers needed to operate Arnis at regional and planetary
-scale.
+Arnis is the baseline map-to-block generator for ordinary inhabited areas.
+Earthcraft owns stable WGS84 addressing, atlas/page projection, source and
+license lineage, resumable tile jobs, coverage accounting, safe merging into
+the existing save, navigation, and high-evidence overlays. There is one final
+world product: Earthcraft. For production tiles, treat Arnis output as an
+immutable staging artifact—not a second destination save and not something
+allowed to write directly into the active save. Isolated baseline fixtures can
+remain separate experiments.
+
+The boundary is:
+
+```text
+WGS84 request -> Earthcraft atlas page and owned tile
+              -> pinned Arnis staging generation
+              -> Earthcraft coordinate rebase, validation, and overlays
+              -> safe importer -> receipt-backed coverage in the same save
+```
+
+Arnis's local mode recenters each selection. In the vendored 3.1.0 source,
+`main.rs` derives the `web_mercator` origin from the selected bounding-box
+midpoint, and `coordinate_system/transformation.rs` shifts that selection into
+its own output bounds. Neither mode alone guarantees stable coordinates across
+separate tile requests. Earthcraft must own the global coordinate transform and
+test the rebase before a tile can be published. The upstream fixed-projection
+request describes the same missing incremental-world capability:
+[Arnis issue #1036](https://github.com/louis-e/arnis/issues/1036).
+
+## Consolidation status
+
+The repository contains Arnis 3.1.0 source and binary. `scripts/mvp.py` and
+`scripts/chicago.py` invoke it. In contrast, `scripts/elmhurst.py`,
+`scripts/earth_location.py`, and the `public_map_sources.py` → `metric_world.py`
+path still implement a parallel map-to-block generator. This is known overlap,
+not a completed integration. The Arnis-to-atlas rebase adapter and atlas-aware
+live importer are still missing; the installed importer accepts only the
+Chicago frame. Until those pieces are verified, do not describe an atlas page
+as generated or playable merely because its coordinates are in the catalog.
+
+The Chicago Water Tower's rejected Arnis draft is a scope-specific result for
+that high-fidelity landmark; it does not reject Arnis as the ordinary-area
+baseline. Preserve the landmark evidence/overlays, and do not use them as a
+reason to keep a second general city generator.
 
 The intended result is still a continuous 1:1 coordinate space. Sparse storage
 and variable generation effort must not change the location or scale of a
@@ -80,7 +122,7 @@ planet-scale source archives
        -> validated landmark overrides
   -> seam, provenance, and deterministic-replay checks
   -> content-addressed region store
-  -> on-demand world delivery and local cache
+  -> on-demand delivery into sparse pages of the one Earthcraft save
 ```
 
 Public Overpass instances must not be used as a planetary batch backend. Import
@@ -186,4 +228,3 @@ The distributed pipeline is ready to broaden beyond Chicago only when:
 - [Polaris system overview](https://docs.alcf.anl.gov/polaris/)
 - [Aurora system overview](https://docs.alcf.anl.gov/aurora/)
 - [Sophia system overview](https://docs.alcf.anl.gov/sophia/)
-
