@@ -51,8 +51,8 @@ def load(path=DEFAULT_PATH):
     return validate(json.loads(Path(path).read_text()))
 
 
-def materialized(catalog):
-    """Return destinations that have an in-world target, in catalog order."""
+def destinations(catalog):
+    """Return configured city coordinates, regardless of terrain presence."""
     return [city for city in validate(catalog)['cities'] if city.get('target') is not None]
 
 

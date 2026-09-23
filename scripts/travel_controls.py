@@ -4,7 +4,7 @@ from pathlib import Path
 
 import nbtlib as n
 
-from city_catalog import DEFAULT_PATH, load as load_catalog, materialized
+from city_catalog import DEFAULT_PATH, load as load_catalog, destinations
 
 
 def install_controls(world, city_catalog=DEFAULT_PATH):
@@ -24,7 +24,7 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
         target.write_text(json.dumps(value, indent=2))
 
     catalog = load_catalog(city_catalog)
-    cities = materialized(catalog)
+    cities = destinations(catalog)
     document('pack.mcmeta', {'pack': {'min_format': [88, 0], 'max_format': [88, 0],
                                       'description': 'Earthcraft travel: cities, coordinates and exploration'}})
 
@@ -131,8 +131,8 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
     function('city', [*(f'execute if score @s ec_city matches {index} run function earthcraft:travel/city_{index}'
                         for index in range(1, len(cities) + 1)),
                       'scoreboard players reset @s ec_city'])
-    city_body = ('Select a materialized city. Destinations are held in the shared Earthcraft frame; '
-                 'unbuilt catalog entries stay out of the action list.')
+    city_body = ('Select a registered WGS84 city coordinate. A listed destination does not prove '
+                 'its terrain is present in the active save.')
     document('data/earthcraft/dialog/cities.json', {
         'type': 'minecraft:multi_action', 'title': 'Earthcraft cities',
         'external_title': 'Cities', 'columns': 2, 'pause': True,
@@ -179,6 +179,6 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
               'ui_playtest_verified': False,
               'limitations': ['Sliders start at defaults when reopened; they do not display current values.',
                               'Grow outdoors; a large body cannot fit through human-sized openings.',
-                              'Coordinate teleport does not generate missing terrain; unscanned surroundings remain void.']}
+                              'Teleporting does not yet generate missing terrain; unscanned surroundings remain void.']}
     (world / 'travel-controls.json').write_text(json.dumps(result, indent=2))
     return result

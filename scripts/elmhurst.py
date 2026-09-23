@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from city_catalog import load as load_catalog
+from city_catalog import load as load_catalog, shared_world_coordinates
 from geographic_quality import audit
 from metric_world import build
 from public_map_sources import prepare
@@ -14,6 +14,16 @@ from verify_metric_world import verify
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FRAME = ROOT / 'runs/chicago-adaptation-city-001/frame.json'
 ELMHURST_ID = 'elmhurst-il'
+
+
+def target_for_city(city, frame, y, world_offset_xz, size):
+    """Return the city's exact shared-frame WGS84 point, not a preview spawn."""
+    longitude, latitude = city['wgs84']
+    target = shared_world_coordinates(longitude, latitude, frame, y)
+    west, north = world_offset_xz
+    if not (west <= target[0] < west + size and north <= target[2] < north + size):
+        raise ValueError('Elmhurst WGS84 target lies outside its generated tile')
+    return target
 
 
 def build_elmhurst(output, frame_path=DEFAULT_FRAME, size=256, catalog_path=None):
@@ -33,8 +43,9 @@ def build_elmhurst(output, frame_path=DEFAULT_FRAME, size=256, catalog_path=None
     metadata = json.loads((world / 'earthcraft.json').read_text())
     catalog_for_world = json.loads(json.dumps(catalog))
     destination = next(entry for entry in catalog_for_world['cities'] if entry['id'] == ELMHURST_ID)
-    destination['target'] = metadata['spawn']
-    destination['status'] = 'materialized'
+    destination['target'] = target_for_city(
+        city, frame, metadata['spawn'][1], metadata['world_offset_xz'], size)
+    destination['status'] = 'generated'
     install_controls(world, city_catalog=catalog_for_world)
     block_report = verify(world)
     quality_report = audit(world)

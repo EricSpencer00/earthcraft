@@ -17,9 +17,9 @@
       "name": "Elmhurst, IL",
       "wgs84": [-87.9403418, 41.8994745],
       "world": "Earthcraft",
-      "target": [-26239.5, 95.0, -433.5],
-      "status": "materialized",
-      "note": "Terrain tile built in the Chicago shared frame; mapped building heights were unavailable"
+      "target": [-26182.701896609742, 95.0, -267.8957291646485],
+      "status": "registered",
+      "note": "Exact WGS84 destination in the Chicago metric frame; terrain presence in the active save is unverified"
     }
   ]
 }
