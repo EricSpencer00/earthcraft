@@ -48,6 +48,38 @@
     "unlisted_chunks": null,
     "scope_note": "Counts describe tile declarations in the active save manifest, not all pipeline artifacts or every chunk in the save."
   },
+  "city_destinations": [
+    {
+      "id": "chicago-il",
+      "name": "Chicago, IL",
+      "catalog_status": "materialized",
+      "latitude": 41.8972,
+      "longitude": -87.62443,
+      "atlas_page_schema": "earthcraft-atlas-v1",
+      "atlas_page_id": "ec1/b0893/c0468",
+      "atlas_page_local_xz": [5568.5812471782365, 5196.401815766801],
+      "proj_version": "9.5.1",
+      "page_maximum_sampled_scale_error_ppm": 0.82676565171802,
+      "page_scale_error_budget_ppm": 1.5,
+      "active_save_manifest_has_tile_center_in_page": true,
+      "active_save_physical_fill": "unknown_not_scanned"
+    },
+    {
+      "id": "elmhurst-il",
+      "name": "Elmhurst, IL",
+      "catalog_status": "registered",
+      "latitude": 41.8994745,
+      "longitude": -87.9403418,
+      "atlas_page_schema": "earthcraft-atlas-v1",
+      "atlas_page_id": "ec1/b0893/c0466",
+      "atlas_page_local_xz": [12091.73669375495, 4943.889025356399],
+      "proj_version": "9.5.1",
+      "page_maximum_sampled_scale_error_ppm": 0.82676565171802,
+      "page_scale_error_budget_ppm": 1.5,
+      "active_save_manifest_has_tile_center_in_page": false,
+      "active_save_physical_fill": "unknown_not_scanned"
+    }
+  ],
   "workstreams": [
     {
       "id": "catalog",

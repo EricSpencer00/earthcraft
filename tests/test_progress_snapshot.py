@@ -8,10 +8,28 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from progress_snapshot import build_snapshot
-from global_projection import address_for
+from global_projection import MAX_PAGE_SCALE_ERROR_PPM, address_for
 
 
 class ProgressSnapshotTests(unittest.TestCase):
+    def test_city_destination_is_page_addressed_without_claiming_terrain_fill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cities = root / 'configs/cities.json'
+            cities.parent.mkdir(parents=True)
+            cities.write_text(json.dumps({'cities': [{
+                'id': 'elmhurst-il', 'name': 'Elmhurst, IL',
+                'wgs84': [-87.9403418, 41.8994745], 'status': 'registered',
+            }]}))
+            snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
+            [elmhurst] = snapshot['city_destinations']
+            self.assertEqual(elmhurst['atlas_page_id'], 'ec1/b0893/c0466')
+            self.assertEqual(elmhurst['atlas_page_schema'], 'earthcraft-atlas-v1')
+            self.assertLessEqual(elmhurst['page_maximum_sampled_scale_error_ppm'],
+                                 MAX_PAGE_SCALE_ERROR_PPM)
+            self.assertIsNone(elmhurst['active_save_manifest_has_tile_center_in_page'])
+            self.assertEqual(elmhurst['active_save_physical_fill'], 'unknown_not_scanned')
+
     def test_active_save_manifest_is_separate_and_not_claimed_as_block_fill(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -36,6 +54,7 @@ class ProgressSnapshotTests(unittest.TestCase):
             self.assertFalse(coverage['current_block_fill_verified'])
             self.assertIsNone(coverage['unlisted_chunks'])
             self.assertFalse(snapshot['claims']['active_save_fill_verified'])
+            self.assertEqual(snapshot['city_destinations'], [])
             self.assertNotIn(str(root), json.dumps(snapshot))
 
     def test_missing_or_invalid_active_save_manifest_stays_unknown(self):

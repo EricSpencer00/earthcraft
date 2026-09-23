@@ -11,7 +11,9 @@ from pathlib import Path
 import sqlite3
 import sys
 
-from global_projection import ATLAS_SCHEMA, WORLD_PAGE_COUNT, address_for
+from global_projection import (
+    ATLAS_SCHEMA, WORLD_PAGE_COUNT, address_for, page_coordinates, page_manifest,
+)
 from pyproj import Transformer
 
 
@@ -267,9 +269,49 @@ def _active_save_coverage(root):
         }
 
 
+def _city_destinations(root, active_save_coverage):
+    """Index registered cities by atlas page without implying terrain exists."""
+    path = Path(root) / 'configs' / 'cities.json'
+    try:
+        catalog = json.loads(path.read_text())
+        cities = catalog['cities']
+        if not isinstance(cities, list):
+            return []
+    except (OSError, KeyError, TypeError, ValueError):
+        return []
+    manifest_pages = active_save_coverage.get('manifest_tile_center_page_counts')
+    result = []
+    for city in cities:
+        try:
+            longitude, latitude = map(float, city['wgs84'])
+            address = address_for(longitude, latitude)
+            local = page_coordinates(longitude, latitude, address)
+            projection = page_manifest(address)['projection']
+        except (KeyError, TypeError, ValueError):
+            continue
+        result.append({
+            'id': str(city.get('id', '')),
+            'name': str(city.get('name', '')),
+            'catalog_status': str(city.get('status', 'unregistered')),
+            'latitude': latitude,
+            'longitude': longitude,
+            'atlas_page_schema': ATLAS_SCHEMA,
+            'atlas_page_id': address.id,
+            'atlas_page_local_xz': [local['x'], local['z']],
+            'proj_version': projection['proj_version'],
+            'page_maximum_sampled_scale_error_ppm': projection['maximum_sampled_scale_error_ppm'],
+            'page_scale_error_budget_ppm': projection['scale_error_budget_ppm'],
+            'active_save_manifest_has_tile_center_in_page': (
+                address.id in manifest_pages if isinstance(manifest_pages, dict) else None),
+            'active_save_physical_fill': 'unknown_not_scanned',
+        })
+    return sorted(result, key=lambda entry: entry['id'])
+
+
 def build_snapshot(root, now=None):
     root = Path(root)
     active_save_coverage = _active_save_coverage(root)
+    city_destinations = _city_destinations(root, active_save_coverage)
     journal_path = _latest_journal(root)
     counts = _journal_counts(root)
     source_complete = counts['sources'].get('complete', 0)
@@ -292,6 +334,7 @@ def build_snapshot(root, now=None):
             except (KeyError, TypeError, ValueError):
                 continue
         previous['active_save_coverage'] = active_save_coverage
+        previous['city_destinations'] = city_destinations
         return previous
     local_state = _status(root) if has_local_journal else 'no_local_run'
     cells = _cell_rows(journal_path) if has_local_journal else []
@@ -334,6 +377,7 @@ def build_snapshot(root, now=None):
             'note': 'A global source catalog and coverage denominator are not complete.',
         },
         'active_save_coverage': active_save_coverage,
+        'city_destinations': city_destinations,
         'workstreams': [
             {'id': 'catalog', 'label': 'Global source catalog', 'state': 'planned',
              'note': 'Build immutable spatial indexes before planetary batch work.'},

@@ -3,7 +3,9 @@
 Earthcraft should not flatten Earth into one Minecraft coordinate plane. No
 single flat projection can preserve metre scale worldwide, and Minecraft's
 coordinate limit is much smaller than Earth's circumference. The durable
-world model is therefore a sparse atlas of bounded local worlds.
+geographic model is therefore a sparse atlas of bounded local charts, all
+stored inside the existing **Earthcraft** save rather than separate
+selectable Minecraft saves.
 
 This system is deterministic plumbing. It does not ask a language model to
 select a projection, choose a page, resolve a seam, or decide what to build.
@@ -51,6 +53,35 @@ When a player crosses a page boundary, the runtime:
 
 The transition is a coordinate transform, not generated content. It can be
 replayed and tested offline with no network and no inference.
+
+## One-save runtime storage
+
+The atlas page ID is also the storage identity for a page-local Minecraft
+dimension. Materialized page dimensions live below the existing save's
+`dimensions/earthcraft/atlas/` directory; they are not separate world-list
+entries. The Chicago Overworld remains where it is, preserving its installed
+chunks and player data. Elmhurst and other atlas pages use their own local
+charts so their block scale does not inherit Chicago's long-baseline projection
+error.
+
+Runtime-created dimensions must be tracked in Earthcraft's own persistent page
+catalog and reconstructed after restart. The evaluated DynamicDimensions API
+supports loading existing dimension data and unloading it after saving, but
+does not persist the set of dynamically created IDs itself. Use its load path
+for a known page ID; its create path deliberately discards prior page data.
+Page unload is permitted only after the server has saved the page and moved all
+players away. City teleport and boundary crossing must resolve the WGS84 point
+to a page ID before entering the corresponding dimension.
+
+Implementation status: the installed `earthcraft_live` importer still attaches
+only to the Chicago Overworld and accepts one Chicago-frame packet namespace.
+The global Python transposition is tested offline, but it is not yet connected
+to Minecraft page loading, city teleportation, or an on-demand page worker.
+Until those pieces are implemented and save/reload-tested, atlas page
+coordinates in the progress ledger are canonical addresses—not proof that
+terrain is present or playable.
+
+Runtime API reference: [DynamicDimensions for Minecraft 1.21](https://github.com/TeamGalacticraft/DynamicDimensions/tree/minecraft/1.21).
 
 ## Chicago compatibility
 
@@ -120,13 +151,16 @@ hashes and can be entered by WGS84 coordinate.
 ### 5. Add runtime page rebasing
 
 - Store current page ID with the player's geographic state.
+- Register/load page dimensions inside the existing Earthcraft save, using a
+  persistent Earthcraft page catalog so restart does not lose page identity.
 - Prefetch adjacent pages before boundary approach.
 - Rebase position and motion through WGS84 in one transaction.
 - If a page is absent, enqueue its tiles and show a deterministic unavailable
   boundary; never invent terrain.
 
 Exit condition: repeated crossings preserve location within one block, retain
-player state, and never expose unowned seam blocks.
+player state, and never expose unowned seam blocks; page chunks survive a save,
+server restart, and subsequent reload in the same Earthcraft save.
 
 ### 6. Scale the sparse control plane
 
@@ -147,4 +181,3 @@ and an arbitrary WGS84 request is routable without enumerating the world.
 - No guessed buildings, terrain, materials, or seam fixes.
 - No LLM calls in discovery, addressing, projection, scheduling, generation,
   assembly, verification, or navigation.
-
