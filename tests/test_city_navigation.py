@@ -9,6 +9,10 @@ import nbtlib as n
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from city_catalog import load, destinations, shared_world_coordinates
 from elmhurst import target_for_city
+from elmhurst import atlas_frame_for_city
+from global_projection import page_coordinates, MAX_PAGE_SCALE_ERROR_PPM
+from metric_chart import chart_in_frame
+from pyproj import CRS
 from travel_controls import install_controls
 
 
@@ -49,6 +53,26 @@ class CityNavigationTests(unittest.TestCase):
         elmhurst = next(city for city in load()['cities'] if city['id'] == 'elmhurst-il')
         with self.assertRaisesRegex(ValueError, 'outside its generated tile'):
             target_for_city(elmhurst, frame, 95, [0, 0], 256)
+
+    def test_elmhurst_builder_uses_its_scale_bounded_atlas_page(self):
+        elmhurst = next(city for city in load()['cities'] if city['id'] == 'elmhurst-il')
+        vertical = {'vertical_offset_m': -116, 'dimension_min_y': -64,
+                    'dimension_height': 1024}
+        frame, address = atlas_frame_for_city(elmhurst, vertical)
+        self.assertEqual(address.id, 'ec1/b0893/c0466')
+        self.assertEqual(frame['atlas_page_id'], address.id)
+        self.assertLessEqual(frame['page_scale_error_ppm'], MAX_PAGE_SCALE_ERROR_PPM)
+        point = page_coordinates(*elmhurst['wgs84'], address)
+        size = 256
+        tile = chart_in_frame(*elmhurst['wgs84'], size, frame)
+        world_offset = [tile['west'] - frame['west'], frame['north'] - tile['north']]
+        target = target_for_city(elmhurst, frame, 95, world_offset, size)
+        self.assertAlmostEqual(target[0], point['x'], places=7)
+        self.assertAlmostEqual(target[2], point['z'], places=7)
+        chicago_frame = json.loads((Path(__file__).resolve().parents[1] /
+                                    'runs/chicago-adaptation-city-001/frame.json').read_text())
+        self.assertFalse(CRS.from_user_input(frame['crs']).equals(
+            CRS.from_user_input(chicago_frame['crs'])))
 
     def test_travel_pack_contains_city_and_coordinate_dialogs(self):
         with tempfile.TemporaryDirectory() as path:
