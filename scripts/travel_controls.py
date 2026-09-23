@@ -33,6 +33,7 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
     function('load', [*(f'scoreboard objectives add {key} trigger' for key in trigger_objectives),
                       'scoreboard objectives add ec_tp_use minecraft.used:minecraft.carrot_on_a_stick'])
     tick = []
+    tick.append('execute as @a[tag=!earthcraft_teleporter_checked] at @s run function earthcraft:travel/first_join')
     for key, handler in [('ec_scale', 'scale'), ('ec_speed', 'speed'), ('ec_mode', 'mode'),
                          ('ec_city', 'city'), ('ec_city_menu', 'city_menu'),
                          ('ec_coord_menu', 'coordinate_menu'), ('ec_coord_ready', 'coordinate')]:
@@ -78,6 +79,9 @@ def install_controls(world, city_catalog=DEFAULT_PATH):
     function('give_teleporter', [
         "give @s minecraft:carrot_on_a_stick[minecraft:custom_name='{\"text\":\"Earthcraft Teleporter\",\"color\":\"aqua\",\"italic\":false}',minecraft:lore=['{\"text\":\"Right-click to open the teleport list\",\"color\":\"gray\",\"italic\":false}'],minecraft:custom_data={earthcraft_teleporter:1b}] 1",
         'tellraw @s {"text":"Earthcraft Teleporter added to your inventory.","color":"aqua"}'])
+    function('first_join', [
+        'execute unless items entity @s inventory.* minecraft:carrot_on_a_stick[minecraft:custom_data~{earthcraft_teleporter:1b}] run function earthcraft:travel/give_teleporter',
+        'tag @s add earthcraft_teleporter_checked'])
     function('coordinate', [
         'execute if score @s ec_coord_x matches ..-29999985 run scoreboard players set @s ec_coord_x -29999984',
         'execute if score @s ec_coord_x matches 29999985.. run scoreboard players set @s ec_coord_x 29999984',

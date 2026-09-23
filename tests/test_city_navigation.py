@@ -82,6 +82,10 @@ class CityNavigationTests(unittest.TestCase):
             self.assertIn('minecraft.used:minecraft.carrot_on_a_stick', load_lines)
             tick_lines = (pack / 'data/earthcraft/function/travel/tick.mcfunction').read_text()
             self.assertIn('ec_tp_use', tick_lines)
+            self.assertIn('tag=!earthcraft_teleporter_checked', tick_lines)
+            first_join = (pack / 'data/earthcraft/function/travel/first_join.mcfunction').read_text()
+            self.assertIn('unless items entity @s inventory.*', first_join)
+            self.assertIn('earthcraft_teleporter_checked', first_join)
             self.assertEqual(result['teleporter_commands'][0], '/function earthcraft:travel/give_teleporter')
 
 
