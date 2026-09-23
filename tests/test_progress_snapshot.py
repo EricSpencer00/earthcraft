@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from progress_snapshot import build_snapshot
+from global_projection import address_for
 
 
 class ProgressSnapshotTests(unittest.TestCase):
@@ -17,14 +18,21 @@ class ProgressSnapshotTests(unittest.TestCase):
             manifest = root / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
             manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({'tiles': {
-                'one': {'size_m': 256, 'chunks': 256},
-                'two': {'size_m': 16, 'chunks': 1},
+                'one': {'size_m': 256, 'chunks': 256, 'world_offset_xz': [0, 0]},
+                'two': {'size_m': 16, 'chunks': 1, 'world_offset_xz': [256, 0]},
+            }}))
+            binding = root / 'runtime/traversal/config/earthcraft-live.json'
+            binding.parent.mkdir(parents=True)
+            binding.write_text(json.dumps({'coordinate_frame': {
+                'crs': 'EPSG:3857', 'west': 0, 'north': 0,
             }}))
             snapshot = build_snapshot(root, datetime(2026, 1, 1, tzinfo=timezone.utc))
             coverage = snapshot['active_save_coverage']
             self.assertEqual(coverage['state'], 'manifest_listed')
             self.assertEqual(coverage['manifest_tiles'], 2)
             self.assertEqual(coverage['manifest_chunk_declarations'], 257)
+            self.assertEqual(sum(coverage['manifest_tile_center_page_counts'].values()), 2)
+            self.assertEqual(coverage['atlas_page_address_schema'], 'earthcraft-atlas-v1')
             self.assertFalse(coverage['current_block_fill_verified'])
             self.assertIsNone(coverage['unlisted_chunks'])
             self.assertFalse(snapshot['claims']['active_save_fill_verified'])
@@ -63,6 +71,13 @@ class ProgressSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot['cells'][0]['state'], 'generated')
             self.assertEqual(snapshot['cells'][0]['chunks_total'], 256)
             self.assertEqual(snapshot['cells'][0]['chunks_generated'], 256)
+            self.assertEqual(snapshot['cells'][0]['atlas_page_center_id'],
+                             address_for(snapshot['cells'][0]['longitude'],
+                                         snapshot['cells'][0]['latitude']).id)
+            self.assertEqual(snapshot['cells'][0]['atlas_page_center_basis'],
+                             'exact_metric_tile_center')
+            self.assertEqual(snapshot['cell_grid']['global_page_address_schema'],
+                             'earthcraft-atlas-v1')
             self.assertNotIn('/Users/', json.dumps(snapshot))
 
     def test_global_snapshot_does_not_fabricate_denominator_or_private_paths(self):
@@ -88,7 +103,9 @@ class ProgressSnapshotTests(unittest.TestCase):
                 'schema_version': 1,
                 'updated_utc': '2026-01-01T00:00:00+00:00',
                 'scope': {'id': 'earth', 'coverage_percent': None},
+                'cell_grid': {},
                 'rollup': {'generated_tiles': 12},
+                'cells': [{'id': 'chicago/sample', 'longitude': -87.6, 'latitude': 41.9}],
                 'local': {
                     'state': 'idle',
                     'source_tiles_complete': 14,
@@ -106,6 +123,10 @@ class ProgressSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot['local']['source_tiles_complete'], 14)
             self.assertEqual(snapshot['local']['state'], 'public_snapshot')
             self.assertEqual(snapshot['updated_utc'], '2026-01-02T00:00:00+00:00')
+            self.assertEqual(snapshot['cells'][0]['atlas_page_center_id'],
+                             address_for(-87.6, 41.9).id)
+            self.assertEqual(snapshot['cells'][0]['atlas_page_center_basis'],
+                             'published_cell_center')
 
 
 if __name__ == '__main__':

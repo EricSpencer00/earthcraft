@@ -38,6 +38,11 @@
     "state": "manifest_listed",
     "manifest_tiles": 17,
     "manifest_chunk_declarations": 4352,
+    "manifest_tile_center_page_counts": {
+      "ec1/b0893/c0468": 17
+    },
+    "atlas_page_address_schema": "earthcraft-atlas-v1",
+    "manifest_page_address_basis": "tile center transformed through the active save frame",
     "current_block_fill_verified": false,
     "physical_chunk_scan": "not performed; live-save writes may be in progress",
     "unlisted_chunks": null,

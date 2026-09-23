@@ -11,6 +11,9 @@ from pathlib import Path
 import sqlite3
 import sys
 
+from global_projection import ATLAS_SCHEMA, WORLD_PAGE_COUNT, address_for
+from pyproj import Transformer
+
 
 STAGES = ('sources', 'geometry', 'appearance', 'game_verify')
 EARTH_SURFACE_M2 = 510_064_471 * 1_000_000
@@ -115,12 +118,15 @@ def _cell_rows(journal_path, region_id='chicago'):
         north = float(tile.get('north', 0))
         east = west + size
         south = north - size
+        center_lng, center_lat = project(west + size / 2, north - size / 2)
         west_lng, north_lat = project(west, north)
         east_lng, south_lat = project(east, south)
         states = {stage: states_by_tile.get(tile_id, {}).get(stage, 'pending')
                   for stage in STAGES}
         state = _cell_state(states)
         chunks_total = (size // MINECRAFT_CHUNK_SIZE_M) ** 2
+        atlas_page_id = (address_for(center_lng, center_lat).id
+                         if plan.get('frame', {}).get('crs') else None)
         source_complete = states['sources'] == 'complete'
         geometry_complete = states['geometry'] == 'complete'
         appearance_complete = states['appearance'] == 'complete'
@@ -129,8 +135,11 @@ def _cell_rows(journal_path, region_id='chicago'):
             'id': f'{region_id}/{tile_id}',
             'region_id': region_id,
             'tile_id': tile_id,
-            'latitude': round((north_lat + south_lat) / 2, 6),
-            'longitude': round((west_lng + east_lng) / 2, 6),
+            'latitude': round(center_lat, 6),
+            'longitude': round(center_lng, 6),
+            'atlas_page_center_id': atlas_page_id,
+            'atlas_page_center_basis': ('exact_metric_tile_center'
+                                        if atlas_page_id is not None else 'unavailable'),
             'width_deg': round(abs(east_lng - west_lng), 6),
             'height_deg': round(abs(north_lat - south_lat), 6),
             'size_m': size,
@@ -206,10 +215,37 @@ def _active_save_coverage(root):
             if chunks != (size // MINECRAFT_CHUNK_SIZE_M) ** 2:
                 raise ValueError('chunk declaration does not match tile dimensions')
             declarations += chunks
+        page_counts = None
+        binding_path = (Path(root) / 'runtime' / 'traversal' / 'config' /
+                        'earthcraft-live.json')
+        try:
+            binding = json.loads(binding_path.read_text())
+            frame = binding['coordinate_frame']
+            inverse = Transformer.from_crs(frame['crs'], 'EPSG:4326', always_xy=True)
+            page_counts = {}
+            for tile in tiles.values():
+                offset = tile['world_offset_xz']
+                size = tile['size_m']
+                if (not isinstance(offset, list) or len(offset) != 2 or
+                        any(type(value) is not int or value % MINECRAFT_CHUNK_SIZE_M
+                            for value in offset)):
+                    raise ValueError('invalid tile coordinate offset')
+                east = float(frame['west']) + offset[0] + size / 2
+                north = float(frame['north']) - offset[1] - size / 2
+                longitude, latitude = inverse.transform(east, north)
+                page_id = address_for(longitude, latitude).id
+                page_counts[page_id] = page_counts.get(page_id, 0) + 1
+            page_counts = dict(sorted(page_counts.items()))
+        except (OSError, KeyError, TypeError, ValueError):
+            page_counts = None
         return {
             'state': 'manifest_listed',
             'manifest_tiles': len(tiles),
             'manifest_chunk_declarations': declarations,
+            'manifest_tile_center_page_counts': page_counts,
+            'atlas_page_address_schema': ATLAS_SCHEMA if page_counts is not None else None,
+            'manifest_page_address_basis': ('tile center transformed through the active save frame'
+                                             if page_counts is not None else None),
             'current_block_fill_verified': False,
             'physical_chunk_scan': 'not performed; live-save writes may be in progress',
             'unlisted_chunks': None,
@@ -244,6 +280,17 @@ def build_snapshot(root, now=None):
     if previous:
         previous['updated_utc'] = (now or datetime.now(timezone.utc)).isoformat()
         previous.setdefault('local', {})['state'] = 'public_snapshot'
+        grid = previous.setdefault('cell_grid', {})
+        grid.setdefault('global_page_address_schema', ATLAS_SCHEMA)
+        grid.setdefault('global_page_count', WORLD_PAGE_COUNT)
+        grid.setdefault('page_address_basis', 'geographic center of each listed cell')
+        for cell in previous.get('cells', []):
+            try:
+                cell['atlas_page_center_id'] = address_for(
+                    float(cell['longitude']), float(cell['latitude'])).id
+                cell['atlas_page_center_basis'] = 'published_cell_center'
+            except (KeyError, TypeError, ValueError):
+                continue
         previous['active_save_coverage'] = active_save_coverage
         return previous
     local_state = _status(root) if has_local_journal else 'no_local_run'
@@ -261,7 +308,10 @@ def build_snapshot(root, now=None):
         },
         'cell_grid': {
             'schema_version': 1,
-            'addressing': 'region/tile_id',
+            'addressing': 'region/tile_id with global atlas page at each cell center',
+            'global_page_address_schema': ATLAS_SCHEMA,
+            'global_page_count': WORLD_PAGE_COUNT,
+            'page_address_basis': 'geographic center of each listed cell',
             'cell_size_m': CELL_SIZE_M,
             'minecraft_chunk_size_m': MINECRAFT_CHUNK_SIZE_M,
             'chunks_per_cell': (CELL_SIZE_M // MINECRAFT_CHUNK_SIZE_M) ** 2,
