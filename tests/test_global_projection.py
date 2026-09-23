@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from global_projection import (
     BAND_COUNT,
     CHUNK_SIZE_M,
+    MAX_PAGE_SCALE_ERROR_PPM,
     WORLD_PAGE_COUNT,
     PageAddress,
     address_for,
@@ -20,6 +21,7 @@ from global_projection import (
     page_manifest,
     rebase_coordinates,
     transpose_position,
+    _projection_error_ppm,
 )
 
 
@@ -75,7 +77,18 @@ class GlobalProjectionTests(unittest.TestCase):
         self.assertFalse(manifest["inference_used"])
         self.assertEqual(manifest["generation"]["tile_size_m"], 256)
         self.assertTrue(math.isfinite(manifest["projection"]["maximum_sampled_scale_error_ppm"]))
+        self.assertLessEqual(manifest["projection"]["maximum_sampled_scale_error_ppm"],
+                             manifest["projection"]["scale_error_budget_ppm"])
+        self.assertEqual(manifest["projection"]["proj_version"], manifest["proj_version"])
         self.assertEqual(atlas_summary()["page_count"], WORLD_PAGE_COUNT)
+
+    def test_all_atlas_bands_and_longitude_extremes_meet_metric_scale_budget(self):
+        for band in range(BAND_COUNT):
+            columns = columns_in_band(band)
+            for column in sorted({0, columns // 2, columns - 1}):
+                with self.subTest(band=band, column=column):
+                    error = _projection_error_ppm(PageAddress(band, column))
+                    self.assertLessEqual(error, MAX_PAGE_SCALE_ERROR_PPM)
 
     def test_transpose_preserves_vertical_state_and_motion_at_seam(self):
         longitude, latitude = -87.6298, 41.8781

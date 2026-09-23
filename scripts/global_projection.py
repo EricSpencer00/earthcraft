@@ -10,6 +10,7 @@ from functools import lru_cache
 import json
 import math
 
+import pyproj
 from pyproj import CRS, Geod, Proj, Transformer
 
 
@@ -19,6 +20,8 @@ TILE_SIZE_M = 256
 CHUNK_SIZE_M = 16
 HALO_M = 512
 BOUNDARY_SEGMENTS = 16
+MAX_PAGE_SCALE_ERROR_PPM = 1.5
+PROJ_VERSION = pyproj.proj_version_str
 
 _GEOD = Geod(ellps="WGS84")
 _MERIDIAN_LENGTH_M = _GEOD.inv(0, -90, 0, 90)[2]
@@ -81,6 +84,8 @@ def atlas_summary():
         "tile_size_m": TILE_SIZE_M,
         "chunk_size_m": CHUNK_SIZE_M,
         "source_halo_m": HALO_M,
+        "proj_version": PROJ_VERSION,
+        "sampled_scale_error_budget_ppm": MAX_PAGE_SCALE_ERROR_PPM,
     }
 
 
@@ -193,8 +198,15 @@ def page_manifest(address):
     columns = int((envelope["east"] - envelope["west"]) / TILE_SIZE_M)
     rows = int((envelope["north"] - envelope["south"]) / TILE_SIZE_M)
     projection = page_crs(address)
+    scale_error_ppm = _projection_error_ppm(address)
+    if scale_error_ppm > MAX_PAGE_SCALE_ERROR_PPM:
+        raise ValueError(
+            f"Page sampled scale error {scale_error_ppm:.6f} ppm exceeds "
+            f"{MAX_PAGE_SCALE_ERROR_PPM} ppm budget"
+        )
     return {
         "schema": ATLAS_SCHEMA,
+        "proj_version": PROJ_VERSION,
         "page_id": address.id,
         "selection": "fixed WGS84 meridian-distance band and longitude column formula",
         "inference_used": False,
@@ -202,7 +214,9 @@ def page_manifest(address):
         "projection": {
             "method": projection.coordinate_operation.method_name,
             "wkt": projection.to_wkt(),
-            "maximum_sampled_scale_error_ppm": _projection_error_ppm(address),
+            "proj_version": PROJ_VERSION,
+            "maximum_sampled_scale_error_ppm": scale_error_ppm,
+            "scale_error_budget_ppm": MAX_PAGE_SCALE_ERROR_PPM,
         },
         "generation": {
             "tile_size_m": TILE_SIZE_M,
