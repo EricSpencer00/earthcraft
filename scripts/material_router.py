@@ -1,6 +1,7 @@
 """Deterministic geographic appearance routing; no geometry completion or LLM."""
 import io
 import json
+import os
 import re
 import zipfile
 from functools import lru_cache
@@ -41,7 +42,9 @@ SURFACE_KEYS = {
 @lru_cache(maxsize=1)
 def texture_colors():
     """Read the installed palette once per worker, not once per tile."""
-    jar = Path.home() / 'Library/Application Support/minecraft/versions/1.21.10/1.21.10.jar'
+    configured = os.environ.get('EARTHCRAFT_CLIENT_JAR')
+    jar = (Path(configured).expanduser() if configured else
+           Path.home() / 'Library/Application Support/minecraft/versions/1.21.10/1.21.10.jar')
     result = {}
     with zipfile.ZipFile(jar) as archive:
         for block in APPEARANCE_BLOCKS:

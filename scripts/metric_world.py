@@ -189,7 +189,8 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         offset, ground, _ = vertical_layout(elevation)
     else:
         offset,ground,_,world_offset=tile_layout(meta,elevation,world_frame)
-    surface = np.full((size,size), BLOCK['stone'], np.uint8)
+    presentation = meta.get('building_source_kind') == 'osm-presentation'
+    surface = np.full((size,size), BLOCK['grass_block'] if presentation else BLOCK['stone'], np.uint8)
     for code, material in {10:'grass_block',20:'grass_block',30:'grass_block',40:'grass_block',
             50:'gray_concrete',60:'sand',70:'snow_block',80:'stone',90:'clay',95:'clay',100:'grass_block'}.items():
         surface[cover==code] = BLOCK[material]
@@ -300,7 +301,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             'county_ground_m':ground_m,'topology_ground_m':topology_ground_m})
         # Measured building footprint takes precedence over a coarse water class.
         surface[mask & (surface==BLOCK['water'])]=BLOCK['gray_concrete']
-    osm_geometry = meta.get('building_source_kind')=='osm-explicit'
+    osm_geometry = meta.get('building_source_kind') in ('osm-explicit', 'osm-presentation')
     # A tile with no admitted county/OSM geometry and no 3D observation is a
     # terrain-only result even when older source manifests lack the explicit
     # buildings_available flag.  This mirrors the worker's LiDAR skip policy
@@ -548,6 +549,16 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     if osm_geometry:
         report['buildings']=[{'osm_way':b['id'],'height_m':b['height'],'base_y':b['low'],'roof_y':b['high']} for b in buildings]
         report['building_geometry']='Mapped explicit-height OSM shells; not scanned building surfaces'
+        if presentation:
+            report['building_geometry'] = 'Mapped OSM footprints with observed heights or explicitly estimated presentation heights; not scanned surfaces'
+            report['presentation_estimates_sha256'] = meta['presentation_estimates_sha256']
+            report['estimated_attribute_ways'] = meta['estimated_attribute_ways']
+            report['unclassified_ground_policy'] = meta['unclassified_ground_policy']
+            report['limitations'] = [line for line in report['limitations']
+                                     if not line.startswith('Roads without mapped width')]
+            report['limitations'].extend([
+                'Missing building heights and road widths use explicitly recorded presentation estimates, not measurements.',
+                'Unclassified terrain uses a grass presentation, not an observed ground-cover class.'])
         report['county_height_units']='not used'
         report['osm_skipped_buildings']=skipped
         report['osm_incomplete_extrusions_replaced']=0
