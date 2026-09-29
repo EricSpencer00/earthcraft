@@ -31,6 +31,14 @@ NBT record and timestamp are preserved. A progress file supports restart and
 rejects changed completed output. External chunk references are rejected rather
 than silently discarded.
 
+Previously visited destinations can contain automatically saved void chunks.
+An explicit second pass with `--baseline`, `--ownership`, and each plan's
+progress file can fill those chunks. Published ownership and the original
+coverage protect previously generated geography, including player-cleared
+chunks. Any non-air block, block entity, or legacy entity also prevents
+replacement. Each eligible void replacement is recorded separately; the
+default expansion remains conservative.
+
 Before publishing a staging copy, retain a verified original backup, audit all
 original chunk records and non-region files against it, and test representative
 locations in Minecraft. Transfer only completed output and check its hashes.

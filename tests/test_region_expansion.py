@@ -5,10 +5,12 @@ import zlib
 import json
 import sqlite3
 import tempfile
+import io
 import nbtlib as n
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from region_expansion import encode, merge, records, expand, sha
+from region_expansion import encode, merge, records, expand, sha, empty_unowned_record, materialize_unowned_empty
+from chicago_tiles import digest
 
 
 def record(content, timestamp=1):
@@ -16,7 +18,21 @@ def record(content, timestamp=1):
     return len(payload).to_bytes(4, 'big')+payload, timestamp.to_bytes(4, 'big')
 
 
+def native(block, entity=False):
+    tag = n.File({'sections': n.List[n.Compound]([n.Compound({
+        'Y': n.Byte(0), 'block_states': n.Compound({'palette': n.List[n.Compound]([
+            n.Compound({'Name': n.String(block)})])})})]),
+        'block_entities': n.List[n.Compound]([n.Compound({'id': n.String('minecraft:chest')})] if entity else [])})
+    stream = io.BytesIO()
+    tag.write(stream)
+    return record(stream.getvalue())
+
+
 class CompressedExpansionTests(unittest.TestCase):
+    def test_only_unoccupied_void_records_are_eligible_for_materialization(self):
+        self.assertTrue(empty_unowned_record(native('minecraft:air')))
+        self.assertFalse(empty_unowned_record(native('minecraft:stone')))
+        self.assertFalse(empty_unowned_record(native('minecraft:air', entity=True)))
     def test_cleared_player_chunk_and_timestamp_win_over_fresh_geography(self):
         old = {0: record(b'player cleared this chunk', 100), 900: record(b'inventory')}
         new = {0: record(b'building', 200), 1: record(b'new geographic chunk')}
@@ -36,6 +52,52 @@ class CompressedExpansionTests(unittest.TestCase):
 
 
 class StagingExpansionTests(unittest.TestCase):
+    def test_void_pass_preserves_cleared_owned_chunks_and_player_blocks_and_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline, world, plan, source = [root/name for name in ('baseline', 'save', 'plan', 'source')]
+            for path in (baseline/'region', world/'region', plan, source/'world/region'):
+                path.mkdir(parents=True)
+            frame = {'crs': 'EPSG:32616'}
+            frozen = {'frame': frame, 'tiles': [{'id': '0_0', 'size': 256}]}
+            (plan/'plan.json').write_text(json.dumps(frozen))
+            # Published ownership protects a cleared chunk; coverage protects a
+            # separately generated chunk; nonempty blocks and entities survive.
+            coverage = {'frame': frame, 'tiles': {'older': {'world_offset_xz': [32, 0], 'size_m': 16}}}
+            (baseline/'city-coverage.json').write_text(json.dumps(coverage))
+            ownership = root/'ownership.json'
+            ownership.write_text(json.dumps({'frame': frame, 'chunks': ['0,0']}))
+            old = {0: native('minecraft:air'), 1: native('minecraft:air'),
+                   2: native('minecraft:air'), 3: native('minecraft:stone'),
+                   4: native('minecraft:air', entity=True)}
+            for save in (baseline, world):
+                (save/'region/r.0.0.mca').write_bytes(encode(old))
+            incoming = {slot: native('minecraft:grass_block') for slot in old}
+            (source/'world/region/r.0.0.mca').write_bytes(encode(incoming))
+            receipt = source/'geometry-receipt.json'
+            receipt.write_text(json.dumps({'result': 'pass', 'tile': '0_0',
+                'regions': {'r.0.0.mca': sha(source/'world/region/r.0.0.mca')}}))
+            with sqlite3.connect(plan/'jobs.sqlite') as db:
+                db.execute('CREATE TABLE jobs(tile,stage,state,evidence,evidence_sha256)')
+                db.execute("INSERT INTO jobs VALUES('0_0',1,'complete',?,?)", (str(receipt), sha(receipt)))
+            progress = root/'progress.json'
+            progress.write_text(json.dumps({'request': {'plans': [digest(frozen)]},
+                'regions': {'r.0.0.mca': {'sha256': sha(world/'region/r.0.0.mca')}}}))
+            result = materialize_unowned_empty(world, baseline, [plan], ownership, [progress])
+            self.assertEqual(result['materialized_unowned_empty_chunks'], 1)
+            actual = records((world/'region/r.0.0.mca').read_bytes())
+            self.assertEqual(actual[1], incoming[1])
+            for slot in (0, 2, 3, 4):
+                self.assertEqual(actual[slot], old[slot])
+            self.assertEqual(json.loads(progress.read_text())['regions']['r.0.0.mca']['sha256'],
+                             sha(world/'region/r.0.0.mca'))
+            self.assertEqual(materialize_unowned_empty(world, baseline, [plan], ownership, [progress]), result)
+            # Changing a player chunk after assembly is a hard fence.
+            actual[3] = native('minecraft:diamond_block')
+            (world/'region/r.0.0.mca').write_bytes(encode(actual))
+            with self.assertRaisesRegex(ValueError, 'player chunk changed'):
+                materialize_unowned_empty(world, baseline, [plan], ownership, [progress])
+
     def fixture(self, directory):
         root = Path(directory)
         world, plan, source = root/'save', root/'plan', root/'tile'

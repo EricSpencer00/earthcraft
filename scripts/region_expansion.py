@@ -1,18 +1,23 @@
 """Expand a closed staging save from verified tiles without rewriting chunk NBT.
 
-Existing chunks, including entirely cleared chunks, always win. The compressed
-record and timestamp are copied byte for byte. This is a staging operation;
+By default existing chunks, including entirely cleared chunks, always win.
+An explicit ownership pass can fill only previously ungenerated void chunks.
+The compressed record and timestamp are copied byte for byte. This is a staging operation;
 publishing over a user's save requires a separate snapshot and session fence.
 """
 import argparse
 from collections import defaultdict
 import fcntl
 import hashlib
+import gzip
+import io
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+import zlib
+import nbtlib as n
 
 from chicago_tiles import digest
 
@@ -68,6 +73,102 @@ def merge(original, incoming):
     for slot, value in incoming.items():
         combined.setdefault(slot, value)
     return combined
+
+
+def empty_unowned_record(record):
+    """Conservatively identify a void chunk containing no blocks or entities."""
+    raw = record[0]
+    mode, payload = raw[4], raw[5:]
+    decoded = zlib.decompress(payload) if mode == 2 else gzip.decompress(payload) if mode == 1 else payload
+    tag = n.File.parse(io.BytesIO(decoded))
+    if tag.get('block_entities') or tag.get('TileEntities') or tag.get('entities'):
+        return False
+    air = {'minecraft:air', 'minecraft:cave_air', 'minecraft:void_air'}
+    # A stale unused non-air palette is preserved conservatively as an edit.
+    return all(str(entry['Name']) in air for section in tag.get('sections', [])
+               if 'block_states' in section for entry in section['block_states']['palette'])
+
+
+def materialize_unowned_empty(world, baseline, plans, ownership, progress_paths, mappings=()):
+    """Fill previously visited void chunks while retaining cleared geography.
+
+The default expansion preserves all saved chunks. This explicit second pass
+admits only all-air chunks outside published/generated ownership. It never
+changes a known generated chunk or any chunk with non-air blocks or entities.
+"""
+    owned = json.loads(ownership.read_text())
+    protected = set(owned['chunks'])
+    coverage = json.loads((baseline/'city-coverage.json').read_text())
+    if owned['frame'] != coverage['frame']:
+        raise ValueError('Frozen ownership uses a different coordinate frame')
+    for tile in coverage['tiles'].values():
+        x, z = tile['world_offset_xz']
+        protected.update(f'{cx},{cz}' for cx in range(x//16, (x+tile['size_m'])//16)
+                         for cz in range(z//16, (z+tile['size_m'])//16))
+    sources, states = {}, []
+    for directory, progress in zip(plans, progress_paths, strict=True):
+        plan = json.loads((directory/'plan.json').read_text())
+        state = json.loads(progress.read_text())
+        if state['request']['plans'] != [digest(plan)] or plan['frame'] != coverage['frame']:
+            raise ValueError('Ownership materialization plan/frame changed')
+        db = sqlite3.connect(f'file:{directory / "jobs.sqlite"}?mode=ro', uri=True)
+        try:
+            rows = db.execute("SELECT tile,evidence,evidence_sha256 FROM jobs WHERE stage=1 AND state='complete'").fetchall()
+        finally:
+            db.close()
+        if ({row[0] for row in rows} != {tile['id'] for tile in plan['tiles']} or
+                any(t['size'] != 256 for t in plan['tiles'])):
+            raise ValueError('Complete 256 m plans required for ownership materialization')
+        sources.update({tile: (remap(path, mappings), expected) for tile, path, expected in rows})
+        states.append((progress, state))
+    source_cache, changed = {}, {}
+    for path in sorted((baseline/'region').glob('r.*.*.mca')):
+        original = records(path.read_bytes())
+        target = world/'region'/path.name
+        actual = records(target.read_bytes())
+        rx, rz = map(int, path.name.split('.')[1:3])
+        replacements = []
+        for slot, value in original.items():
+            cx, cz = rx*32+slot%32, rz*32+slot//32
+            key, tile = f'{cx},{cz}', f'{cx//16}_{cz//16}'
+            if key in protected or tile not in sources or not empty_unowned_record(value):
+                if actual.get(slot) != value:
+                    raise ValueError('Known geography or player chunk changed')
+                continue
+            receipt, expected = sources[tile]
+            if tile not in source_cache:
+                if sha(receipt) != expected:
+                    raise ValueError('Geometry receipt changed during void materialization')
+                proof = json.loads(receipt.read_text())
+                if proof.get('result') != 'pass' or proof.get('tile') != tile:
+                    raise ValueError('Geometry receipt rejected or misplaced')
+                region = receipt.parent/'world/region'/path.name
+                raw = region.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != proof['regions'][path.name]:
+                    raise ValueError('Source region changed during void materialization')
+                # Only one immutable source tile stays decoded at a time.
+                source_cache = {tile: records(raw)}
+            incoming = source_cache[tile][slot]
+            if actual.get(slot) not in (value, incoming):
+                raise ValueError('Unowned void chunk changed after staging')
+            actual[slot] = incoming
+            replacements.append([cx, cz])
+        if replacements:
+            atomic(target, encode(actual))
+            if records(target.read_bytes()) != actual:
+                raise ValueError('Void materialization did not read back exactly')
+            changed[path.name] = replacements
+            for progress, state in states:
+                if path.name in state['regions']:
+                    state['regions'][path.name]['sha256'] = sha(target)
+                    state['regions'][path.name]['unowned_empty_chunks_materialized'] = replacements
+                    atomic(progress, json.dumps(state).encode())
+            print(json.dumps({'materialized_void_region': path.name, 'chunks': len(replacements)}), flush=True)
+    result = {'ownership_sha256': sha(ownership), 'materialized_unowned_empty_chunks':
+              sum(len(value) for value in changed.values()), 'regions': changed,
+              'known_generated_and_nonempty_chunks_preserved': True}
+    atomic(world/'void-materialization.json', json.dumps(result, indent=2).encode())
+    return result
 
 
 def atomic(path, raw):
@@ -206,10 +307,21 @@ def main():
     parser.add_argument('--plan', type=Path, action='append', required=True)
     parser.add_argument('--progress', type=Path, required=True)
     parser.add_argument('--map-root', nargs=2, type=Path, action='append', default=[])
+    parser.add_argument('--baseline', type=Path,
+                        help='Verified original snapshot for an explicit unowned-void materialization pass')
+    parser.add_argument('--ownership', type=Path, help='Frozen published chunk ownership JSON')
+    parser.add_argument('--additional-progress', type=Path, action='append', default=[])
     args = parser.parse_args()
     with (args.world/'session.lock').open('a+b') as lock:
         fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        print(json.dumps(expand(args.world, args.plan, args.progress, args.map_root), indent=2))
+        if args.baseline or args.ownership:
+            if not args.baseline or not args.ownership:
+                parser.error('--baseline and --ownership must be supplied together')
+            result = materialize_unowned_empty(args.world, args.baseline, args.plan,
+                args.ownership, [args.progress, *args.additional_progress], args.map_root)
+        else:
+            result = expand(args.world, args.plan, args.progress, args.map_root)
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == '__main__':
