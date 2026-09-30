@@ -122,7 +122,24 @@ def prepare(control):
     atomic(catalog,json.dumps(record,indent=2).encode());return record
 
 
-def crop(catalog_path,grid,destination,cache):
+def admit_points(xyz,labels,grid,surface_context=None):
+    """Admit class 6 directly; associate class 1 only within measured buildings."""
+    west,north,size=grid['west'],grid['north'],grid['size']
+    inside=(xyz[:,0]>=west)&(xyz[:,0]<west+size)&(xyz[:,1]>north-size)&(xyz[:,1]<=north)
+    classified=inside&(labels==6);associated=np.zeros(len(xyz),bool)
+    if surface_context is not None:
+        for key in ('dtm','dsm','valid','roof_mask'):
+            if np.shape(surface_context[key])!=(size,size):raise ValueError('Will association uses another surface grid')
+        indexes=np.flatnonzero(inside&(labels==1))
+        rows=np.floor(north-xyz[indexes,1]).astype(int);cols=np.floor(xyz[indexes,0]-west).astype(int)
+        supported=(surface_context['valid'][rows,cols]&surface_context['roof_mask'][rows,cols]&
+            (xyz[indexes,2]>surface_context['dtm'][rows,cols]+2)&
+            (xyz[indexes,2]<=surface_context['dsm'][rows,cols]+2))
+        associated[indexes[supported]]=True
+    return classified|associated,classified,associated
+
+
+def crop(catalog_path,grid,destination,cache,surface_context=None):
     catalog_path=Path(catalog_path);destination=Path(destination);cache=Path(cache)
     record=json.loads(catalog_path.read_text());publisher=record['publisher'];source=record['nested_archive']
     if publisher['native_crs']!='EPSG:6455' or publisher['metres_per_vertical_unit']!=SURVEY_FOOT:
@@ -135,7 +152,7 @@ def crop(catalog_path,grid,destination,cache):
     bounds=transform(native.transform,box(west,north-size,west+size,north).segmentize(16))
     selected=sorted(int(i) for i in tree.query(bounds,predicate='intersects'))
     if not selected:raise ValueError('No indexed original Will member covers the tile')
-    indexer=SpatialPointIndex(cache/'indexes');pieces=[];sources=[]
+    indexer=SpatialPointIndex(cache/'indexes');pieces=[];classifications=[];sources=[];associated_count=classified_count=0
     for index in selected:
         asset=assets[index];validate_asset(asset)
         factory=lambda url,budget:nested_reader(source,budget)
@@ -150,18 +167,29 @@ def crop(catalog_path,grid,destination,cache):
         indexed=indexer.ensure(path,receipt,indexed_asset);points=indexer.query(indexed,bounds.bounds)
         xyz=points['xyz'];labels=points['classification']
         x,y=metric.transform(xyz[:,0],xyz[:,1]) if len(xyz) else (np.empty(0),np.empty(0))
-        keep=(labels==6)&(x>=west)&(x<west+size)&(y>north-size)&(y<=north)
-        pieces.append(np.column_stack((x[keep],y[keep],xyz[keep,2]*SURVEY_FOOT)))
+        metric_xyz=np.column_stack((x,y,xyz[:,2]*SURVEY_FOOT))
+        keep,classified,associated=admit_points(metric_xyz,labels,grid,surface_context)
+        pieces.append(metric_xyz[keep]);classifications.append(labels[keep])
+        associated_count+=int(associated.sum());classified_count+=int(classified.sum())
         sources.append({'survey_id':asset['id'],'original_source':receipt,'index':str(indexed),
                         'original_building_points_in_crop':int(keep.sum())})
     xyz=np.concatenate(pieces) if pieces else np.empty((0,3));destination.mkdir(parents=True,exist_ok=True)
-    np.savez_compressed(destination/'points.npz',xyz=xyz)
-    receipt={'schema':'earthcraft-classified-las-building-crop-v1','project':'Will original 2021 LAS',
+    np.savez_compressed(destination/'points.npz',xyz=xyz,classification=np.concatenate(classifications))
+    receipt={'schema':'earthcraft-associated-las-building-crop-v1' if surface_context is not None else 'earthcraft-classified-las-building-crop-v1',
+        'project':'Will original 2021 LAS',
         'output_horizontal_crs':grid['crs'],'grid':{k:grid[k] for k in ('crs','west','north','size')},
         'points_sha256':sha(destination/'points.npz'),'building_points':len(xyz),'sources':sources,
-        'publisher':publisher,'retained_classes':[6],'withheld_retained':False,'downsampling':False,
+        'publisher':publisher,'retained_classes':[1,6] if surface_context is not None else [6],
+        'provider_class6_points':classified_count,'associated_class1_points':associated_count,
+        'withheld_retained':False,'downsampling':False,
         'vertical_reference':publisher['vertical_reference'],
         'all_intersecting_indexed_original_members_acquired':True,
         'unindexed_original_members':len(record['unindexed_original_members']),
         'independent_accuracy_verified':False,'facade_colour_measured':False}
+    if surface_context is not None:
+        receipt['class1_association']={'method':'Mapped building footprint with valid paired DSM/DTM; >2 m above ground and <=DSM+2 m',
+            'source_classes_preserved':True,'provider_building_classification':False,
+            'arrays_sha256':{key:hashlib.sha256(np.asarray(surface_context[key]).tobytes()).hexdigest()
+                             for key in ('dtm','dsm','valid','roof_mask')},
+            'limitations':['Spatially associated unclassified returns can include clutter; this is not a facade truth mask.']}
     atomic(destination/'manifest.json',json.dumps(receipt,indent=2).encode());return receipt

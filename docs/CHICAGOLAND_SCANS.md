@@ -40,6 +40,12 @@ The frozen publisher tile index selects 4,101 original members. The adapter
 checks both ZIP directories, the outer ETag, member CRCs, recovered LAS bytes,
 horizontal references and the separately verified survey-foot Z reference.
 Original DEFLATE payloads are preserved losslessly in gzip caches.
+The tested Will member contained class-1 unclassified returns rather than
+provider class-6 buildings. The regional adapter can associate those returns
+only inside mapped building cells with valid paired DSM/DTM, more than 2 m
+above ground and no more than 2 m above the measured surface. Source labels,
+association masks and surface hashes remain explicit. These are spatially
+associated observations; clutter and survey-date conflicts remain possible.
 
 Within paired survey coverage, mapped footprints restrict DSM roofs so trees
 outside buildings do not become roof geometry. Every usable intersecting

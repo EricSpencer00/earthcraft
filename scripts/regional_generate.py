@@ -7,11 +7,13 @@ Control journals must use the system disk; bulk artifacts use mounted LaCie.
 import argparse
 from contextlib import ExitStack
 import fcntl
+import faulthandler
 import json
 import os
 from pathlib import Path
 import shutil
 import signal
+import sys
 import time
 import urllib.parse
 import urllib.error
@@ -210,7 +212,11 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
                 originals.append(('Cook-original-2022',cook_catalog,cook_crop,'cook2022-cache'))
             if pair['county']=='Will' and will_catalog and Path(will_catalog).exists():
                 from regional_will_points import crop as will_crop
-                originals.append(('Will-original-2021',will_catalog,will_crop,'will2021-cache'))
+                with np.load(world/'roof-observations.npz') as roofs:roof_mask=roofs['mask'].copy()
+                context={key:arrays[key] for key in ('dtm','dsm','valid')};context['roof_mask']=roof_mask
+                def associated_will(catalog,grid,destination,cache):
+                    return will_crop(catalog,grid,destination,cache,surface_context=context)
+                originals.append(('Will-original-2021',will_catalog,associated_will,'will2021-cache'))
             for project,original_catalog,original_crop,original_cache in originals:
                 point_root=root/'point-crops'/project
                 try:
@@ -247,7 +253,8 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
                 np.savez_compressed(points/'points.npz',xyz=xyz)
                 record=dict(accepted[0],project='explicit union of all usable intersecting surveys',
                     points_sha256=sha(points/'points.npz'),building_points=len(xyz),source_crops=accepted,
-                    point_admission='Original class-6 returns supported by current paired DSM within 2 m; older conflicting returns excluded',
+                    retained_classes=sorted({value for crop in accepted for value in crop.get('retained_classes',[6])}),
+                    point_admission='Class-6 returns supported by paired DSM within 2 m; original Will class-1 returns additionally require a mapped measured-roof footprint and >2 m ground clearance',
                     rejected_temporal_or_surface_conflicts=rejected_temporal_or_surface_conflicts)
                 atomic(points/'manifest.json',json.dumps(record).encode())
                 candidate=root/'world.scanned-points'
@@ -346,6 +353,7 @@ def run(args):
     control.mkdir(parents=True, exist_ok=True); bulk.mkdir(parents=True, exist_ok=True)
     with (control/('worker-'+args.worker_id+'.lock')).open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        faulthandler.register(signal.SIGUSR1,file=sys.stderr,all_threads=True)
         frame = json.loads(args.frame.read_text())
         if (control/'plan.json').exists():
             plan = json.loads((control/'plan.json').read_text())

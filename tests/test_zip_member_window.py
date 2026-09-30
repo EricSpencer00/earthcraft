@@ -16,12 +16,29 @@ from shapely.geometry import box,mapping
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import cook_city_cache as cache
-from regional_will_points import validate_asset,URL,crop
+from regional_will_points import validate_asset,URL,crop,admit_points
 from regional_scans import SURVEY_FOOT
 from zip_member_window import ZipMemberWindow,member_identity
 
 
 class NestedZipTests(unittest.TestCase):
+    def test_unclassified_returns_require_measured_building_envelope(self):
+        grid={'west':0,'north':8,'size':8}
+        xyz=np.array([[1.5,6.5,110],[2.5,6.5,110],[1.5,6.5,101],
+                      [1.5,6.5,125],[1.5,6.5,110],[2.5,6.5,110],[9,6.5,110]])
+        labels=np.array([1,1,1,1,2,6,6],np.uint8)
+        context={'dtm':np.full((8,8),100),'dsm':np.full((8,8),120),
+                 'valid':np.ones((8,8),bool),'roof_mask':np.zeros((8,8),bool)}
+        context['roof_mask'][1,1]=True
+        keep,classified,associated=admit_points(xyz,labels,grid,context)
+        np.testing.assert_array_equal(np.flatnonzero(keep),[0,5])
+        np.testing.assert_array_equal(np.flatnonzero(associated),[0])
+        np.testing.assert_array_equal(np.flatnonzero(classified),[5])
+        keep,_,associated=admit_points(xyz,labels,grid)
+        np.testing.assert_array_equal(np.flatnonzero(keep),[5]);self.assertFalse(associated.any())
+        context['valid'][1,1]=False
+        _,_,associated=admit_points(xyz,labels,grid,context);self.assertFalse(associated.any())
+
     def fixture(self,compression=zipfile.ZIP_STORED):
         original=b'LASF'+bytes(range(256))*12000
         inner=io.BytesIO()

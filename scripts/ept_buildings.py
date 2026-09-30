@@ -155,7 +155,8 @@ def crop(project, grid, destination, cache, dtm, valid, max_nodes=512,
 
 def load(source, meta, ground, offset):
     manifest = json.loads((source/'manifest.json').read_text())
-    if manifest['schema'] not in ('earthcraft-classified-ept-building-crop-v1','earthcraft-classified-las-building-crop-v1') or manifest['grid'] != {
+    if manifest['schema'] not in ('earthcraft-classified-ept-building-crop-v1','earthcraft-classified-las-building-crop-v1',
+                                   'earthcraft-associated-las-building-crop-v1') or manifest['grid'] != {
             key: meta[key] for key in ('crs','west','north','size')}:
         raise ValueError('Classified scan uses another world grid')
     if sha(source/'points.npz') != manifest['points_sha256']:
@@ -166,5 +167,7 @@ def load(source, meta, ground, offset):
     if len(cells) > 2_000_000 or (len(cells) and (cells[:,1].min() < -64 or cells[:,1].max() >= 960)):
         raise ValueError('Classified scan voxel extent exceeds world budget')
     return cells, {'source_manifest': manifest, 'occupied_voxels': len(cells),
-        'method': 'Direct provider class-6 building returns; no unclassified point association',
+        'method': ('Provider class-6 returns and explicitly footprint/paired-surface-associated class-1 returns'
+                   if 1 in manifest.get('retained_classes',[]) else
+                   'Direct provider class-6 building returns; no unclassified point association'),
         'extrusion': False, 'llm_used': False}
