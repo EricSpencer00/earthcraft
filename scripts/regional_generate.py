@@ -36,6 +36,15 @@ from regional_store import compact, materialized, region_hashes
 _SCAN_COVERAGES = {}
 
 
+def supported_points(pieces,grid,surfaces):
+    """An empty or conflicting crop must not claim a point-geometry upgrade."""
+    xyz=np.unique(np.concatenate(pieces),axis=0) if pieces else np.empty((0,3))
+    if not len(xyz):return xyz,0
+    rows=np.floor(grid['north']-xyz[:,1]).astype(int);cols=np.floor(xyz[:,0]-grid['west']).astype(int)
+    supported=surfaces['valid'][rows,cols]&(xyz[:,2]<=surfaces['dsm'][rows,cols]+2)
+    return xyz[supported],int((~supported).sum())
+
+
 def prepare_scope(control, frame):
     queries = [('metro', 'CBSA/MapServer/3', "GEOID='16980'"),
                ('kenosha', 'State_County/MapServer/1', "GEOID='55059'")]
@@ -242,13 +251,8 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
                     attempts.append({'project':survey['project'],'result':'acquired','building_points':record['building_points']})
                 except ValueError as error:
                     attempts.append({'project':survey['project'],'result':'unusable','reason':str(error)})
-            if pieces:
-                xyz=np.unique(np.concatenate(pieces),axis=0)
-                rows=np.floor(meta['source']['north']-xyz[:,1]).astype(int)
-                cols=np.floor(xyz[:,0]-meta['source']['west']).astype(int)
-                supported=arrays['valid'][rows,cols] & (xyz[:,2]<=arrays['dsm'][rows,cols]+2)
-                rejected_temporal_or_surface_conflicts=int((~supported).sum())
-                xyz=xyz[supported]
+            xyz,rejected_temporal_or_surface_conflicts=supported_points(pieces,meta['source'],arrays)
+            if len(xyz):
                 points=root/'points.combined';points.mkdir(exist_ok=True)
                 np.savez_compressed(points/'points.npz',xyz=xyz)
                 record=dict(accepted[0],project='explicit union of all usable intersecting surveys',

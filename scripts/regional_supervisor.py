@@ -17,6 +17,30 @@ import time
 from region_expansion import atomic
 
 
+def ensure(args):
+    """Start a missing task supervisor from the authorized SSH context."""
+    control=args.control.resolve();control.mkdir(parents=True,exist_ok=True)
+    with (control/'supervisor.lock').open('a+') as lock:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:return {'state':'running'}
+        deadline=control/'supervisor-deadline.json'
+        if deadline.exists() and time.time()>=json.loads(deadline.read_text()):
+            return {'state':'generation_deadline'}
+        status_path=control/'supervisor-status.json'
+        status=json.loads(status_path.read_text()) if status_path.exists() else {}
+        if len(status.get('completed_workers',[]))==3:return {'state':'complete'}
+        if any(value>=10 for value in status.get('failed_restarts',{}).values()):
+            return {'state':'worker_failure_boundary'}
+        command=[sys.executable,'-u',str(Path(__file__).resolve()),'--control',str(control),
+                 '--bulk',str(args.bulk),'--frame',str(args.frame),'--illinois',str(args.illinois),
+                 '--reserve-gib',str(args.reserve_gib)]
+        env=dict(os.environ,PYTHONPATH=str(Path(__file__).parent.resolve()))
+        with (control/'supervisor-ssh.log').open('a') as log:
+            child=subprocess.Popen(command,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        record={'state':'starting','supervisor_pid':child.pid,'time':time.time(),'execution_route':'authorized SSH'}
+        atomic(control/'supervisor-start.json',json.dumps(record).encode());return record
+
+
 def run(args):
     control=args.control.resolve();control.mkdir(parents=True,exist_ok=True)
     with (control/'supervisor.lock').open('a+') as lock:
@@ -81,6 +105,8 @@ if __name__=='__main__':
     parser.add_argument('--frame',type=Path,required=True)
     parser.add_argument('--illinois',type=Path,required=True)
     parser.add_argument('--reserve-gib',type=int,default=150)
+    parser.add_argument('--ensure',action='store_true')
     args=parser.parse_args()
     if not 100<=args.reserve_gib<=500:parser.error('Keep at least 100 GiB of LaCie free')
-    run(args)
+    if args.ensure:print(json.dumps(ensure(args)))
+    else:run(args)

@@ -110,6 +110,15 @@ these boundaries stop writes with explicit status rather than guaranteeing
 that the entire plan fits. Restart or storage changes require checking the
 remaining jobs and recorded boundary first.
 
+If a macOS background launch context stalls reopening the removable volume,
+use the already authorized SSH execution context. The publisher's optional
+`supervisor` configuration calls `regional_supervisor.py --ensure` over the
+verified MacBook-to-mini route. It starts a missing detached supervisor,
+preserves the existing lock and deadline, and refuses to restart completed
+work or a lane at its ten-failure boundary. Source checks and disk reserves
+remain identical. The original task LaunchAgent must be stopped before
+changing the startup route; do not change filesystem privacy permissions.
+
 `supervisor-status.json`, the SQLite stage summary and the worker logs record
 generation progress. `publisher-state.json` tracks acknowledged source
 receipts; `publisher-status.json` records delivery, retry and storage states.

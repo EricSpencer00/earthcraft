@@ -89,6 +89,13 @@ try {
  while(!stopping&&Date.now()/1000<state.deadline) {
   const status={time:Date.now()/1000,delivered_tiles:Object.keys(state.known).length,deadline:state.deadline,state:'running'};
   try {
+   if(config.supervisor) {
+    const args=config.supervisor;
+    status.generation=JSON.parse(await remote(['/usr/bin/env',
+      'EARTHCRAFT_BULK_ROOT='+args.bulk_root,'EARTHCRAFT_CLIENT_JAR='+args.client_jar,
+      config.python,config.root+'/scripts/regional_supervisor.py','--ensure','--control',config.control,
+      '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150']));
+   }
    await cleanup();
    const disk=await fs.statfs(config.world);
    if(disk.bavail*disk.bsize<(config.reserve_gib??50)*2**30){status.state='storage_boundary';throw new Error('Local storage reserve reached');}

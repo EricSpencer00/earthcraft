@@ -14,9 +14,19 @@ from shapely.ops import transform
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from chicago_tiles import tile_plan
 from regional_scans import acquire, vertical_units, SURVEY_FOOT,frozen_get
+from regional_generate import supported_points
 
 
 class RegionalScanTests(unittest.TestCase):
+    def test_empty_and_conflicting_points_cannot_upgrade_roof_quality(self):
+        grid={'west':0,'north':4};surface={'valid':np.ones((4,4),bool),'dsm':np.full((4,4),110)}
+        xyz,rejected=supported_points([np.empty((0,3))],grid,surface)
+        self.assertEqual(len(xyz),0);self.assertEqual(rejected,0)
+        xyz,rejected=supported_points([np.array([[1,3,120]])],grid,surface)
+        self.assertEqual(len(xyz),0);self.assertEqual(rejected,1)
+        xyz,rejected=supported_points([np.array([[1,3,110],[1,3,110],[2,3,120]])],grid,surface)
+        np.testing.assert_array_equal(xyz,[[1,3,110]]);self.assertEqual(rejected,1)
+
     def test_interrupted_source_receipt_requires_identical_publisher_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'original.laz';path.write_bytes(b'original survey')
