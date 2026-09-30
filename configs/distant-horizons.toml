@@ -1,0 +1,39 @@
+# Distant Horizons 3.3.3 / Minecraft 1.21.10. Config schema is version 5.
+# Read the existing Earthcraft chunks; never synthesize vanilla terrain.
+_version = 5
+
+[client.advanced.graphics]
+enableSsao = false
+enableAntiAliasing = true
+
+[client.advanced.graphics.quality]
+# 2048 chunks * 16 blocks: a best-effort radius of 32,768 blocks.
+lodChunkRenderDistanceRadius = 2048
+horizontalQuality = "LOW"
+maxHorizontalResolution = "TWO_BLOCKS"
+verticalQuality = "MEDIUM"
+vanillaFadeMode = "SINGLE_PASS"
+lodBiomeBlending = 0
+
+[client.advanced.graphics.fog]
+enableVanillaFog = false
+enableDhFog = true
+
+[client.advanced.debugging]
+rendererMode = "DEFAULT"
+
+[client.advanced.autoUpdater]
+# Keep the validated version/schema paired with this custom-world policy.
+enableAutoUpdater = false
+enableSilentUpdates = false
+
+[common.worldGenerator]
+generatorPlan = "CHUNKS_ONLY"
+chunkGeneratorMode = "PRE_EXISTING_ONLY"
+limitIfServerUnhealthy = true
+pauseIfMovingQuickly = true
+
+[common.multiThreading]
+# Build/cache distant views lazily without saturating the coordination Mac.
+numberOfThreads = 1
+threadRunTimeRatio = 0.5
