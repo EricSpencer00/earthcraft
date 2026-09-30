@@ -21,6 +21,7 @@ def run(args):
     control=args.control.resolve();control.mkdir(parents=True,exist_ok=True)
     with (control/'supervisor.lock').open('a+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        atomic(control/'supervisor.pid',str(os.getpid()).encode())
         children={};handles={};failures={};next_start={};completed=set();stopping=False
         def stop(signum,_):
             nonlocal stopping
@@ -57,7 +58,7 @@ def run(args):
                         handle=(control/(owner+'.log')).open('a',buffering=1)
                         child=subprocess.Popen(command,env=env,stdout=handle,stderr=subprocess.STDOUT)
                         children[owner]=child;handles[owner]=handle
-                atomic(control/'supervisor-status.json',json.dumps({'time':time.time(),
+                atomic(control/'supervisor-status.json',json.dumps({'time':time.time(),'supervisor_pid':os.getpid(),
                     'workers':{owner:child.pid for owner,child in children.items()},
                     'failed_restarts':failures,'completed_workers':sorted(completed),
                     'storage_reserve_gib':args.reserve_gib,'deadline':deadline,
