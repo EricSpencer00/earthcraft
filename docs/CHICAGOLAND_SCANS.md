@@ -41,11 +41,29 @@ checks both ZIP directories, the outer ETag, member CRCs, recovered LAS bytes,
 horizontal references and the separately verified survey-foot Z reference.
 Original DEFLATE payloads are preserved losslessly in gzip caches.
 The tested Will member contained class-1 unclassified returns rather than
-provider class-6 buildings. The regional adapter can associate those returns
+provider class-6 buildings. Cook, Will and EPT adapters can associate class-1 returns
 only inside mapped building cells with valid paired DSM/DTM, more than 2 m
 above ground and no more than 2 m above the measured surface. Source labels,
 association masks and surface hashes remain explicit. These are spatially
 associated observations; clutter and survey-date conflicts remain possible.
+
+An optional frozen [Overture building index](https://docs.overturemaps.org/guides/buildings/)
+supplements outlines missing from OSM. The 2026-09-23.1 release produced
+3,840,217 features in the regional bounding rectangle, which also includes
+land outside the frozen metro boundary. These are OSM, contributor and
+ML-derived footprints, not measured LiDAR. Original attribution is retained
+per feature in a metre SQLite R-tree. Install `requirements-footprints.txt`
+on the compute host to acquire an index with `regional_footprints.py`.
+Set `EARTHCRAFT_BUILDING_INDEX` to its immutable SQLite file, or configure
+`supervisor.building_index` in the private publisher configuration. Workers
+verify its SHA-256 and CRS before use; tile crops have separate receipts.
+
+Supplemental roof geometry requires valid paired DSM/DTM and more than 2 m
+of measured ground clearance. Existing mapped buildings own overlapping
+cells. Missing survey pixels cannot create estimated supplemental buildings.
+Enabling the index affects fresh scan sources; completed immutable candidates
+are not silently rewritten. Full building coverage is still an acquisition
+and verification task, not a consequence of having the outline inventory.
 
 Within paired survey coverage, mapped footprints restrict DSM roofs so trees
 outside buildings do not become roof geometry. Every usable intersecting
@@ -64,6 +82,11 @@ base rather than claiming a measured building upgrade.
 Available NAIP orthophotography supplies roof colours only on observed roof
 cells. Its date and resolution are retained; it can predate the geometry.
 No façade photography or complete interior reconstruction is claimed.
+Google Street View is not an input to a derived geometry pipeline. The
+standard [Google Maps Platform terms](https://cloud.google.com/maps-platform/terms)
+restrict scraping, caching and creating content from Maps content. Separately
+licensed or user-owned photographs could support photogrammetry or inferred
+depth; neither becomes measured LiDAR merely by conversion.
 Sources without verified units, changed frozen bytes or unsupported formats
 are rejected. This pipeline does not establish that every publicly available
 survey has been acquired. The unavailable Kendall original LAS link remains
@@ -111,6 +134,50 @@ these boundaries stop writes with explicit status rather than guaranteeing
 that the entire plan fits. Restart or storage changes require checking the
 remaining jobs and recorded boundary first.
 
+The scan path collects observations before building the final geometry, so
+it no longer serializes an intermediate roof world and then rebuilds it with
+points. Full-density EPT node downloads use four bounded concurrent requests;
+decoding and indexing remain serial within each worker to limit memory.
+Unchanged frozen files are hashed once per worker/file identity instead of
+being reread for every neighbouring crop. Receipt identity is checked on
+every use; changed size, inode or timestamps trigger checksum verification.
+Original point densities and source node identities remain unchanged.
+
+An optional private AWS burst uses `regional_cloud_exchange.py` to lease a
+bounded batch, `regional_aws_launch.mjs` to create task-owned compute and
+`regional_aws_collect.mjs` to verify and return candidates. It sends frozen
+source crops, catalogs and the world frame; it does not send the live save.
+Available footprint crops accompany individual jobs without shipping the
+whole regional index. Each original base source remains immutable.
+
+The launcher verifies the authenticated account and refreshes official
+compute, storage, IPv4 and egress pricing before spending. It refuses an
+existing Earthcraft accelerator, requires aggregate task costs below the
+standing $10/hour consent, and can fall back from 32 to 16 vCPUs when the
+existing quota requires it. Private settings specify the owned account and a
+fresh task name. `--check` performs account and price checks without launching.
+The bucket blocks public access, enforces owner-only ACLs, encryption and TLS,
+and has a seven-day expiration fallback. Compute has no inbound rules,
+encrypted temporary storage and a two-hour termination timer. Native AWS
+login remains on the coordinator; the instance has only task-bucket and
+management permissions.
+
+Queue renewals cannot revive expired or reclaimed leases. The mini validates
+returned source identities, manifests, region bytes, observed geometry and
+placement before acknowledging a candidate. Original LAZ/LAS caches are
+retained privately until their verified transfer to LaCie. Task-created
+compute, bucket, identity and network resources are cleaned up after collection.
+An interrupted collection must retain the source bucket and resume verification;
+it must not delete the only remaining originals.
+
+The September 30 burst produced 24 scan/roof candidates with four workers on
+a 16-vCPU instance. Median per-tile generation was about 62 seconds; observed
+tiles ranged from 27 to 454 seconds. This includes different sources and cache
+states, and is not a controlled before/after speedup measurement. A cached
+comparison helper, `benchmark_regional_scans.py`, checks exact point arrays
+and original node identities before reporting its narrower crop speedup.
+The full 95,399-tile regional pass remains unfinished.
+
 If a macOS background launch context stalls reopening the removable volume,
 use the already authorized SSH execution context. The publisher's optional
 `supervisor` configuration calls `regional_supervisor.py --ensure` over the
@@ -146,7 +213,7 @@ Ratios vary, Minecraft can decompress files when rewriting them, and the disk
 reserve still applies. Test this in private staging on the actual filesystem
 before enabling it; a failed readable-byte check refuses installation.
 
-The sender exports at most eight verified tile candidates and their immutable
+The sender exports at most 24 verified tile candidates by default and their immutable
 extrusion alternatives. Under Minecraft's POSIX session lock, the coordinator
 copies only the affected current region files and relevant metadata to a
 private merge replica. Block comparisons run on the compute host. Every
@@ -163,12 +230,31 @@ atomically. Player metadata and the existing coordinate frame remain intact;
 coverage and the world border expand only when new chunks were added. The
 acknowledgement is durable before disposable transport files are removed.
 An open world pauses delivery until its lock becomes available.
+When the save is closed and a backlog remains, full batches continue after
+one second, smaller batches after five seconds. Empty queues and open saves
+use bounded backoff. Backups, save locks and unchanged-baseline comparisons
+still apply to every batch.
+
+`regional_alignment.py` checks the inherited metre CRS, exact tile/chunk
+translation, height offset, every Anvil region name/slot and complete chunk
+coverage. It also checks geographic round trips for the Water Tower origin
+and the Elmhurst planning anchor. The current frame places Water Tower at
+X=32, Z=33 and the Elmhurst anchor at approximately X=-26,179.22, Z=-270.72.
+These tests establish coordinate continuity; they do not independently
+establish the geographic accuracy of each source building.
 
 The Elmhurst pilot passed an isolated vanilla 1.21.10 load/save/reload check
 and upgraded 253 chunks while preserving three changed chunks. Broader
 generation receipts do not imply that every regional tile has passed game
 loading or client visual inspection. Run `metric_server_check.py` against
 isolated materialized candidates, and retain that proof separately.
+The cloud candidate audit checked all 1,024 chunks against three current-save
+frame receipts. An isolated cloud tile also passed vanilla 1.21.10 loading,
+saving and reloading. These checks do not imply client visual verification
+or installation of candidates while the current save remains open.
+An actual scan tile rebuilt with the supplemental outlines added 97 valid
+measured roof cells, retained its 45,014 observed point voxels, passed all
+1,024 chunk placement checks and passed vanilla loading/saving/reloading.
 
 Offline regressions cover vertical-unit admission, original grid selection,
 point classification and tampering, mixed roof/point height envelopes, scan
