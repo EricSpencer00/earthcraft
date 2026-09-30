@@ -4,10 +4,13 @@ DSM observations supply roof shape, not facade colour or a building classifier.
 Original service metadata and unrendered float rasters are retained for replay.
 """
 import hashlib
+import http.client
 import fcntl
 import json
 from pathlib import Path
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -50,8 +53,20 @@ def _frozen_file(url, path, limit):
             if sha(path)!=record['sha256']:raise ValueError('Frozen scan source changed')
             _VERIFIED_FILES[str(path.resolve())]=identity
         return record
-    with urllib.request.urlopen(url, timeout=45) as response:
-        raw = response.read(limit+1)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=45) as response:
+                raw = response.read(limit+1)
+                length=getattr(response,'headers',{}).get('Content-Length')
+                if length is not None and len(raw)<min(int(length),limit+1):
+                    raise http.client.IncompleteRead(raw)
+            break
+        except (OSError,http.client.IncompleteRead) as error:
+            # Retry a transient source connection, rather than throwing away a
+            # whole tile/worker. Missing or forbidden sources remain explicit.
+            if (isinstance(error,urllib.error.HTTPError) and error.code not in (429,500,502,503,504)) or attempt==2:
+                raise
+            time.sleep(2**attempt)
     if len(raw) > limit:
         raise ValueError('Scan response exceeds bounded download')
     # A stop after the payload rename but before its receipt must not strand

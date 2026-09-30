@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import http.client
+import urllib.error
 from unittest.mock import patch
 
 import numpy as np
@@ -18,6 +20,27 @@ from regional_generate import supported_points
 
 
 class RegionalScanTests(unittest.TestCase):
+    def test_transient_reset_retries_but_truncation_and_missing_sources_stay_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'scan.laz';url='https://publisher.example/scan'
+            with patch('regional_scans.urllib.request.urlopen',side_effect=[urllib.error.URLError('reset'),io.BytesIO(b'complete')]) as fetch,\
+                 patch('regional_scans.time.sleep') as sleep:
+                self.assertEqual(frozen_get(url,path),b'complete')
+                self.assertEqual(fetch.call_count,2);sleep.assert_called_once_with(1)
+            partial=Path(directory)/'other.laz';partial.write_bytes(b'preserve')
+            def truncated(*args,**kwargs):
+                stream=io.BytesIO(b'short');stream.headers={'Content-Length':'100'};return stream
+            with patch('regional_scans.urllib.request.urlopen',side_effect=truncated) as fetch,\
+                 patch('regional_scans.time.sleep'):
+                with self.assertRaises(http.client.IncompleteRead):frozen_get(url,partial)
+                self.assertEqual(fetch.call_count,3)
+            self.assertEqual(partial.read_bytes(),b'preserve')
+            self.assertFalse(partial.with_name(partial.name+'.receipt.json').exists())
+            with patch('regional_scans.urllib.request.urlopen',side_effect=urllib.error.HTTPError(url,404,'missing',{},None)) as fetch,\
+                 patch('regional_scans.time.sleep') as sleep:
+                with self.assertRaises(urllib.error.HTTPError):frozen_get(url,Path(directory)/'missing')
+                self.assertEqual(fetch.call_count,1);sleep.assert_not_called()
+
     def test_verified_file_reuse_and_same_size_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'scan.laz'
