@@ -4,6 +4,7 @@ DSM observations supply roof shape, not facade colour or a building classifier.
 Original service metadata and unrendered float rasters are retained for replay.
 """
 import hashlib
+import fcntl
 import json
 from pathlib import Path
 import re
@@ -19,17 +20,36 @@ from region_expansion import atomic, sha
 ROOT = 'https://data.isgs.illinois.edu/arcgis/rest/services/Elevation'
 COUNTIES = ('Cook', 'DuPage', 'DeKalb', 'Grundy', 'Kane', 'Kendall', 'Lake', 'McHenry', 'Will')
 SURVEY_FOOT = 1200 / 3937
+_VERIFIED_FILES = {}
 
 
-def frozen_get(url, path, limit=4*2**20):
+def frozen_file(url, path, limit=4*2**20):
+    """Acquire once and hash once per unchanged file identity in this process.
+
+    A per-source lock serializes receipt publication across workers. Receipts
+    remain the authority, including on a restart; size/inode/mtime/ctime changes
+    invalidate the in-memory hash shortcut. No LAZ byte array is needed to crop
+    an already indexed node.
+    """
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name+'.lock').open('a+') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        return _frozen_file(url,path,limit)
+
+
+def _frozen_file(url, path, limit):
     receipt = path.with_name(path.name+'.receipt.json')
     if receipt.exists():
         record = json.loads(receipt.read_text())
-        if record['url'] != url or sha(path) != record['sha256']:
+        stat=path.stat()
+        identity=(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,record['sha256'])
+        if record['url'] != url or stat.st_size!=record['bytes'] or stat.st_size>limit:
             raise ValueError('Frozen scan source changed')
-        return path.read_bytes()
-    path.parent.mkdir(parents=True, exist_ok=True)
+        if _VERIFIED_FILES.get(str(path.resolve()))!=identity:
+            if sha(path)!=record['sha256']:raise ValueError('Frozen scan source changed')
+            _VERIFIED_FILES[str(path.resolve())]=identity
+        return record
     with urllib.request.urlopen(url, timeout=45) as response:
         raw = response.read(limit+1)
     if len(raw) > limit:
@@ -40,9 +60,14 @@ def frozen_get(url, path, limit=4*2**20):
     if path.exists():
         if path.read_bytes()!=raw:raise ValueError('Unreceipted scan payload differs from publisher; retain it')
     else:atomic(path, raw)
-    atomic(receipt, json.dumps({'url': url, 'sha256': hashlib.sha256(raw).hexdigest(),
-        'bytes': len(raw)}).encode())
-    return raw
+    record={'url': url, 'sha256': hashlib.sha256(raw).hexdigest(),'bytes': len(raw)}
+    atomic(receipt, json.dumps(record).encode())
+    return record
+
+
+def frozen_get(url, path, limit=4*2**20):
+    frozen_file(url,path,limit)
+    return Path(path).read_bytes()
 
 
 def vertical_units(metadata):

@@ -12,22 +12,25 @@ import os
 from pathlib import Path
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import laspy
 import numpy as np
 from pyproj import Transformer
 
 from point_geometry import voxelize
-from regional_scans import frozen_get
+from regional_scans import frozen_get, frozen_file
 from region_expansion import atomic, sha
 
 _CHECKED_INDEXES = {}
 
 
-def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30):
+def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30,
+                 source_sha256=None, retained_classes=(2,6)):
     """Decode a shared LAZ node once, then query only local 256 m bins."""
     frame_hash=hashlib.sha256(grid['crs'].encode()).hexdigest()[:16]
     root=path.parent.parent/'indexes'/frame_hash/path.stem
+    if tuple(retained_classes)!=(2,6):root=root.with_name(root.name+'-classes-'+ '-'.join(map(str,retained_classes)))
     root.parent.mkdir(parents=True,exist_ok=True)
     with (root.parent/(root.name+'.lock')).open('a+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -38,7 +41,7 @@ def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30):
             points=laspy.read(path)
             if len(points)!=count:raise ValueError('Point payload count differs from EPT hierarchy')
             labels=np.asarray(points.classification)
-            selected=(np.asarray(points.withheld)==0)&np.isin(labels,[2,6])
+            selected=(np.asarray(points.withheld)==0)&np.isin(labels,retained_classes)
             x,y=inverse.transform(np.asarray(points.x)[selected],np.asarray(points.y)[selected])
             xyz=np.column_stack((x,y,np.asarray(points.z)[selected]))
             labels=labels[selected]
@@ -48,12 +51,13 @@ def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30):
             split=np.r_[0,np.flatnonzero(np.any(bins[1:]!=bins[:-1],axis=1))+1,len(bins)] if len(bins) else np.array([0])
             np.save(root/'coordinates.npy',xyz);np.save(root/'classification.npy',labels)
             entries={f'{int(bins[a,0])},{int(bins[a,1])}':[int(a),int(b)] for a,b in zip(split[:-1],split[1:])}
-            manifest={'source_sha256':sha(path),'original_points':count,'crs':grid['crs'],
-                'retained_classes':[2,6],'retained_points':len(xyz),'bins':entries,
+            manifest={'source_sha256':source_sha256 or sha(path),'original_points':count,'crs':grid['crs'],
+                'retained_classes':list(retained_classes),'retained_points':len(xyz),'bins':entries,
                 'files':{name:sha(root/name) for name in ('coordinates.npy','classification.npy')}}
             atomic(root/'manifest.json',json.dumps(manifest).encode())
         manifest=json.loads((root/'manifest.json').read_text())
-        if manifest['original_points']!=count or manifest['crs']!=grid['crs'] or manifest['source_sha256']!=sha(path):
+        if (manifest['original_points']!=count or manifest['crs']!=grid['crs'] or
+                manifest['retained_classes']!=list(retained_classes) or manifest['source_sha256']!=(source_sha256 or sha(path))):
             raise ValueError('Shared EPT node index uses another source/frame')
         identity=tuple((name,(root/name).stat().st_size,(root/name).stat().st_mtime_ns,(root/name).stat().st_ctime_ns)
                        for name in manifest['files'])
@@ -86,7 +90,8 @@ def overlaps(bounds, query):
 
 
 def crop(project, grid, destination, cache, dtm, valid, max_nodes=512,
-         ground_reference='paired LiDAR DTM'):
+         ground_reference='paired LiDAR DTM',surface_context=None,download_workers=4):
+    if not 1<=download_workers<=8:raise ValueError('Bounded parallel source acquisition required')
     destination, cache = Path(destination), Path(cache)/project
     destination.mkdir(parents=True, exist_ok=True)
     base = 'https://usgs-lidar-public.s3.amazonaws.com/'+project
@@ -119,10 +124,18 @@ def crop(project, grid, destination, cache, dtm, valid, max_nodes=512,
                     raise ValueError('Full-density EPT crop exceeds node budget; no downsampling fallback')
     hierarchy('0-0-0-0')
     pieces, ground_residuals, assets = [], [], []
-    for key, expected in sorted(nodes.items()):
+    def acquire_node(item):
+        key,expected=item
         path = cache/'data'/(key+'.laz')
-        raw = frozen_get(base+'/ept-data/'+key+'.laz', path, limit=64*2**20)
-        local, labels = indexed_node(path,expected,inverse,grid)
+        receipt=frozen_file(base+'/ept-data/'+key+'.laz', path, limit=64*2**20)
+        return key,expected,path,receipt
+    # Only acquisition overlaps. Decode/index one LAZ at a time to keep memory
+    # bounded on the 8 GiB mini; deterministic sorted output does not change.
+    classified_count=associated_count=0
+    with ThreadPoolExecutor(max_workers=download_workers) as downloads:
+      for key,expected,path,receipt in downloads.map(acquire_node,sorted(nodes.items())):
+        local, labels = indexed_node(path,expected,inverse,grid,source_sha256=receipt['sha256'],
+            retained_classes=(1,2,6) if surface_context is not None else (2,6))
         x,y,z=local.T
         keep = ((x >= grid['west']) & (x < grid['west']+size) &
                 (y > grid['north']-size) & (y <= grid['north']))
@@ -132,10 +145,12 @@ def crop(project, grid, destination, cache, dtm, valid, max_nodes=512,
             cols = np.floor(x[ground]-grid['west']).astype(int)
             selected = valid[rows, cols]
             ground_residuals.append(z[ground][selected]-dtm[rows,cols][selected])
-        building = keep & (labels == 6)
+        from scan_envelope import admit
+        building,classified,associated=admit(local,labels,grid,surface_context)
+        classified_count+=int(classified.sum());associated_count+=int(associated.sum())
         pieces.append(np.column_stack((x[building], y[building], z[building])))
-        assets.append({'key': key, 'sha256': sha(path), 'points': expected,
-                       'building_points_in_crop': int(building.sum())})
+        assets.append({'key': key, 'sha256': receipt['sha256'], 'points': expected,
+                       'building_points_in_crop': int(building.sum()),'associated_class1_points':int(associated.sum())})
     residual = np.concatenate(ground_residuals) if ground_residuals else np.empty(0)
     if len(residual) < 20 or np.median(np.abs(residual)) > 2:
         raise ValueError('EPT Z does not agree with the selected metre ground reference: '+ground_reference)
@@ -145,10 +160,16 @@ def crop(project, grid, destination, cache, dtm, valid, max_nodes=512,
         'output_horizontal_crs': grid['crs'], 'grid': {k: grid[k] for k in ('crs','west','north','size')},
         'points_sha256': sha(destination/'points.npz'), 'assets': assets, 'building_points': len(xyz),
         'all_intersecting_octree_levels_acquired': True, 'downsampling': False,
-        'retained_classes': [6], 'vertical_reference': 'Original EPT Z; metre interpretation checked against '+ground_reference,
+        'retained_classes': [1,6] if surface_context is not None else [6],
+        'classified_class6_points':classified_count,'associated_class1_points':associated_count,
+        'point_admission':'Provider class 6; class 1 requires mapped building, paired DSM/DTM envelope and >2 m ground clearance' if surface_context is not None else 'Provider class 6 only',
+        'vertical_reference': 'Original EPT Z; metre interpretation checked against '+ground_reference,
         'ground_reference':ground_reference,
         'ground_comparison_points': len(residual), 'median_absolute_ground_residual_m': float(np.median(np.abs(residual))),
         'independent_accuracy_verified': False, 'facade_colour_measured': False}
+    if surface_context is not None:
+        from scan_envelope import identity
+        record['association_context_sha256']=identity(surface_context)
     atomic(destination/'manifest.json', json.dumps(record, indent=2).encode())
     return record
 

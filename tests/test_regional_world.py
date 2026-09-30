@@ -45,12 +45,20 @@ class RegionalWorldTests(unittest.TestCase):
             (points/'manifest.json').write_text(json.dumps(classified))
             meta.update(buildings_available=True,building_source_kind='osm-explicit',elevation_raster='elevation.tif',
                         scan_surface_receipt=surface,classified_point_receipt=classified)
+            # A supplemental outline missing from OSM needs measured roof
+            # clearance. Coordinates already use the frozen metre CRS.
+            from shapely.geometry import Polygon,mapping
+            outline=Polygon([(meta['west']+x,meta['north']-z) for x,z in ((12,12),(14,12),(14,14),(12,14),(12,12))])
+            supplemental={'grid':grid,'features':[{'id':'overture-test','geometry':mapping(outline)}]}
+            (source/'scan-footprints.geojson').write_text(json.dumps(supplemental))
+            meta['scan_footprint_receipt']={'count':1,'sha256':sha(source/'scan-footprints.geojson'),'geometry_measured':False}
             (source/'sources.json').write_text(json.dumps(meta))
             build(source,world,surface_source=surfaces,point_source=points)
             checks=verify(world);report=json.loads((world/'earthcraft.json').read_text())
             tops=np.load(world/'top-heights.npy');offset=report['vertical_offset_m']
             self.assertEqual(tops[4,4],int(np.ceil(600+offset)-1))
             self.assertEqual(tops[2,2],int(np.ceil(105+offset)-1))
+            self.assertEqual(tops[12,12],int(np.ceil(600+offset)-1))
             self.assertGreaterEqual(report['dimension_height']-64,tops.max()+1)
             self.assertEqual(report['roof_scan_missing_cells'],1)
             self.assertEqual(checks['observed_3d_voxels'],1)

@@ -167,7 +167,7 @@ def select_pair(tile, frame, catalog):
 def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None,will_catalog=None):
     with ExitStack() as stack:
         for candidate in root.glob('world*'):
-            if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
+            if candidate.name!='world' and candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
                 stack.enter_context(materialized(candidate))
         return _scan_tile(tile,frame,root,pair,point_catalog,point_cache,cook_catalog,will_catalog)
 
@@ -195,34 +195,31 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
         meta.update(elevation_source=f"{pair['county']} {pair['year']} LiDAR DTM; explicit LQ coverage gaps",
             elevation_vertical_datum=pair['dtm']['vertical_reference'], scan_surface_receipt=record,
             elevation_sha256=sha(scan_source/'elevation.tif'))
+        if os.environ.get('EARTHCRAFT_BUILDING_INDEX'):
+            from regional_footprints import crop as footprint_crop
+            meta['scan_footprint_receipt']=footprint_crop(os.environ['EARTHCRAFT_BUILDING_INDEX'],meta,scan_source/'scan-footprints.geojson')
         atomic(scan_source/'sources.json', json.dumps(meta).encode())
-    if not world.exists():
-        staging = root/'world.scanned.building'
-        if staging.exists():
-            staging.rename(root/f'world.scanned.incomplete-{time.time_ns()}')
-        build(scan_source, staging, surface_source=surfaces, world_frame=frame)
-        checks = verify(staging)
-        staging.rename(world)
-    else:
-        checks = verify(world)
     quality = 'scan-roof'
     attempts = []
-    meta = json.loads((world/'earthcraft.json').read_text())
+    grid=json.loads((scan_source/'sources.json').read_text())
+    points=None;build_source=scan_source
     # A full-density upgrade uses every intersecting survey, retaining original
     # crop receipts. Partial roof crops stay in the raster lane until complete.
     if point_catalog is not None:
         from regional_point_catalog import candidates
         from ept_buildings import crop
         with np.load(surfaces/'metric-surfaces.npz') as arrays:
+            from scan_envelope import context as association_context
+            context=association_context(scan_source,grid,arrays)
             pieces=[]; accepted=[]
             originals=[]
             if pair['county']=='Cook' and cook_catalog and Path(cook_catalog).exists():
                 from regional_cook_points import crop as cook_crop
-                originals.append(('Cook-original-2022',cook_catalog,cook_crop,'cook2022-cache'))
+                def associated_cook(catalog,grid,destination,cache):
+                    return cook_crop(catalog,grid,destination,cache,surface_context=context)
+                originals.append(('Cook-original-2022',cook_catalog,associated_cook,'cook2022-cache'))
             if pair['county']=='Will' and will_catalog and Path(will_catalog).exists():
                 from regional_will_points import crop as will_crop
-                with np.load(world/'roof-observations.npz') as roofs:roof_mask=roofs['mask'].copy()
-                context={key:arrays[key] for key in ('dtm','dsm','valid')};context['roof_mask']=roof_mask
                 def associated_will(catalog,grid,destination,cache):
                     return will_crop(catalog,grid,destination,cache,surface_context=context)
                 originals.append(('Will-original-2021',will_catalog,associated_will,'will2021-cache'))
@@ -232,8 +229,8 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
                     if (point_root/'manifest.json').exists():
                         record=json.loads((point_root/'manifest.json').read_text())
                         if sha(point_root/'points.npz')!=record['points_sha256']:raise ValueError('Frozen original county crop changed')
-                    else:record=original_crop(original_catalog,meta['source'],point_root,point_cache.parent/original_cache)
-                    with np.load(point_root/'points.npz') as points:pieces.append(points['xyz'].copy())
+                    else:record=original_crop(original_catalog,grid,point_root,point_cache.parent/original_cache)
+                    with np.load(point_root/'points.npz') as observed_points:pieces.append(observed_points['xyz'].copy())
                     accepted.append(record);attempts.append({'project':record['project'],'result':'acquired','building_points':record['building_points']})
                 except (ValueError,urllib.error.URLError,TimeoutError) as error:
                     attempts.append({'project':project,'result':'unavailable','reason':str(error)})
@@ -245,36 +242,37 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
                         if sha(point_root/'points.npz')!=record['points_sha256']:
                             raise ValueError('Original full-density crop changed')
                     else:
-                        record=crop(survey['project'],meta['source'],point_root,point_cache,arrays['dtm'],arrays['valid'])
-                    with np.load(point_root/'points.npz') as points: pieces.append(points['xyz'].copy())
+                        record=crop(survey['project'],grid,point_root,point_cache,arrays['dtm'],arrays['valid'],surface_context=context)
+                    with np.load(point_root/'points.npz') as observed_points: pieces.append(observed_points['xyz'].copy())
                     accepted.append(record)
                     attempts.append({'project':survey['project'],'result':'acquired','building_points':record['building_points']})
                 except ValueError as error:
                     attempts.append({'project':survey['project'],'result':'unusable','reason':str(error)})
-            xyz,rejected_temporal_or_surface_conflicts=supported_points(pieces,meta['source'],arrays)
+            xyz,rejected_temporal_or_surface_conflicts=supported_points(pieces,grid,arrays)
             if len(xyz):
                 points=root/'points.combined';points.mkdir(exist_ok=True)
                 np.savez_compressed(points/'points.npz',xyz=xyz)
                 record=dict(accepted[0],project='explicit union of all usable intersecting surveys',
                     points_sha256=sha(points/'points.npz'),building_points=len(xyz),source_crops=accepted,
                     retained_classes=sorted({value for crop in accepted for value in crop.get('retained_classes',[6])}),
-                    point_admission='Class-6 returns supported by paired DSM within 2 m; original Will class-1 returns additionally require a mapped measured-roof footprint and >2 m ground clearance',
+                    point_admission='Class-6 returns supported by paired DSM within 2 m; class-1 returns additionally require a mapped measured-roof footprint and >2 m ground clearance; association may include clutter',
                     rejected_temporal_or_surface_conflicts=rejected_temporal_or_surface_conflicts)
                 atomic(points/'manifest.json',json.dumps(record).encode())
-                candidate=root/'world.scanned-points'
-                if not candidate.exists():
-                    combined_source=root/'combined-scan-sources'
-                    if not combined_source.exists():shutil.copytree(scan_source,combined_source,ignore=shutil.ignore_patterns('._*'))
-                    combined_meta=json.loads((combined_source/'sources.json').read_text())
-                    combined_meta['classified_point_receipt']=record
-                    atomic(combined_source/'sources.json',json.dumps(combined_meta).encode())
-                    staging=root/'world.scanned-points.building'
-                    if staging.exists():staging.rename(root/f'world.scanned-points.incomplete-{time.time_ns()}')
-                    build(combined_source,staging,surface_source=surfaces,point_source=points,world_frame=frame)
-                    checks=verify(staging);staging.rename(candidate)
-                else:checks=verify(candidate)
-                world=candidate;quality='scan-points-and-roof'
-                meta=json.loads((world/'earthcraft.json').read_text())
+                world=root/'world.scanned-points';quality='scan-points-and-roof'
+                build_source=root/'combined-scan-sources'
+                if not build_source.exists():shutil.copytree(scan_source,build_source,ignore=shutil.ignore_patterns('._*'))
+                combined_meta=json.loads((build_source/'sources.json').read_text())
+                combined_meta['classified_point_receipt']=record
+                atomic(build_source/'sources.json',json.dumps(combined_meta).encode())
+    # Determine point coverage first, then serialize the final geometry once.
+    # The immutable LQ baseline is used only at installation, not read back here.
+    if not world.exists():
+        staging=world.with_name(world.name+'.building')
+        if staging.exists():staging.rename(root/(world.name+'.incomplete-'+str(time.time_ns())))
+        build(build_source,staging,surface_source=surfaces,point_source=points,world_frame=frame)
+        checks=verify(staging);staging.rename(world)
+    else:checks=verify(world)
+    meta=json.loads((world/'earthcraft.json').read_text())
     imagery_result = None
     if meta.get('roof_source_cells',0):
         from naip_imagery import acquire as imagery_acquire
@@ -359,6 +357,10 @@ def run(args):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         faulthandler.register(signal.SIGUSR1,file=sys.stderr,all_threads=True)
         frame = json.loads(args.frame.read_text())
+        if os.environ.get('EARTHCRAFT_BUILDING_INDEX'):
+            index=Path(os.environ['EARTHCRAFT_BUILDING_INDEX']);record=json.loads(index.with_suffix('.json').read_text())
+            if sha(index)!=record['sha256'] or record['crs']!=frame['crs']:
+                raise ValueError('Configured regional footprint index changed')
         if (control/'plan.json').exists():
             plan = json.loads((control/'plan.json').read_text())
             if plan['frame'] != frame:

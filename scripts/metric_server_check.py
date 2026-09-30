@@ -42,10 +42,10 @@ def verified_snapshot(world):
 
 def clone_world(source, destination):
     """Make an isolated save copy without expanding APFS clone files."""
-    if sys.platform == 'darwin':
+    if sys.platform == 'darwin' and source.stat().st_dev == destination.parent.stat().st_dev:
         subprocess.run(['cp', '-cR', str(source), str(destination)], check=True)
     else:
-        shutil.copytree(source, destination)
+        shutil.copytree(source, destination, ignore=shutil.ignore_patterns('._*'))
 
 
 def check(world,work,travel_probe=False,photo_probe=False,java=None):

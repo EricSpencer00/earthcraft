@@ -13,11 +13,23 @@ from shapely.ops import transform
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from chicago_tiles import tile_plan
-from regional_scans import acquire, vertical_units, SURVEY_FOOT,frozen_get
+from regional_scans import acquire, vertical_units, SURVEY_FOOT,frozen_get,frozen_file
 from regional_generate import supported_points
 
 
 class RegionalScanTests(unittest.TestCase):
+    def test_verified_file_reuse_and_same_size_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'scan.laz'
+            with patch('regional_scans.urllib.request.urlopen',return_value=io.BytesIO(b'original')):
+                record=frozen_file('https://publisher.example/scan',path)
+            frozen_file('https://publisher.example/scan',path)
+            with patch('regional_scans.sha',side_effect=AssertionError('Unchanged source was reread')):
+                self.assertEqual(frozen_file('https://publisher.example/scan',path),record)
+            path.write_bytes(b'tampered')
+            with self.assertRaisesRegex(ValueError,'changed'):
+                frozen_file('https://publisher.example/scan',path)
+
     def test_empty_and_conflicting_points_cannot_upgrade_roof_quality(self):
         grid={'west':0,'north':4};surface={'valid':np.ones((4,4),bool),'dsm':np.full((4,4),110)}
         xyz,rejected=supported_points([np.empty((0,3))],grid,surface)

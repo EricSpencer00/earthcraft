@@ -67,6 +67,8 @@ const saved=await readOptional(statePath);
 const state=saved?JSON.parse(saved):{known:{},deadline:Date.now()/1000+45*86400,batches:0};
 await atomic(statePath,JSON.stringify(state));
 let stopping=false,failures=0;
+const batchLimit=config.batch_limit??24;
+if(!Number.isInteger(batchLimit)||batchLimit<1||batchLimit>32)throw new Error('Bounded delivery batch required');
 process.on('SIGTERM',()=>stopping=true);process.on('SIGINT',()=>stopping=true);
 async function acknowledge(record, transport) {
  for(const entry of record.entries)state.known[entry.tile]=entry.receipt_sha256;
@@ -93,6 +95,7 @@ try {
     const args=config.supervisor;
     status.generation=JSON.parse(await remote(['/usr/bin/env',
       'EARTHCRAFT_BULK_ROOT='+args.bulk_root,'EARTHCRAFT_CLIENT_JAR='+args.client_jar,
+      ...(args.building_index?['EARTHCRAFT_BUILDING_INDEX='+args.building_index]:[]),
       config.python,config.root+'/scripts/regional_supervisor.py','--ensure','--control',config.control,
       '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150']));
    }
@@ -102,7 +105,7 @@ try {
    if(!state.pending) {
     const legacy=(Array.isArray(config.legacy)?config.legacy:[config.legacy]).flatMap(directory=>['--legacy',directory]);
     const record=JSON.parse(await remote([config.python,config.root+'/scripts/regional_bundle.py','--control',config.control,
-      '--bulk',config.bulk,...legacy,'--limit','8'],JSON.stringify(state.known)+'\n'));
+      '--bulk',config.bulk,...legacy,'--limit',String(batchLimit)],JSON.stringify(state.known)+'\n'));
     if(record.bytes>512*2**20||path.dirname(record.bundle)!==config.control+'/exports'||!/^batch-\d+\.tar$/.test(path.basename(record.bundle)))throw new Error('Export exceeded task bounds');
     state.pending=record;await atomic(statePath,JSON.stringify(state));
    }
@@ -155,6 +158,7 @@ try {
     await acknowledge(record,{bundle:record.bundle});await cleanup();
    }
    failures=0;
+   status.batch_tiles=record.entries.length;
   } catch(error) {
    status.reason=error.message;
    if(error.message==='world_open')status.state='waiting_for_closed_world';
@@ -162,6 +166,10 @@ try {
   }
   status.delivered_tiles=Object.keys(state.known).length;await atomic(path.join(control,'publisher-status.json'),JSON.stringify(status));
   if(status.state==='storage_boundary'||failures>=10)break;
-  for(let i=0;i<Math.min(600,120*Math.max(1,failures))&&!stopping;i++)await new Promise(resolve=>setTimeout(resolve,1000));
+  // Drain a generated backlog continuously. Empty queues/open saves/failures
+  // keep bounded polling so coordination does not consume the MacBook.
+  const pause=status.state==='running'&&status.batch_tiles===batchLimit?1:
+    status.state==='running'&&status.batch_tiles>0?5:Math.min(600,120*Math.max(1,failures));
+  for(let i=0;i<pause&&!stopping;i++)await new Promise(resolve=>setTimeout(resolve,1000));
  }
 } finally {await releasePublisher();}

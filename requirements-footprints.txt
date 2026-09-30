@@ -1,0 +1,3 @@
+# Optional acquisition of the frozen regional Overture building index.
+-r requirements-metric.txt
+duckdb==1.5.6

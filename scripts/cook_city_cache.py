@@ -23,6 +23,7 @@ from local_paths import bulk_root
 BASE='https://clearinghouse.isgs.illinois.edu/distribute/district1/cook/2022/'
 HEADER=b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff'
 BLOCK=8*2**20
+_VERIFIED_CACHE={}
 
 
 def sha(path):
@@ -136,9 +137,12 @@ def verify(path,record,asset):
         raise ValueError('Cached source identity changed')
     if record['bytes']!=asset['uncompressed_bytes'] or record['zip_crc32_verified']!=asset['crc32']:
         raise ValueError('Cached source/index disagree')
-    if path.suffix=='.gz':
-        if sha(path)!=record['compressed_sha256']:raise ValueError('Compressed cache checksum mismatch')
-    elif sha(path)!=record['sha256']:raise ValueError('Original LAS checksum mismatch')
+    expected=record['compressed_sha256'] if path.suffix=='.gz' else record['sha256']
+    stat=path.stat();key=str(path.resolve())
+    identity=(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,expected)
+    if _VERIFIED_CACHE.get(key)!=identity:
+        if sha(path)!=expected:raise ValueError('Compressed cache checksum mismatch' if path.suffix=='.gz' else 'Original LAS checksum mismatch')
+        _VERIFIED_CACHE[key]=identity
     return path,record
 
 

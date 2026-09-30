@@ -62,6 +62,13 @@ class CacheTests(unittest.TestCase):
                 cache.prepare_ready(ready,partial,asset)
             with patch.object(cache,'bulk_root',return_value=root):
                 self.assertEqual(cache.acquire(asset,{},root,reserve_bytes=0),(path,record))
+                # Adjacent crops still verify the receipt and stat identity, but
+                # do not reread the same large original payload in this worker.
+                with patch.object(cache,'sha',side_effect=AssertionError('unchanged source rehashed')):
+                    self.assertEqual(cache.acquire(asset,{},root,reserve_bytes=0),(path,record))
+                    changed_asset={**asset,'archive_etag':'another-version'}
+                    with self.assertRaisesRegex(ValueError,'identity'):
+                        cache.verify(path,record,changed_asset)
             with path.open('ab') as stream:stream.write(b'changed')
             with patch.object(cache,'bulk_root',return_value=root):
                 with self.assertRaisesRegex(ValueError,'checksum'):cache.acquire(asset,{},root,reserve_bytes=0)

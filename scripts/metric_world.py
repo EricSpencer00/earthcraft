@@ -302,6 +302,28 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         # Measured building footprint takes precedence over a coarse water class.
         surface[mask & (surface==BLOCK['water'])]=BLOCK['gray_concrete']
     osm_geometry = meta.get('building_source_kind') in ('osm-explicit', 'osm-presentation')
+    if not osm_geometry:buildings=county_buildings
+    if meta.get('scan_footprint_receipt'):
+        if surface_source is None:raise ValueError('Supplemental footprints need a measured paired surface')
+        from regional_footprints import load_shapes
+        with np.load(surface_source/'metric-surfaces.npz') as measured:
+            def metric_local(x,y,z=None):return np.asarray(x)-meta['west'],meta['north']-np.asarray(y)
+            owned=np.zeros_like(footprint_union)
+            for b in buildings:owned|=b['mask']
+            for identifier,geometry in load_shapes(source,meta):
+                geom=transform_geometry(metric_local,geometry)
+                mask=rasterize([(geom,1)],out_shape=(size,size),transform=Affine.identity()).astype(bool)
+                footprint_union|=mask
+                # Existing mapped geometry owns overlap. Extra roof cells need
+                # measured clearance; no estimated height in a source gap.
+                mask &= ~owned & measured['valid'] & (measured['dsm']>measured['dtm']+2)
+                if not mask.any():continue
+                owned|=mask
+                low=int(np.floor(np.median(measured['dtm'][mask])+offset))
+                high=int(np.ceil(measured['dsm'][mask].max()+offset)-1)
+                buildings.append({'id':identifier,'mask':mask,'wall':np.zeros_like(mask),
+                    'low':low,'high':high,'block':BLOCK['stone_bricks'],'height':high-low+1,
+                    'ground_assumption':'Supplemental footprint; roof height from paired measured DSM/DTM'})
     # A tile with no admitted county/OSM geometry and no 3D observation is a
     # terrain-only result even when older source manifests lack the explicit
     # buildings_available flag.  This mirrors the worker's LiDAR skip policy
@@ -318,14 +340,13 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         if sha(surface_source/'metric-surfaces.npz') != regional_scan['surfaces_sha256']:
             raise ValueError('Regional scan observation arrays changed')
     if classified_scan is not None:
-        if (point_source is None or classified_scan.get('schema') not in ('earthcraft-classified-ept-building-crop-v1','earthcraft-classified-las-building-crop-v1')
+        if (point_source is None or classified_scan.get('schema') not in ('earthcraft-classified-ept-building-crop-v1','earthcraft-classified-las-building-crop-v1','earthcraft-associated-las-building-crop-v1')
                 or json.loads((point_source/'manifest.json').read_text()) != classified_scan):
             raise ValueError('Explicit classified scan receipt differs from acquired points')
     if osm_geometry and (county_buildings or (point_source is not None and classified_scan is None) or (surface_source is not None and regional_scan is None)):
         raise ValueError('OSM geometry profile cannot silently mix county or scan geometry')
     if terrain_only and county_buildings:
         raise ValueError('Terrain-only metadata conflicts with supplied building geometry')
-    if not osm_geometry:buildings=county_buildings
     point_cells = point_report = None
     if point_source is not None:
         if surface_source is not None and (regional_scan is None or classified_scan is None):
