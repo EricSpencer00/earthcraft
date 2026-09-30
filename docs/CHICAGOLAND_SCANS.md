@@ -100,10 +100,11 @@ PYTHONPATH=scripts .venv/bin/python scripts/regional_supervisor.py \
   --frame "$TASK_FRAME" --illinois "$TASK_ILLINOIS_PBF"
 ```
 
-The supervisor owns two base workers and one scan worker. SQLite leases resume
+The supervisor owns two base workers and up to three scan workers. Extra scan
+workers wait until at least 2 GiB is available before starting. SQLite leases resume
 unfinished jobs after restarts. Ten failures stop the affected worker; it
 never reports unfinished jobs as complete. The default generation deadline
-is fourteen days and persists across restarts. LaCie retains a 150 GiB
+is forty-five days and persists across restarts. LaCie retains a 150 GiB
 reserve and the control disk a 12 GiB reserve. The receiver retains a 50 GiB
 reserve. A full materialized metro save can exceed the coordinator's storage;
 these boundaries stop writes with explicit status rather than guaranteeing

@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import psutil
 
 from region_expansion import atomic
 
@@ -28,12 +29,12 @@ def ensure(args):
             return {'state':'generation_deadline'}
         status_path=control/'supervisor-status.json'
         status=json.loads(status_path.read_text()) if status_path.exists() else {}
-        if len(status.get('completed_workers',[]))==3:return {'state':'complete'}
+        if len(status.get('completed_workers',[]))==2+args.scan_workers:return {'state':'complete'}
         if any(value>=10 for value in status.get('failed_restarts',{}).values()):
             return {'state':'worker_failure_boundary'}
         command=[sys.executable,'-u',str(Path(__file__).resolve()),'--control',str(control),
                  '--bulk',str(args.bulk),'--frame',str(args.frame),'--illinois',str(args.illinois),
-                 '--reserve-gib',str(args.reserve_gib)]
+                 '--reserve-gib',str(args.reserve_gib),'--scan-workers',str(args.scan_workers)]
         env=dict(os.environ,PYTHONPATH=str(Path(__file__).parent.resolve()))
         with (control/'supervisor-ssh.log').open('a') as log:
             child=subprocess.Popen(command,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
@@ -51,16 +52,17 @@ def run(args):
             nonlocal stopping
             stopping=True
         signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-        workers={'base-1':'base','base-2':'base','scans-1':'scans'}
+        workers={'base-1':'base','base-2':'base',**{f'scans-{i}':'scans' for i in range(1,args.scan_workers+1)}}
         env=dict(os.environ,PYTHONPATH=str(Path(__file__).parent))
         common=['--control',str(control),'--bulk',str(args.bulk),'--frame',str(args.frame),
             '--illinois',str(args.illinois),'--reserve-gib',str(args.reserve_gib)]
         started=time.time()
         deadline_path=control/'supervisor-deadline.json'
-        deadline=json.loads(deadline_path.read_text()) if deadline_path.exists() else started+14*86400
+        deadline=json.loads(deadline_path.read_text()) if deadline_path.exists() else started+45*86400
         if not deadline_path.exists():atomic(deadline_path,json.dumps(deadline).encode())
         try:
             while not stopping and time.time() < deadline:
+                waiting_for_memory=[]
                 for owner,lane in workers.items():
                     child=children.get(owner)
                     if child is not None and child.poll() is not None:
@@ -76,15 +78,23 @@ def run(args):
                             failures[owner]=failures.get(owner,0)+1
                             next_start[owner]=time.time()+min(600,30*2**(failures[owner]-1))
                     if owner in completed or failures.get(owner,0)>=10 or time.time()<next_start.get(owner,0):continue
+                    if owner.startswith('scans-') and owner!='scans-1' and time.time()-started<60:continue
+                    if owner.startswith('scans-') and owner!='scans-1' and owner not in children and psutil.virtual_memory().available<2*2**30:
+                        waiting_for_memory.append(owner);continue
                     if owner not in children and (control/'indexes.json').exists() and (control/'point-surveys/catalog.json').exists():
                         command=[sys.executable,'-u',str(Path(__file__).with_name('regional_generate.py')),
                             *common,'--lane',lane,'--worker-id',owner]
                         handle=(control/(owner+'.log')).open('a',buffering=1)
                         child=subprocess.Popen(command,env=env,stdout=handle,stderr=subprocess.STDOUT)
                         children[owner]=child;handles[owner]=handle
+                        if owner.startswith('scans-') and owner!='scans-1':
+                            for other in workers:
+                                if other.startswith('scans-') and other not in children:
+                                    next_start[other]=max(next_start.get(other,0),time.time()+30)
                 atomic(control/'supervisor-status.json',json.dumps({'time':time.time(),'supervisor_pid':os.getpid(),
                     'workers':{owner:child.pid for owner,child in children.items()},
                     'failed_restarts':failures,'completed_workers':sorted(completed),
+                    'waiting_for_memory':waiting_for_memory,'maximum_scan_workers':args.scan_workers,
                     'storage_reserve_gib':args.reserve_gib,'deadline':deadline,
                     'installed':False}).encode())
                 if len(completed)==len(workers) or (not children and any(value>=10 for value in failures.values())):break
@@ -106,7 +116,9 @@ if __name__=='__main__':
     parser.add_argument('--illinois',type=Path,required=True)
     parser.add_argument('--reserve-gib',type=int,default=150)
     parser.add_argument('--ensure',action='store_true')
+    parser.add_argument('--scan-workers',type=int,default=3)
     args=parser.parse_args()
     if not 100<=args.reserve_gib<=500:parser.error('Keep at least 100 GiB of LaCie free')
+    if not 1<=args.scan_workers<=3:parser.error('Use at most three scan workers on the mini')
     if args.ensure:print(json.dumps(ensure(args)))
     else:run(args)

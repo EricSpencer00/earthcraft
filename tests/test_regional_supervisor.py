@@ -14,7 +14,7 @@ from regional_supervisor import ensure
 class SupervisorTests(unittest.TestCase):
     def arguments(self,root):
         return SimpleNamespace(control=root,bulk=root/'bulk',frame=root/'frame.json',
-                               illinois=root/'source.osm.pbf',reserve_gib=150)
+                               illinois=root/'source.osm.pbf',reserve_gib=150,scan_workers=3)
 
     def test_existing_lock_deadline_and_failure_never_spawn_another_supervisor(self):
         with tempfile.TemporaryDirectory() as directory,patch('regional_supervisor.subprocess.Popen') as spawn:
@@ -27,7 +27,7 @@ class SupervisorTests(unittest.TestCase):
             (root/'supervisor-deadline.json').unlink()
             (root/'supervisor-status.json').write_text(json.dumps({'failed_restarts':{'scans-1':10}}))
             self.assertEqual(ensure(args)['state'],'worker_failure_boundary')
-            (root/'supervisor-status.json').write_text(json.dumps({'completed_workers':['base-1','base-2','scans-1']}))
+            (root/'supervisor-status.json').write_text(json.dumps({'completed_workers':['base-1','base-2','scans-1','scans-2','scans-3']}))
             self.assertEqual(ensure(args)['state'],'complete');spawn.assert_not_called()
 
     def test_start_is_detached_and_retains_original_task_paths(self):
@@ -36,6 +36,7 @@ class SupervisorTests(unittest.TestCase):
             result=ensure(args)
             self.assertEqual(result['supervisor_pid'],1234)
             command=spawn.call_args.args[0];self.assertNotIn('--ensure',command)
+            self.assertEqual(command[command.index('--scan-workers')+1],'3')
             self.assertIn(str(args.control.resolve()),command)
             for path in (args.bulk,args.frame,args.illinois):self.assertIn(str(path),command)
             self.assertTrue(spawn.call_args.kwargs['start_new_session'])
