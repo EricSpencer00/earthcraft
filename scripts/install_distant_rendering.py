@@ -1,15 +1,19 @@
 """Add pinned LOD/client renderers to the existing Earthcraft Fabric profile.
 
-Does not modify saves, projection metadata, launcher profiles, or options.txt.
+Never modifies saves or projection metadata. Launcher profiles/options remain
+unchanged unless --tune-closed-profile is explicitly selected with both apps shut.
 Python 3.11+. Downloads are publisher-hash verified before any installation.
 """
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import tomllib
 import urllib.request
@@ -97,6 +101,13 @@ def install(game_dir: Path, minecraft_dir: Path) -> dict:
         # only when every managed setting already matches; preserve other settings.
         actual = validate_config(config_path.read_bytes())
         def contains(actual_value, expected):
+            # DH's ConfigTypeConverters serializes Java Double settings as
+            # quoted decimal strings when it expands/saves the configuration.
+            if isinstance(expected, float) and isinstance(actual_value, str):
+                try:
+                    return float(actual_value) == expected
+                except ValueError:
+                    return False
             return (all(key in actual_value and contains(actual_value[key], value)
                         for key, value in expected.items()) if isinstance(expected, dict)
                     else actual_value == expected)
@@ -163,13 +174,63 @@ def install(game_dir: Path, minecraft_dir: Path) -> dict:
     return report
 
 
+def tune_closed_profile(game_dir: Path, minecraft_dir: Path) -> dict:
+    """Tune the existing profile only after both game and launcher have exited."""
+    processes = subprocess.run(["/bin/ps", "-axo", "comm="], check=True,
+                               capture_output=True, text=True).stdout.splitlines()
+    if any("/Minecraft.app/" in process or "java-runtime" in process
+           and process.endswith("/bin/java") for process in processes):
+        raise RuntimeError("Save and close Minecraft and its launcher before tuning")
+    with (game_dir / "saves" / "Earthcraft" / "session.lock").open("r+b") as lock:
+        # Java's FileLock uses POSIX record locks; flock would not detect it.
+        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        options_path = game_dir / "options.txt"
+        profiles_path = minecraft_dir / "launcher_profiles.json"
+        options_raw = options_path.read_bytes()
+        profiles_raw = profiles_path.read_bytes()
+        profiles = json.loads(profiles_raw)
+        profile = profiles["profiles"][PROFILE]
+        if Path(profile["gameDir"]).resolve() != game_dir.resolve():
+            raise ValueError("The target profile points to a different game directory")
+        options = options_raw.decode()
+        if len(re.findall(r"^renderDistance:\d+$", options, re.MULTILINE)) != 1:
+            raise ValueError("Expected exactly one Minecraft render-distance setting")
+        options = re.sub(r"^renderDistance:\d+$", "renderDistance:12", options,
+                         flags=re.MULTILINE)
+        arguments = profile.get("javaArgs", "")
+        if len(re.findall(r"(?<!\S)-Xmx\S+", arguments)) > 1:
+            raise ValueError("Ambiguous existing memory allocation")
+        profile["javaArgs"] = (re.sub(r"(?<!\S)-Xmx\S+", "-Xmx8G", arguments)
+                              if re.search(r"(?<!\S)-Xmx\S+", arguments)
+                              else arguments + " -Xmx8G").strip()
+        backup = ROOT / "runs" / "distant-rendering-before-tuning"
+        for path, raw in ((options_path, options_raw), (profiles_path, profiles_raw)):
+            saved = backup / path.name
+            if not saved.exists():
+                atomic_write(saved, raw)
+        if options_path.read_bytes() != options_raw or profiles_path.read_bytes() != profiles_raw:
+            raise RuntimeError("Settings changed concurrently; no tuning applied")
+        atomic_write(options_path, options.encode())
+        atomic_write(profiles_path, (json.dumps(profiles, indent=2) + "\n").encode())
+        return {"nearby_render_chunks": 12, "heap_gib": 8,
+                "backup": str(backup), "save_writes": 0}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-dir", type=Path, default=ROOT / "runtime" / "traversal")
     parser.add_argument("--minecraft-dir", type=Path,
                         default=Path.home() / "Library" / "Application Support" / "minecraft")
+    parser.add_argument("--tune-closed-profile", action="store_true",
+                        help="With game/launcher closed, set nearby distance to 12 and heap to 8 GiB")
     args = parser.parse_args()
     report = install(args.game_dir, args.minecraft_dir)
+    if args.tune_closed_profile:
+        report["tuning"] = tune_closed_profile(args.game_dir, args.minecraft_dir)
+        report["launcher_and_options_writes"] = 2
+        atomic_write(ROOT / "runs" / "distant-rendering-install.json",
+                     (json.dumps(report, indent=2) + "\n").encode())
+        print(json.dumps(report["tuning"], indent=2))
     print(json.dumps({key: report[key] for key in (
         "profile", "minecraft", "lod_radius_chunks", "existing_chunks_only", "activation")}, indent=2))
 

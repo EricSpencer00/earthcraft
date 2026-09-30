@@ -15,6 +15,8 @@ checksums, adds the two mods, and installs `configs/distant-horizons.toml` as
 `runtime/traversal/config/DistantHorizons.toml`. It is safe to stage the installation
 while Minecraft is open, but activating the mods requires a normal restart.
 Existing different versions or conflicting settings are rejected without replacement.
+The installer also accepts the quoted decimal values DH writes when expanding its
+configuration, so a safe rerun preserves the effective settings after first launch.
 
 The configuration must retain schema `_version = 5`,
 `common.worldGenerator.generatorPlan = "CHUNKS_ONLY"`, and
@@ -35,7 +37,11 @@ the existing **Earthcraft** save. Confirm the Mods screen lists Distant Horizons
 3.3.3 and Sodium 0.7.3. For lower nearby rendering load, set Minecraft's full-detail
 render distance to 12 chunks in **Options → Video Settings**; DH keeps its
 separate 2,048-chunk distant radius. The installer preserves the current full-detail
-distance and memory allocation because an open game/launcher can overwrite them.
+distance and memory allocation by default because an open game/launcher can
+overwrite them. Once both have closed, add `--tune-closed-profile` to set nearby
+rendering to 12 chunks and this profile's maximum heap to 8 GiB. The tuning step
+checks processes and Minecraft's session lock, backs up the prior settings under
+`runs/distant-rendering-before-tuning`, and preserves all other profiles and options.
 
 Installation proof is saved locally in `runs/distant-rendering-install.json`.
 Installation checks do not prove OpenGL compatibility, frame rate, or actual distant
