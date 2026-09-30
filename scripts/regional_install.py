@@ -155,6 +155,7 @@ def install(world, candidate, receipt_path, backups, expected=None):
                         raise ValueError('Pre-update region backup differs')
                 if (target.read_bytes() if target.exists() else b'') != original_bytes:
                     raise ValueError('Player region changed inside the session fence')
+                target.parent.mkdir(parents=True,exist_ok=True)
                 atomic(target, encode(merged))
                 if records(target.read_bytes()) != merged:
                     raise ValueError('Installed region differs from merged records')

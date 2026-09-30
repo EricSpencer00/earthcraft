@@ -12,7 +12,8 @@ import numpy as np
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from metric_world import packed
-from regional_install import geometry_signature,quality_merge,baseline_is_extrusion
+from regional_install import geometry_signature,quality_merge,baseline_is_extrusion,install,encode,records
+from region_expansion import sha
 from regional_publish_unpack import unpack
 from regional_store import compact,materialized,region_bytes,region_hashes
 import tarfile
@@ -35,6 +36,27 @@ def chunk(palette,values,version=1,entity=False,biome='minecraft:plains'):
 
 
 class RegionalDeliveryTests(unittest.TestCase):
+    def test_fresh_merge_replica_adds_region_and_expands_border(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);world=root/'current';world.mkdir();candidate=root/'candidate';candidate.mkdir()
+            (world/'session.lock').write_bytes(bytes(3));frame={'crs':'fixture','west':0,'north':0}
+            (world/'city-coverage.json').write_text(json.dumps({'frame':frame,'tiles':{}}))
+            n.File({'Data':n.Compound({'PlayerMarker':n.String('keep')})},gzipped=True).save(world/'level.dat')
+            (candidate/'region').mkdir();incoming={0:chunk(['minecraft:stone'],[])}
+            (candidate/'region/r.0.0.mca').write_bytes(encode(incoming))
+            (candidate/'earthcraft.json').write_text(json.dumps({'world_frame':frame,
+                'world_offset_xz':[0,0],'source':{'size':16}}))
+            receipt=root/'receipt.json';receipt.write_text(json.dumps({'result':'pass','checks':{'verified':True},
+                'tile':'0_0','quality':'LQ','world_manifest_sha256':sha(candidate/'earthcraft.json'),
+                'regions':{'r.0.0.mca':sha(candidate/'region/r.0.0.mca')}}))
+            self.assertFalse((world/'region').exists())
+            result=install(world,candidate,receipt,root/'backups')
+            self.assertEqual(result['added_chunks'],1)
+            self.assertEqual(records((world/'region/r.0.0.mca').read_bytes()),incoming)
+            level=n.load(world/'level.dat')['Data'];self.assertEqual(str(level['PlayerMarker']),'keep')
+            self.assertEqual(float(level['BorderSize']),4112)
+            self.assertTrue((world/'data/world_border.dat').exists())
+
     def test_vanilla_resave_is_eligible_but_edits_and_biomes_are_preserved(self):
         original=chunk(['minecraft:grass_block','minecraft:air'],[0]+[1]*4095)
         resaved=chunk(['minecraft:air','minecraft:grass_block'],[1]+[0]*4095,2)
