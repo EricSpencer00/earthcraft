@@ -308,17 +308,33 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     # and makes the world receipt unambiguous for later appearance stages.
     terrain_only = (meta.get('buildings_available') is False or
                     (not county['features'] and not osm_geometry and point_source is None))
-    if osm_geometry and (county_buildings or point_source is not None or surface_source is not None):
+    regional_scan = meta.get('scan_surface_receipt')
+    classified_scan = meta.get('classified_point_receipt')
+    if regional_scan is not None:
+        if (surface_source is None or regional_scan.get('schema') != 'earthcraft-regional-scan-surface-crop-v1'
+                or json.loads((surface_source/'probe.json').read_text()) != regional_scan):
+            raise ValueError('Explicit regional scan receipt does not match supplied roof observations')
+        from region_expansion import sha
+        if sha(surface_source/'metric-surfaces.npz') != regional_scan['surfaces_sha256']:
+            raise ValueError('Regional scan observation arrays changed')
+    if classified_scan is not None:
+        if (point_source is None or classified_scan.get('schema') not in ('earthcraft-classified-ept-building-crop-v1','earthcraft-classified-las-building-crop-v1')
+                or json.loads((point_source/'manifest.json').read_text()) != classified_scan):
+            raise ValueError('Explicit classified scan receipt differs from acquired points')
+    if osm_geometry and (county_buildings or (point_source is not None and classified_scan is None) or (surface_source is not None and regional_scan is None)):
         raise ValueError('OSM geometry profile cannot silently mix county or scan geometry')
     if terrain_only and county_buildings:
         raise ValueError('Terrain-only metadata conflicts with supplied building geometry')
     if not osm_geometry:buildings=county_buildings
     point_cells = point_report = None
     if point_source is not None:
-        if surface_source is not None:
+        if surface_source is not None and (regional_scan is None or classified_scan is None):
             raise ValueError('A/B experiment: choose 3D points or DSM, never blend silently')
         point_manifest=json.loads((point_source/'manifest.json').read_text())
-        if 'coverage_geometry' in point_manifest:
+        if classified_scan is not None:
+            from ept_buildings import load as load_classified_points
+            point_cells, point_report = load_classified_points(point_source, meta, ground, offset)
+        elif 'coverage_geometry' in point_manifest:
             point_cells, point_report = load_batch_points(point_source, source, meta, ground, offset)
         else:
             if {b['id'] for b in buildings} != {833197}:
@@ -334,20 +350,28 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         lidar_report = json.loads((surface_source/'probe.json').read_text())
         if lidar_report['grid'] != {key: meta[key] for key in ('crs','west','north','size')}:
             raise ValueError('LiDAR surface grid does not match world')
-        dsm = np.load(surface_source/'metric-surfaces.npz')['dsm']
+        surfaces = np.load(surface_source/'metric-surfaces.npz')
+        dsm = surfaces['dsm']
         if dsm.shape != ground.shape or not np.isfinite(dsm).all():
             raise ValueError('Missing or mismatched LiDAR surface; no flat roof fallback')
         roof_top = np.ceil(dsm + offset).astype(np.int32) - 1
         roof_mask = np.zeros_like(footprint_union)
         for b in buildings:
             roof_mask |= b['mask']
-        roof_mask &= roof_top > ground
+        observed = surfaces['valid'].astype(bool) if 'valid' in surfaces else np.ones_like(ground, bool)
+        if observed.shape != ground.shape:
+            raise ValueError('Scan coverage mask differs from world')
+        roof_mask &= observed & (roof_top > ground)
         roof_floor = roof_shell_floor(roof_top, roof_mask, ground)
-    max_y = max([int(ground.max()), *[b['high'] for b in buildings]])
+    max_y = int(ground.max())
     if lidar_report is not None:
-        max_y = max(int(ground.max()), int(roof_top[roof_mask].max()))
+        if roof_mask.any():max_y=max(max_y,int(roof_top[roof_mask].max()))
+        for building in buildings:
+            if (building['mask'] & ~observed).any():max_y=max(max_y,building['high'])
+    elif point_cells is None:
+        max_y=max([max_y,*[building['high'] for building in buildings]])
     if point_cells is not None and len(point_cells):
-        max_y = max(int(ground.max()), int(point_cells[:,1].max()))
+        max_y = max(max_y, int(point_cells[:,1].max()))
     if world_frame is None:
         _, _, world_height = vertical_layout(elevation, max_y)
     else:
@@ -413,6 +437,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     written_sections = 0
     omitted_air_sections = 0
     tallest_chunk_height = 0
+    fallback_cells = []
     # Do not scan every admitted building for every chunk.  The raster mask is
     # still the authority, but this index turns the common urban case into a
     # local chunk lookup and keeps the writer parallel-friendly.
@@ -436,7 +461,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             column_top = g.copy()
             # Point observations are the exclusive structure source in this
             # branch below; county shells are not written alongside them.
-            if local_points is None:
+            if local_points is None and lidar_report is None:
                 for building in local_buildings:
                     mask = building['mask'][zs,xs]
                     column_top[mask] = np.maximum(column_top[mask],building['high'])
@@ -444,6 +469,11 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
                 local_roof_mask = roof_mask[zs,xs]
                 local_roof_top = roof_top[zs,xs]
                 column_top[local_roof_mask] = np.maximum(column_top[local_roof_mask],local_roof_top[local_roof_mask])
+                # Explicit fallback only where the scan has no observations.
+                # Estimated building maxima must not inflate scanned heightmaps.
+                for building in local_buildings:
+                    fallback = building['mask'][zs,xs] & ~observed[zs,xs]
+                    column_top[fallback] = np.maximum(column_top[fallback], building['high'])
             if local_points is not None and len(local_points):
                 np.maximum.at(column_top,(local_points[:,2]%16,local_points[:,0]%16),local_points[:,1])
             # Empty space above the highest observed surface does not need a
@@ -462,18 +492,31 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             zz,xx=np.mgrid[:16,:16]
             volume[g-chunk_bottom,zz,xx] = surface[zs,xs]
             volume[g-chunk_bottom-1,zz,xx] = BLOCK['dirt']
-            if local_points is not None:
-                volume[local_points[:,1]-chunk_bottom, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
-            elif lidar_report is not None:
+            if lidar_report is not None:
+                for b in local_buildings:
+                    fallback = ~observed[zs,xs]
+                    wall = b['wall'][zs,xs] & fallback
+                    cap = b['mask'][zs,xs] & fallback
+                    volume[b['low']-chunk_bottom:b['high']-chunk_bottom+1,wall] = b['block']
+                    if cap.any():
+                        volume[b['high']-chunk_bottom,cap] = b['block']
+                    if classified_scan is not None:
+                        for z,x in np.argwhere(wall):
+                            fallback_cells.extend((cx*16+int(x),y,cz*16+int(z))
+                                for y in range(b['low'],b['high']+1))
+                        fallback_cells.extend((cx*16+int(x),b['high'],cz*16+int(z))
+                                              for z,x in np.argwhere(cap))
                 exposed = (roof_mask[zs,xs] & (yy >= roof_floor[zs,xs]) &
                            (yy <= roof_top[zs,xs]))
                 volume[exposed] = BLOCK['stone_bricks']
-            else:
+            elif local_points is None:
                 for b in local_buildings:
                     mask,wall=b['mask'][zs,xs],b['wall'][zs,xs]
                     if mask.any():
                         volume[b['low']-chunk_bottom:b['high']-chunk_bottom+1,wall]=b['block']
                         volume[b['high']-chunk_bottom,mask]=b['block']
+            if local_points is not None:
+                volume[local_points[:,1]-chunk_bottom, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
             # Route appearance only onto occupied building cells; never fill gaps.
             structure = ((volume != BLOCK['air']) & (yy > g)) if osm_geometry else volume == BLOCK['stone_bricks']
             for layer in appearance:
@@ -564,8 +607,17 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         report['osm_incomplete_extrusions_replaced']=0
         mapped_top=ground.copy();mapped_mask=np.zeros_like(ground,dtype=bool)
         for b in buildings:
-            mapped_top[b['mask']]=np.maximum(mapped_top[b['mask']],b['high'])
-            mapped_mask|=b['mask']
+            mask = (b['mask'] if lidar_report is None else b['mask'] & ~observed)
+            if point_cells is not None and lidar_report is None:
+                continue
+            mapped_top[mask]=np.maximum(mapped_top[mask],b['high'])
+            mapped_mask|=mask
+        if lidar_report is not None:
+            mapped_top[roof_mask] = roof_top[roof_mask]
+            mapped_mask |= roof_mask
+        if point_cells is not None and len(point_cells):
+            np.maximum.at(mapped_top, (point_cells[:,2], point_cells[:,0]), point_cells[:,1])
+            mapped_mask[point_cells[:,2],point_cells[:,0]] = True
         np.savez_compressed(destination/'mapped-building-tops.npz',top_y=mapped_top,mask=mapped_mask)
         (destination/'earthcraft.json').write_text(json.dumps(report,indent=2))
     if terrain_only:
@@ -581,18 +633,31 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         (destination/'ground-material-routing.json').write_text(json.dumps(road_report,indent=2))
         np.save(destination/'classified-road-mask.npy',road_mask)
     if lidar_report is not None:
-        report['building_geometry'] = '2022 DSM sampled heightfield within county footprints; exposed side shell'
+        report['building_geometry'] = 'Scan DSM sampled roof surfaces within mapped footprints; derived exposed side shell'
         report['lidar_surface_source'] = lidar_report
         report['building_height_metadata_role'] = 'County maximum heights are metadata, not per-cell roof heights.'
         report['limitations'][0] = 'DSM preserves sampled roof levels but includes interpolation and possible vegetation; vertical walls are derived shells, facades and interiors unknown.'
         report['roof_source_cells'] = int(roof_mask.sum())
-        np.savez_compressed(destination/'roof-observations.npz', top_y=roof_top, mask=roof_mask)
+        report['roof_scan_missing_cells'] = int((footprint_union & ~observed).sum())
+        roof_expected = roof_top.copy()
+        if point_cells is not None and len(point_cells):
+            np.maximum.at(roof_expected, (point_cells[:,2],point_cells[:,0]), point_cells[:,1])
+        np.savez_compressed(destination/'roof-observations.npz', top_y=roof_expected, mask=roof_mask,
+            observed_top_y=roof_top, floor_y=roof_floor,
+            combined_classified_points=np.array(classified_scan is not None))
         (destination/'earthcraft.json').write_text(json.dumps(report,indent=2))
     if point_report is not None:
         report['building_geometry'] = 'Observed 3D point voxels; no heightfield extrusion'
         report['point_geometry_source'] = point_report
         report['building_height_metadata_role'] = 'County heights retained only as metadata; observed 3D points determine occupied cells.'
         report['limitations'][0] = 'Sparse airborne observations; unknown gaps remain empty and one-metre quantization loses fine detail.'
+        if classified_scan is not None and lidar_report is not None:
+            report['building_geometry'] = 'Measured DSM roofs plus full-density class-6 building voxels; derived side walls'
+            report['combined_scan_profile'] = 'classified-points-and-measured-roofs-v1'
+            report['limitations'][0] = 'Measured roof samples and original building returns; walls between ground and roof are derived. Facade colour and interiors are unknown.'
+            fallback_array = np.unique(np.asarray(fallback_cells,dtype=np.int32).reshape(-1,3),axis=0)
+            np.save(destination/'missing-scan-fallback-voxels.npy',fallback_array)
+            report['missing_scan_fallback_voxels'] = len(fallback_array)
         (destination/'earthcraft.json').write_text(json.dumps(report,indent=2))
         (destination/'point-geometry.json').write_text(json.dumps(point_report,indent=2))
         np.save(destination/'point-voxels.npy',point_cells)

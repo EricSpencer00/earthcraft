@@ -1,3 +1,4 @@
 -r requirements-metric.txt
 laspy==2.7.0
 pyshp==3.1.6
+lazrs==0.7.0

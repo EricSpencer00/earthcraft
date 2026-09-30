@@ -55,17 +55,25 @@ def apply(source_world, imagery, destination):
     source_world, imagery, destination = map(Path, (source_world, imagery, destination))
     if destination.exists():
         raise FileExistsError(destination)
-    if not (source_world/'building-layer.json').is_file():
-        raise ValueError('Roof colour requires a verified styled-shell source world')
+    styled = (source_world/'building-layer.json').is_file()
+    measured = (source_world/'roof-observations.npz').is_file()
+    if not styled and not measured:
+        raise ValueError('Roof colour requires a verified shell or measured roof observation mask')
     image = json.loads((imagery/'imagery.json').read_text())
     report = json.loads((source_world/'earthcraft.json').read_text())
     source = report['source']; matching_grid(image, source)
     image_file = imagery/'metric-imagery.npz'
     if image.get('normalized_sha256') and sha(image_file) != image['normalized_sha256']:
         raise ValueError('Normalized orthophoto changed')
-    with np.load(source_world/'building-layer.npz', allow_pickle=False) as model:
-        owner = model['geometry_owner'] if 'geometry_owner' in model else model['owner']
-        top = model['top'].astype(np.int32)
+    if styled:
+        with np.load(source_world/'building-layer.npz', allow_pickle=False) as model:
+            owner = model['geometry_owner'] if 'geometry_owner' in model else model['owner']
+            top = model['top'].astype(np.int32)
+    else:
+        verify(source_world)
+        with np.load(source_world/'roof-observations.npz', allow_pickle=False) as model:
+            owner = model['mask'].astype(np.uint8)
+        top = np.load(source_world/'top-heights.npy').astype(np.int32)
     with np.load(image_file, allow_pickle=False) as data:
         bands = data['bands']
         if bands.shape != (4, source['size'], source['size']) or bands.dtype != np.uint8:

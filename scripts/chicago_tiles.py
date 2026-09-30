@@ -62,7 +62,8 @@ def boundary_geometry(document):
     return unary_union(objects)
 
 
-def tile_plan(document, frame, tile_size=256, halo=32):
+def tile_plan(document, frame, tile_size=256, halo=32, *, max_area_m2=1e9,
+              max_candidate_tiles=100_000):
     validate_frame(frame)
     if type(tile_size) is not int or not 16<=tile_size<=512 or tile_size%16:
         raise ValueError('Tile size must be 16..512 m, chunk aligned')
@@ -70,12 +71,15 @@ def tile_plan(document, frame, tile_size=256, halo=32):
     geography=boundary_geometry(document)
     project=Transformer.from_crs(4326,frame['crs'],always_xy=True)
     city=transform(project.transform,geography)
-    if not city.is_valid or not 0<city.area<=1e9:raise ValueError('City planning extent exceeds 1000 square km')
+    if not 0 < max_area_m2 <= 4e10 or not 1 <= max_candidate_tiles <= 1_000_000:
+        raise ValueError('Regional planning limits exceed the bounded regional budget')
+    if not city.is_valid or not 0<city.area<=max_area_m2:
+        raise ValueError('City planning extent exceeds configured area budget')
     left,bottom,right,top=city.bounds
     origin_x,origin_z=frame['west'],frame['north']
     x0=math.floor((left-origin_x)/tile_size);x1=math.ceil((right-origin_x)/tile_size)
     z0=math.floor((origin_z-top)/tile_size);z1=math.ceil((origin_z-bottom)/tile_size)
-    if (x1-x0)*(z1-z0)>100_000:raise ValueError('Tile planning budget exceeded')
+    if (x1-x0)*(z1-z0)>max_candidate_tiles:raise ValueError('Tile planning budget exceeded')
     rows=[]
     for tz in range(z0,z1):
         for tx in range(x0,x1):
@@ -162,6 +166,12 @@ class Journal:
                     [(str(source_order[tile['id']]),tile['id']) for tile in plan['tiles']
                      if tile['id'] in source_order])
             self.db.execute('COMMIT')
+            # Regional queues have hundreds of thousands of stage rows. Match
+            # the normal deterministic dispatch order without sorting the
+            # entire queue for every claim. Existing city journals migrate
+            # additively and keep their receipts and priorities unchanged.
+            self.db.execute('''CREATE INDEX IF NOT EXISTS jobs_dispatch_order ON jobs(
+                stage, (CASE WHEN route_rank IS NULL THEN 1 ELSE 0 END), route_rank, priority, tile)''')
         except Exception:
             self.db.execute('ROLLBACK');self.db.close();raise
 

@@ -54,6 +54,14 @@ def verify(world):
     declared_preview_spawn_safe=bool(report.get('preview_spawn_safe',True))
     point_cells=np.load(world/'point-voxels.npy') if (world/'point-voxels.npy').exists() else None
     point_checks=0
+    combined_roof = None
+    fallback_cells = None
+    if report.get('combined_scan_profile') == 'classified-points-and-measured-roofs-v1':
+        with np.load(world/'roof-observations.npz') as roof:
+            combined_roof = {key: roof[key].copy() for key in ('mask','floor_y','observed_top_y')}
+        fallback_cells = np.load(world/'missing-scan-fallback-voxels.npy')
+        if len(fallback_cells) != report['missing_scan_fallback_voxels']:
+            raise ValueError('Missing-scan fallback voxel count differs from receipt')
     derived_checks=0
     building_layer=None
     building_baseline=None
@@ -122,10 +130,21 @@ def verify(world):
                 local=point_cells[(point_cells[:,0]//16==cx)&(point_cells[:,2]//16==cz)]
                 expected_structure=np.zeros_like(volume,dtype=bool)
                 expected_structure[local[:,1]-bottom,local[:,2]%16,local[:,0]%16]=True
+                if combined_roof is not None:
+                    absolute_y = np.arange(bottom,bottom+h)[:,None,None]
+                    expected_structure |= (combined_roof['mask'][zs,xs] &
+                        (absolute_y >= combined_roof['floor_y'][zs,xs]) &
+                        (absolute_y <= combined_roof['observed_top_y'][zs,xs]))
+                    local_fallback = fallback_cells[(fallback_cells[:,0]//16==cx)&(fallback_cells[:,2]//16==cz)]
+                    expected_structure[local_fallback[:,1]-bottom,local_fallback[:,2]%16,local_fallback[:,0]%16] = True
                 if building_layer is not None:
                     shell=shell_for_chunk(building_layer,cx,cz,h,bottom,(ox,oz))
                     derived_checks+=int((shell & ~expected_structure).sum())
                     expected_structure|=shell
+                # Fallback shells can overlap the measured ground on sloped
+                # footprints. Those cells belong to topology, not to this
+                # independently checked above-ground structure volume.
+                expected_structure &= above_ground
                 np.testing.assert_array_equal((volume!=ids['air'])&above_ground,expected_structure)
                 point_checks+=len(local)
             elif building_layer is not None:
