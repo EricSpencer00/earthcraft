@@ -2,8 +2,10 @@
 import hashlib
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import platform
+import stat
 
 import numpy as np
 
@@ -35,6 +37,59 @@ def files_snapshot(root):
     if not result:
         raise ValueError(f'Empty frozen input directory: {root}')
     return result
+
+
+class FileSnapshotCache:
+    """Reuse verified bytes during one operation, rechecking every file identity.
+
+Directory renames preserve regular-file identities. Size, nanosecond mtime and
+ctime changes invalidate the cache. This is process-local; it is never persisted
+or used as a substitute for hashing newly received files.
+"""
+    def __init__(self):
+        self.verified = {}
+        self.held_files = {}
+
+    def keep_open(self, stream):
+        """Hash a held lock descriptor without closing another fd for its inode."""
+        info = os.fstat(stream.fileno())
+        self.held_files[(info.st_dev, info.st_ino)] = stream
+
+    @staticmethod
+    def identity(path):
+        info = path.stat(follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError(f'Frozen input must not be a symlink: {path}')
+        return info, (info.st_dev, info.st_ino, info.st_size,
+                      info.st_mtime_ns, info.st_ctime_ns)
+
+    def snapshot(self, root):
+        root = Path(root)
+        if not root.is_dir() or root.is_symlink():
+            raise ValueError(f'Missing or linked frozen input directory: {root}')
+        result = {}
+        for path in sorted(root.rglob('*')):
+            info, identity = self.identity(path)
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            value = self.verified.get(identity)
+            if value is None:
+                held = self.held_files.get(identity[:2])
+                if held is None:
+                    value = file_hash(path)
+                else:
+                    hasher, offset = hashlib.sha256(), 0
+                    while block := os.pread(held.fileno(), 1024*1024, offset):
+                        hasher.update(block)
+                        offset += len(block)
+                    value = hasher.hexdigest()
+            if self.identity(path)[1] != identity:
+                raise ValueError(f'Frozen input changed during verification: {path}')
+            self.verified[identity] = value
+            result[path.relative_to(root).as_posix()] = value
+        if not result:
+            raise ValueError(f'Empty frozen input directory: {root}')
+        return result
 
 
 def input_snapshot(root, region, source, points, photo_world=None):

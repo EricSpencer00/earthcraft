@@ -1,16 +1,20 @@
 import copy
 import json
+import os
+import fcntl
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import nbtlib as n
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from metric_world import packed, region_write
-from world_replay import canonical_section, compare_worlds, files_snapshot, digest
+from world_replay import canonical_section, compare_worlds, files_snapshot, digest, FileSnapshotCache, file_hash
 
 
 def section(names, values):
@@ -20,6 +24,50 @@ def section(names, values):
 
 
 class ReplayTests(unittest.TestCase):
+    def test_cached_snapshot_reuses_unchanged_bytes_across_directory_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'original';root.mkdir();(root/'data').write_bytes(b'verified')
+            cache=FileSnapshotCache()
+            with patch('world_replay.file_hash', wraps=file_hash) as hashed:
+                expected=cache.snapshot(root)
+                moved=root.with_name('backup');root.rename(moved)
+                self.assertEqual(cache.snapshot(moved),expected)
+                self.assertEqual(hashed.call_count,1)
+            (moved/'added').write_bytes(b'new')
+            self.assertEqual(cache.snapshot(moved),files_snapshot(moved))
+            (moved/'data').unlink()
+            self.assertEqual(cache.snapshot(moved),files_snapshot(moved))
+
+    def test_cached_snapshot_detects_same_size_edit_with_restored_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);path=root/'data';path.write_bytes(b'before')
+            cache=FileSnapshotCache();before=cache.snapshot(root);stamp=path.stat()
+            path.write_bytes(b'edited');os.utime(path,ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
+            self.assertNotEqual(cache.snapshot(root),before)
+            self.assertEqual(cache.snapshot(root),files_snapshot(root))
+            path.unlink();path.symlink_to(root/'missing')
+            with self.assertRaisesRegex(ValueError,'symlink'):cache.snapshot(root)
+
+    def test_cached_snapshot_rejects_a_file_changing_during_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);path=root/'data';path.write_bytes(b'before')
+            def changed(path):
+                result=file_hash(path);path.write_bytes(b'edited');return result
+            with patch('world_replay.file_hash',side_effect=changed):
+                with self.assertRaisesRegex(ValueError,'changed during verification'):
+                    FileSnapshotCache().snapshot(root)
+
+    def test_hashing_a_held_descriptor_does_not_release_its_record_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);path=root/'session.lock';path.write_bytes(b'lock')
+            cache=FileSnapshotCache()
+            with path.open('r+b') as held:
+                fcntl.lockf(held,fcntl.LOCK_EX|fcntl.LOCK_NB);cache.keep_open(held)
+                self.assertEqual(cache.snapshot(root),{'session.lock':__import__('hashlib').sha256(b'lock').hexdigest()})
+                result=subprocess.run([sys.executable,'-c',
+                    'import fcntl,sys\nf=open(sys.argv[1],"r+b")\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(0)\nsys.exit(1)',str(path)])
+                self.assertEqual(result.returncode,0)
+
     def test_palette_order_and_unused_entries_do_not_change_blocks(self):
         values = np.arange(4096) % 2
         first = section(['minecraft:air', 'minecraft:stone'], values)

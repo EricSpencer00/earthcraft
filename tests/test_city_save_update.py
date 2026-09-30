@@ -2,7 +2,7 @@ import copy
 from pathlib import Path
 import sys
 import unittest
-import tempfile,json
+import tempfile,json,subprocess
 from unittest.mock import patch
 
 import nbtlib as n
@@ -13,10 +13,34 @@ from city_save_update import extend_height,pavement_overlay,generated_chunk_pred
 from city_assemble import chunk_payload
 from metric_world import packed,region_write
 from verify_metric_world import unpack
-from world_replay import files_snapshot
+from world_replay import files_snapshot,FileSnapshotCache
 
 
 class SavedCityTests(unittest.TestCase):
+    def test_promotion_preserves_original_backup_and_holds_lock_during_checks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);current=root/'current';staged=root/'staged';backup=root/'backup'
+            current.mkdir();staged.mkdir();(current/'session.lock').write_bytes(b'lock')
+            before=files_snapshot(current)
+            (staged/'session.lock').write_bytes(b'lock')
+            (staged/'city-update-receipt.json').write_text(json.dumps({'original_snapshot':before}))
+            (staged/'geographic-payload.bin').write_bytes(b'verified')
+            (staged/'server-verification.json').write_text(json.dumps({'server_load_save_reload_verified':True,
+                'verified_input_snapshot':files_snapshot(staged)}))
+            expected=files_snapshot(staged);snapshot=FileSnapshotCache.snapshot
+            def checking(verifier,path):
+                result=snapshot(verifier,path)
+                if path==backup:
+                    probe=subprocess.run([sys.executable,'-c',
+                        'import fcntl,sys\nf=open(sys.argv[1],"r+b")\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(0)\nsys.exit(1)',str(path/'session.lock')])
+                    self.assertEqual(probe.returncode,0)
+                return result
+            with patch.object(FileSnapshotCache,'snapshot',checking):
+                self.assertTrue(publish(current,staged,backup)['snapshot_verified'])
+            self.assertEqual(files_snapshot(current),expected)
+            self.assertEqual(files_snapshot(backup),before)
+            self.assertFalse(staged.exists())
+
     def save_fixture(self,root,name,blocks):
         world=root/name;(world/'region').mkdir(parents=True)
         pack=world/'datapacks/earthcraft_height';pack.mkdir(parents=True);(pack/'pack.mcmeta').write_text('{}')

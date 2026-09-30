@@ -63,3 +63,9 @@ name and launcher link, with the previous save available for recovery. If the
 player has changed the original meanwhile, preserve those changes before
 publication. An assembly receipt alone does not certify game loading or
 geographic accuracy.
+
+Publication hashes each unchanged file once per operation and checks its inode,
+size, nanosecond modification time and change time at every subsequent fence.
+Changed identities are rehashed; file additions, removals and symlinks are still
+checked. A held session-lock descriptor is read without opening and closing a
+second descriptor, which would otherwise release the POSIX record lock.

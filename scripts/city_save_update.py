@@ -18,7 +18,7 @@ from city_assemble import chunk_payload
 from inspect_world import chunks
 from metric_world import packed,region_write
 from verify_metric_world import unpack
-from world_replay import files_snapshot,file_hash
+from world_replay import files_snapshot,file_hash,FileSnapshotCache
 from world_border import bounds_for_tiles, update_world_border
 
 
@@ -235,18 +235,25 @@ def publish(current,staged,backup):
     receipt=json.loads((staged/'city-update-receipt.json').read_text())
     checked=json.loads((staged/'server-verification.json').read_text())
     if not checked['server_load_save_reload_verified']:raise ValueError('Verify expanded save in Minecraft before publication')
-    actual={name:value for name,value in files_snapshot(staged).items() if name!='server-verification.json'}
+    verified=FileSnapshotCache()
+    # Warm the original before locking. Reading and closing session.lock while
+    # a POSIX record lock is held would release that process's lock. Subsequent
+    # checks stat the unchanged file without opening or closing its descriptor.
+    verified.snapshot(current)
+    snapshot=verified.snapshot
+    actual={name:value for name,value in snapshot(staged).items() if name!='server-verification.json'}
     if checked.get('verified_input_snapshot')!=actual:raise ValueError('Staging differs from the exact world verified in Minecraft; recheck before publication')
     with (current/'session.lock').open('r+b') as lock:
         fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        if files_snapshot(current)!=receipt['original_snapshot']:raise ValueError('Player save changed; restage before publication')
-        before=files_snapshot(staged)
+        verified.keep_open(lock)
+        if snapshot(current)!=receipt['original_snapshot']:raise ValueError('Player save changed; restage before publication')
+        before=snapshot(staged)
         current.rename(backup)
         try:
-            if files_snapshot(backup)!=receipt['original_snapshot']:raise ValueError('Backup verification failed')
+            if snapshot(backup)!=receipt['original_snapshot']:raise ValueError('Backup verification failed')
             staged.rename(current)
         except Exception:
             if not current.exists():backup.rename(current)
             raise
-        if files_snapshot(current)!=before:raise ValueError('Published save differs from verified staging')
+        if snapshot(current)!=before:raise ValueError('Published save differs from verified staging')
     return {'installed':str(current),'backup':str(backup),'snapshot_verified':True,'only_one_installed_world':True}
