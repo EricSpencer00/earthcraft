@@ -9,10 +9,29 @@ from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from regional_arcgrid import grid_layout,tile_members,publisher_reference,original_member
+from regional_arcgrid import grid_layout,tile_members,publisher_reference,original_member,BufferedRangeReader
+from http_zip_range import RangeReader
 
 
 class RegionalArcGridTests(unittest.TestCase):
+    def test_buffered_ranges_preserve_zip_members_across_seeks(self):
+        source=io.BytesIO()
+        raw=bytes(range(256))*60000
+        with zipfile.ZipFile(source,'w',zipfile.ZIP_STORED) as archive:
+            archive.writestr('first.adf',raw);archive.writestr('second.adf',raw[::-1])
+        original=source.getvalue();reader=BufferedRangeReader.__new__(BufferedRangeReader)
+        reader.length=len(original);reader.position=0;calls=[]
+        def fetch(current,size=-1):
+            if size<0:size=current.length-current.position
+            calls.append((current.position,size));result=original[current.position:current.position+size]
+            current.position+=len(result);return result
+        with patch.object(RangeReader,'read',fetch),zipfile.ZipFile(reader) as archive:
+            with archive.open('second.adf') as member:
+                self.assertEqual(member.read(2**20+117)+member.read(),raw[::-1])
+            self.assertEqual(archive.read('first.adf'),raw)
+        self.assertLess(len(calls),16)
+        self.assertLessEqual(sum(size for _,size in calls),len(original)+2*2**20)
+
     def test_original_layout_selects_files_across_native_boundaries(self):
         header=bytearray(308);header[:8]=b'GRID1.2\0'
         header[256:272]=struct.pack('>2d',1,1)
@@ -50,7 +69,7 @@ class RegionalArcGridTests(unittest.TestCase):
             layer={'members':{'w001001.adf':member},'cache':str(root/'cache'),
                    'archive_url':'https://publisher.example/original.zip','archive_etag':'verified-original',
                    'archive_bytes':archive_path.stat().st_size}
-            with patch('regional_arcgrid.RangeReader',Reader):
+            with patch('regional_arcgrid.BufferedRangeReader',Reader):
                 path,receipt=original_member(layer,'w001001.adf',reserve_bytes=0)
                 self.assertEqual(path.read_bytes(),raw);self.assertTrue(receipt['zip_crc32_verified'])
                 path.write_bytes(raw[:-1]+b'!')

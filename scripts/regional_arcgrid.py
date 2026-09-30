@@ -34,6 +34,27 @@ SOURCES=(('Will',2021,'district1/will/2021/','will'),
 _VERIFIED={}
 
 
+class BufferedRangeReader(RangeReader):
+    """Coalesce sequential payload reads while keeping strict bounded ranges."""
+    def read(self,size=-1):
+        if size<0:size=self.length-self.position
+        size=min(size,self.length-self.position)
+        if size>16*2**20:raise ValueError('Bounded original grid range required')
+        if not size:return b''
+        remaining=size;pieces=[]
+        while remaining:
+            start=self.position;cached=getattr(self,'_buffer',b'');origin=getattr(self,'_buffer_start',-1)
+            if origin<=start<origin+len(cached):
+                take=min(remaining,origin+len(cached)-start)
+                pieces.append(cached[start-origin:start-origin+take]);self.position+=take;remaining-=take
+            elif size<64*2**10:
+                pieces.append(super().read(remaining));remaining=0
+            else:
+                raw=super().read(min(max(remaining,8*2**20),self.length-start))
+                self._buffer_start=start;self._buffer=raw;self.position=start
+        return b''.join(pieces)
+
+
 def publisher_reference(raw):
     root=ET.fromstring(raw)
     embedded=[ET.fromstring(node.text) for node in root.iter()
@@ -126,7 +147,7 @@ def original_member(layer,name,reserve_bytes=150*2**30):
                 _VERIFIED[str(path)]=identity
             return path,record
         if shutil.disk_usage(root).free<reserve_bytes+entry['bytes']+2**30:raise ValueError('Preserve original grid cache storage reserve')
-        reader=RangeReader(layer['archive_url'],budget=entry['compressed_bytes']+8*2**20)
+        reader=BufferedRangeReader(layer['archive_url'],budget=entry['compressed_bytes']+32*2**20)
         if reader.etag!=layer['archive_etag'] or reader.length!=layer['archive_bytes']:raise ValueError('Remote grid archive version changed')
         temporary=path.with_name(name+'.partial');digest=hashlib.sha256();count=0
         with zipfile.ZipFile(reader) as archive:
