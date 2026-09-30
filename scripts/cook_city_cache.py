@@ -143,7 +143,13 @@ def verify(path,record,asset):
 
 
 def acquire(asset,publisher,root,reserve_bytes=100*2**30):
-    validate_asset(asset);root=Path(root)
+    validate_asset(asset)
+    return acquire_validated_deflate(asset,publisher,root,reserve_bytes)
+
+
+def acquire_validated_deflate(asset,publisher,root,reserve_bytes=100*2**30,reader_factory=None):
+    """Cache exact DEFLATE bytes after the caller validates its survey identity."""
+    root=Path(root)
     base=bulk_root().resolve()
     if not base.exists() or not root.resolve().is_relative_to(base):
         raise ValueError('Use the mounted Earthcraft bulk volume; no internal fallback')
@@ -163,7 +169,7 @@ def acquire(asset,publisher,root,reserve_bytes=100*2**30):
             if shutil.disk_usage(root).free<reserve_bytes+2*asset['compressed_bytes']+2**30:
                 raise ValueError('Insufficient bulk space with 100 GiB reserve and working allowance')
             path=root/(asset['id']+'.las.gz');partial=path.with_suffix('.gz.part');checkpoint=partial.with_name(partial.name+'.json')
-            remote=RangeReader(asset['url'],budget=asset['compressed_bytes']+4*2**20)
+            remote=(reader_factory or RangeReader)(asset['url'],budget=asset['compressed_bytes']+4*2**20)
             if remote.etag!=asset['archive_etag']:raise ValueError('Remote archive version changed; re-index before fetching')
             with zipfile.ZipFile(remote) as archive:
                 info=archive.getinfo(asset['member'])
@@ -206,7 +212,7 @@ def acquire(asset,publisher,root,reserve_bytes=100*2**30):
             record={'url':asset['url'],'member':asset['member'],'archive_etag':asset['archive_etag'],
                 'bytes':count,'sha256':uncompressed_sha256,'compressed_sha256':sha(ready),
                 'zip_crc32_verified':asset['crc32'],'capture_interval':publisher['capture_interval'],
-                'publisher':publisher,'license':'No access or use restrictions per publisher XML',
+                'publisher':publisher,'license':publisher.get('license','No access or use restrictions per publisher XML'),
                 'storage':'Original ZIP DEFLATE bytes wrapped as gzip; lossless LAS recovery',
                 'retrieved_utc':datetime.now(timezone.utc).isoformat(),'network_bytes_this_attempt':remote.transferred}
             ready.rename(path);save_json(root/(asset['id']+'.las.gz.json'),record)

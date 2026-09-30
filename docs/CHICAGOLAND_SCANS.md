@@ -33,6 +33,14 @@ LAS members use the publisher's survey index and lossless ZIP-member cache.
 The inventory contains 5,093 original Cook members; that count describes
 available files, not downloaded or installed buildings.
 
+Will 2021 original LAS members are also indexed. Its approximately 640 GB
+outer ZIP contains a stored inner ZIP, so a bounded seek window exposes
+individual compressed LAS members without fetching the county archive.
+The frozen publisher tile index selects 4,101 original members. The adapter
+checks both ZIP directories, the outer ETag, member CRCs, recovered LAS bytes,
+horizontal references and the separately verified survey-foot Z reference.
+Original DEFLATE payloads are preserved losslessly in gzip caches.
+
 Within paired survey coverage, mapped footprints restrict DSM roofs so trees
 outside buildings do not become roof geometry. Every usable intersecting
 point survey can contribute returns supported by the current DSM; returns
@@ -52,9 +60,10 @@ cells. Its date and resolution are retained; it can predate the geometry.
 No façade photography or complete interior reconstruction is claimed.
 Sources without verified units, changed frozen bytes or unsupported formats
 are rejected. This pipeline does not establish that every publicly available
-survey has been acquired. In particular, the nested Will original LAS archive
-and unavailable Kendall LAS link are not original-point adapters here; their
-paired DSM/DTM products and usable EPT candidates provide the current route.
+survey has been acquired. The unavailable Kendall original LAS link remains
+a source gap; its paired DSM/DTM products and usable EPT candidates provide
+the current route. Original-file inventories do not imply that all county
+point payloads have been downloaded or installed.
 
 The base uses frozen Illinois, Indiana and Wisconsin OSM way indexes and
 public terrain tiles. Missing height and road-width measurements remain

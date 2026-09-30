@@ -153,15 +153,15 @@ def select_pair(tile, frame, catalog):
     return max(candidates, key=lambda entry: entry[:4])[-1] if candidates else None
 
 
-def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None):
+def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None,will_catalog=None):
     with ExitStack() as stack:
         for candidate in root.glob('world*'):
             if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
                 stack.enter_context(materialized(candidate))
-        return _scan_tile(tile,frame,root,pair,point_catalog,point_cache,cook_catalog)
+        return _scan_tile(tile,frame,root,pair,point_catalog,point_cache,cook_catalog,will_catalog)
 
 
-def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None):
+def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None,will_catalog=None):
     if pair is None:
         if point_catalog is not None:
             result=point_only_tile(tile,frame,root,point_catalog,point_cache)
@@ -204,18 +204,24 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
         from ept_buildings import crop
         with np.load(surfaces/'metric-surfaces.npz') as arrays:
             pieces=[]; accepted=[]
+            originals=[]
             if pair['county']=='Cook' and cook_catalog and Path(cook_catalog).exists():
-                from regional_cook_points import crop as original_crop
-                point_root=root/'point-crops'/'Cook-original-2022'
+                from regional_cook_points import crop as cook_crop
+                originals.append(('Cook-original-2022',cook_catalog,cook_crop,'cook2022-cache'))
+            if pair['county']=='Will' and will_catalog and Path(will_catalog).exists():
+                from regional_will_points import crop as will_crop
+                originals.append(('Will-original-2021',will_catalog,will_crop,'will2021-cache'))
+            for project,original_catalog,original_crop,original_cache in originals:
+                point_root=root/'point-crops'/project
                 try:
                     if (point_root/'manifest.json').exists():
                         record=json.loads((point_root/'manifest.json').read_text())
-                        if sha(point_root/'points.npz')!=record['points_sha256']:raise ValueError('Frozen original Cook crop changed')
-                    else:record=original_crop(cook_catalog,meta['source'],point_root,point_cache.parent/'cook2022-cache')
+                        if sha(point_root/'points.npz')!=record['points_sha256']:raise ValueError('Frozen original county crop changed')
+                    else:record=original_crop(original_catalog,meta['source'],point_root,point_cache.parent/original_cache)
                     with np.load(point_root/'points.npz') as points:pieces.append(points['xyz'].copy())
                     accepted.append(record);attempts.append({'project':record['project'],'result':'acquired','building_points':record['building_points']})
                 except (ValueError,urllib.error.URLError,TimeoutError) as error:
-                    attempts.append({'project':'Cook original 2022 LAS','result':'unavailable','reason':str(error)})
+                    attempts.append({'project':project,'result':'unavailable','reason':str(error)})
             for survey in candidates(tile,frame,point_catalog):
                 point_root=root/'point-crops'/survey['project']
                 try:
@@ -353,6 +359,8 @@ def run(args):
             prepare_grid_archives(control,bulk)
             from regional_cook_points import prepare as prepare_original_cook
             prepare_original_cook(control)
+            from regional_will_points import prepare as prepare_original_will
+            prepare_original_will(control)
             from regional_point_catalog import discover as discover_points
             discover_points(plan,control/'point-surveys')
             entries = indexes(control, bulk, frame, args.illinois)
@@ -412,7 +420,7 @@ def run(args):
                     journal.finish(job, root/'geometry-receipt.json')
                 else:
                     receipt = scan_tile(tile, frame, root, select_pair(tile, frame, catalog),
-                                        point_catalog, bulk/'ept-cache',control/'cook2022/catalog.json')
+                                        point_catalog, bulk/'ept-cache',control/'cook2022/catalog.json',control/'will2021/catalog.json')
                     atomic(root/'scan-receipt.json', json.dumps(receipt).encode())
                     for candidate in root.glob('world*'):
                         if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
