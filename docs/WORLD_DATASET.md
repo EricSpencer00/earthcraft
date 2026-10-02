@@ -13,6 +13,25 @@ Minecraft client/mod jars and launcher authentication are not uploaded. The
 save lock, derived Distant Horizons caches, Finder metadata, and diagnostic
 `pre-expansion-evidence` copies are excluded and listed in the manifest.
 
+## Verified snapshot
+
+[`chicagoland-20261001-closed-save`](https://huggingface.co/datasets/EricSpencer00/earthcraft-minecraft-world/tree/main/snapshots/chicagoland-20261001-closed-save)
+is uploaded to the private dataset. All 114 snapshot files were verified against
+their checksums, including 111 geographic/metadata archives and the completion
+manifest. The archives contain 6,769 files: 16.95 GB before compression and
+2.74 GB compressed.
+
+The snapshot records 4,126,030 serialized Anvil chunks and 1,755 installed 512 m
+tiles: 1,714 base-quality tiles and 41 scan/roof upgrades. Serialized chunk
+counts describe stored world files and do not measure observed regional coverage.
+Chicagoland remains partially generated.
+
+A selected restore covering metadata, downtown, and Elmhurst verified 303 files.
+An independent Hub download also matched the manifest and all 77 metadata-file
+hashes. The restored save has not been launched in Minecraft; those checks
+establish archive integrity and coordinate-preserving restoration, not visual
+accuracy or game compatibility. The private dataset requires authorized access.
+
 ## Freeze before packaging
 
 Save and Quit to Title in Minecraft. The staging command takes the same POSIX

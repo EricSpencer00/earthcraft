@@ -1,8 +1,10 @@
 # Public repository and release plan
 
-Status: the source tree is prepared for public review. Publishing still needs
-the destination repository, final native checks, and artifact-specific rights
-decisions. This document is not a claim that a generated world is finished.
+Status: the source repository is public. Native release checks and
+artifact-specific rights decisions remain separate from source publication.
+The generated Chicagoland snapshot is stored privately; see
+[WORLD_DATASET.md](WORLD_DATASET.md) for its verified scope and restore limits.
+This document is not a claim that a generated world is finished.
 
 ## Public promise
 

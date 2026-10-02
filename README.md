@@ -14,10 +14,11 @@ local, frozen inputs and uses ordinary geometry, source data, and Minecraft
 world files. There are separate experiments for local computer vision, but
 they are optional, disabled by default, and cannot invent missing geography.
 
-This is still an experimental project. A small 64 × 64 block Water Tower test
-and larger Chicago experiments exist, but game loading and real-world accuracy
-are not accepted as finished until they are checked independently. The current
-roadmap is in [docs/PLAN.md](docs/PLAN.md); the evidence and release limits are
+This is still an experimental project. The October 1, 2026 Chicago/Elmhurst
+snapshot records 1,755 installed 512 m tiles: 1,714 base-quality tiles and 41
+tiles with scan/roof upgrades. Those installation receipts do not establish
+complete Chicagoland coverage or independently verified building accuracy. The
+current roadmap is in [docs/PLAN.md](docs/PLAN.md); the evidence and release limits are
 in [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md).
 
 The whole-Earth direction is sparse and on demand, not a claim that every
@@ -34,8 +35,11 @@ measured local throughput are in
 The private Hugging Face world snapshot workflow is in
 [docs/WORLD_DATASET.md](docs/WORLD_DATASET.md). It packages the complete
 generated save into geographic shards with checksums and a portable restore
-tool. The street-imagery adapter currently exports coordinate-checked appearance
-candidates; it has not yet colorized the live buildings.
+tool. The October 1 snapshot is uploaded and checksum-verified: 111 archives,
+2.74 GB compressed, with partial downtown and Elmhurst restores checked. Access
+requires permission to the private dataset. The street-imagery adapter currently
+exports coordinate-checked appearance candidates; it has not yet colorized the
+live buildings.
 
 For unattended Chicago generation on the external data volume, use the
 supervisor in [scripts/earthcraft_supervisor.py](scripts/earthcraft_supervisor.py).
