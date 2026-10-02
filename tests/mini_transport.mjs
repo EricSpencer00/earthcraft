@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {sshOptions} from '../scripts/mini_transport.mjs';
+const options=sshOptions('/a/very/long/task/control/directory');
+const socket=options.find(value=>value.startsWith('ControlPath=')).slice(12).replace('%C','a'.repeat(40));
+assert(Buffer.byteLength(socket+'.temporarysuffixxx')<104,'macOS SSH socket path exceeds its byte limit');
+assert(options.includes('ConnectTimeout=60'));
+assert(options.includes('AddressFamily=inet'));
+assert.throws(()=>sshOptions('/a',{ssh_connect_timeout:3600}));
+assert.throws(()=>sshOptions('/a',{ssh_address_family:'unexpected'}));
+assert.notDeepEqual(sshOptions('/a'),sshOptions('/b'));
+console.log('Mini connection settings and macOS socket bounds passed');

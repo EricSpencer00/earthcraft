@@ -33,7 +33,9 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Check the atlas and capture each layout
-        run: node tests/dashboard_browser.mjs
+        run: |
+          node tests/mini_transport.mjs
+          node tests/dashboard_browser.mjs
       - name: Save screenshots
         if: always()
         uses: actions/upload-artifact@v5
