@@ -31,6 +31,12 @@ Chicago's two-speed base/refinement pipeline, shared 1,024 m source cache, and
 measured local throughput are in
 [docs/FAST_GENERATION.md](docs/FAST_GENERATION.md).
 
+The private Hugging Face world snapshot workflow is in
+[docs/WORLD_DATASET.md](docs/WORLD_DATASET.md). It packages the complete
+generated save into geographic shards with checksums and a portable restore
+tool. The street-imagery adapter currently exports coordinate-checked appearance
+candidates; it has not yet colorized the live buildings.
+
 For unattended Chicago generation on the external data volume, use the
 supervisor in [scripts/earthcraft_supervisor.py](scripts/earthcraft_supervisor.py).
 It refuses to run without `/Volumes/LaCie/Earthcraft`, keeps the deterministic
