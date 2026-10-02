@@ -1,0 +1,21 @@
+{
+  "retrieved": "2026-10-02",
+  "fonts": [
+    {
+      "family": "Fraunces",
+      "file": "fraunces-latin.woff2",
+      "source_url": "https://fonts.gstatic.com/s/fraunces/v38/6NU78FyLNQOQZAnv9bYEvDiIdE9Ea92uemAk_WBq8U_9v0c2Wa0KxC9TeP2Xz5c.woff2",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/fraunces/OFL.txt",
+      "sha256": "48282a415ec22e31beaf0a0666e6fae0c8cbddcd0b1f6e729f27c3ade8a64e43",
+      "bytes": 67388
+    },
+    {
+      "family": "Libre Franklin",
+      "file": "libre-franklin-latin.woff2",
+      "source_url": "https://fonts.gstatic.com/s/librefranklin/v20/jizDREVItHgc8qDIbSTKq4XkRiUf2zcZiVbJ.woff2",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/librefranklin/OFL.txt",
+      "sha256": "d21d1545591ddfa2ce9c208879298e9086b1a8dba7c81d50b686c70a259e91e8",
+      "bytes": 29336
+    }
+  ]
+}

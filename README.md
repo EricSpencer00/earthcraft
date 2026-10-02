@@ -1,150 +1,101 @@
 # Earthcraft
 
-Earthcraft turns a bounded real-world place into a Minecraft Java world. The
-project keeps the geographic measurements, source provenance, and uncertainty
-visible instead of hiding them behind a screenshot that merely looks right.
+Real places, block by block.
 
-![Early Water Tower screenshot](docs/photos/watertower-sep-10-26.png)
+Earthcraft builds real geography in Minecraft Java at one block per metre.
+Maps set roads, water, and building footprints. Elevation data sets the ground.
+LiDAR adds building height and shape where scans are available. Chicago and
+Elmhurst are the current working areas.
 
-*An early Water Tower build from September 10, 2026. This is a screenshot of
-the project running, not a claim that every block in the frame is accurate.*
+[Explore the Chicago atlas](https://ericspencer.us/earthcraft/) ·
+[Build plan](docs/PLAN.md) · [World snapshot](docs/WORLD_DATASET.md)
 
-The public baseline is deterministic and does not require AI. It works from
-local, frozen inputs and uses ordinary geometry, source data, and Minecraft
-world files. There are separate experiments for local computer vision, but
-they are optional, disabled by default, and cannot invent missing geography.
+![Early Earthcraft build around the Chicago Water Tower](docs/photos/watertower-sep-10-26.png)
 
-This is still an experimental project. The October 1, 2026 Chicago/Elmhurst
-snapshot records 1,755 installed 512 m tiles: 1,714 base-quality tiles and 41
-tiles with scan/roof upgrades. Those installation receipts do not establish
-complete Chicagoland coverage or independently verified building accuracy. The
-current roadmap is in [docs/PLAN.md](docs/PLAN.md); the evidence and release limits are
-in [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md).
+*Water Tower, Chicago. Project screenshot from 10 September 2026. Nearby
+buildings were still partly reconstructed; this image is not an accuracy check.*
 
-The whole-Earth direction is sparse and on demand, not a claim that every
-square metre has already been generated. See
-[docs/GLOBAL_GENERATION.md](docs/GLOBAL_GENERATION.md) for the scrape stages,
-parallel tile workers, precise-surface/repeated-substrate split, and the
-privacy-safe progress contract behind the dashboard. The deterministic page
-addressing, local projections, seam ownership, and navigation plan are in
-[docs/GLOBAL_PROJECTION_ATLAS.md](docs/GLOBAL_PROJECTION_ATLAS.md).
-Chicago's two-speed base/refinement pipeline, shared 1,024 m source cache, and
-measured local throughput are in
-[docs/FAST_GENERATION.md](docs/FAST_GENERATION.md).
+## What exists today
 
-The private Hugging Face world snapshot workflow is in
-[docs/WORLD_DATASET.md](docs/WORLD_DATASET.md). It packages the complete
-generated save into geographic shards with checksums and a portable restore
-tool. The October 1 snapshot is uploaded and checksum-verified: 111 archives,
-2.74 GB compressed, with partial downtown and Elmhurst restores checked. Access
-requires permission to the private dataset. The street-imagery adapter currently
-exports coordinate-checked appearance candidates; it has not yet colorized the
-live buildings.
+The **1 October 2026 world snapshot** records 1,755 installed 512 m tiles:
+1,714 base tiles and 41 tiles with scan or roof upgrades. Chicagoland coverage
+is partial. Installation records show what reached the save; building accuracy
+still needs independent checks. See [release evidence](docs/PUBLIC_RELEASE.md).
 
-For unattended Chicago generation on the external data volume, use the
-supervisor in [scripts/earthcraft_supervisor.py](scripts/earthcraft_supervisor.py).
-It refuses to run without `/Volumes/LaCie/Earthcraft`, keeps the deterministic
-worker and live-import publisher alive, and resumes leased jobs after a child
-restart. A manually dispatched self-hosted runner workflow is in
-`.github/workflows/chicago-generation.yml`; it requires a runner labelled
-`earthcraft-lacie` because GitHub-hosted runners cannot see the LaCie volume.
+The complete generated save is backed up in a **private Hugging Face dataset**:
+111 geographic archives, 2.74 GB compressed. Uploads and selected downtown and
+Elmhurst restores passed checksum checks. The restored save has not been
+launched in Minecraft. [Restore instructions and access](docs/WORLD_DATASET.md).
 
-The next visual-quality lane is documented in
-[docs/CV_BUILDING_POLISH.md](docs/CV_BUILDING_POLISH.md). It uses registered
-imagery, LiDAR, and classical computer vision with bounded evidence masks; it
-does not use an LLM to invent building geometry or façade detail.
+The atlas shows a separate Chicago generation record with **256 m cells**.
+Source data, generated geometry, surface detail, and Minecraft checks have
+separate counts. Green cells show generated terrain and buildings; they do not
+establish that those cells were imported into the game or checked for accuracy.
 
-## One world pipeline
+Street-level appearance is the next step. The imagery adapter exports
+coordinate-checked candidates, but it has not colorized the live buildings.
+The [appearance plan](docs/CV_BUILDING_POLISH.md) covers registered photos,
+wall color, windows, and entrances for an Elmhurst and downtown pilot.
 
-Arnis is the geographic baseline generator already vendored in this project;
-Earthcraft is the one-save atlas, provenance, coverage, navigation, and safe
-Minecraft-import layer around it. They are not two competing world products.
-The consolidation target is for ordinary tiles to use Arnis for map-to-block
-generation, then pass through Earthcraft's fixed WGS84/page transform and
-receipt-checked import path. Earthcraft-specific hydrology and evidence-backed
-landmark layers remain overlays, not a second general city generator.
+## How it fits together
 
-That adapter is not complete yet: the Elmhurst and generic location builders
-still contain an independent map-to-block path, and the installed live importer
-still accepts only the Chicago frame. See
-[Sparse Earth architecture](docs/SPARSE_EARTH_ARCHITECTURE.md) for the single
-architecture decision and its implementation status. For production tiles,
-Arnis output is staging input—not a separate destination save or a direct write
-to the open save. Isolated baseline fixtures remain separate experiments.
+[Arnis](https://github.com/louis-e/arnis) is the vendored map-to-block baseline.
+Earthcraft adds coordinates, source records, tile coverage, navigation, and
+imports into one Minecraft save. Scan-based building and landmark detail can
+then refine the baseline.
 
-## Start here
+That shared path is still being connected. Elmhurst and the generic location
+builder retain their own map-to-block code, and the live importer currently
+accepts only the Chicago coordinate frame. Arnis output enters a staging area
+before import. See the [architecture and implementation status](docs/SPARSE_EARTH_ARCHITECTURE.md).
 
-The quickest useful check is the offline test suite. It does not download a
-map, call a hosted service, or need a Minecraft installation.
+The default pipeline uses local, frozen inputs and deterministic geometry.
+Optional computer-vision experiments are disabled by default. Whole-Earth
+generation remains an on-demand design: places are built as needed. The
+[global generation notes](docs/GLOBAL_GENERATION.md),
+[projection atlas](docs/GLOBAL_PROJECTION_ATLAS.md), and
+[Chicago performance measurements](docs/FAST_GENERATION.md) describe that work.
+
+## Run the tests
+
+Use Python 3.11. The offline suite needs neither a Minecraft installation nor
+geographic downloads.
 
 ```sh
 git clone https://github.com/EricSpencer00/earthcraft.git
 cd earthcraft
-uv venv .venv
+uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python -r requirements-test.txt
 PYTHONPATH=scripts .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The checked-in tests exercise coordinate transforms, source handling, metric
-world writing, replay, façade observations, and the small KML importer. They
-are the required check for every pull request.
+The suite checks coordinates, source handling, world writing, imports, replay,
+and appearance observations. GitHub also checks the atlas in a browser at
+phone, tablet, and desktop sizes and saves screenshots with the test results.
 
-The larger geographic runs need macOS, Python 3.11, public source data, and a
-separate Minecraft Java installation. They also need local input manifests
-that are intentionally not included here. See [docs/MVP.md](docs/MVP.md) for
-the smallest generated-world experiment and
-[docs/GOOGLE_EARTH_KML.md](docs/GOOGLE_EARTH_KML.md) for the inspectable
-geometry-only route.
+Geographic generation needs macOS, a separate Minecraft Java installation,
+and local input manifests. Start with the [smallest world experiment](docs/MVP.md)
+or the [geometry-only KML importer](docs/GOOGLE_EARTH_KML.md). The
+[Chicago supervisor](scripts/earthcraft_supervisor.py) supports unattended runs
+on the external data volume; the generation workflow requires the configured
+`earthcraft-lacie` runner. Runtime compatibility is recorded with each snapshot.
 
-## What belongs in this repository
+## Contribute
 
-Code, tests, synthetic fixtures, configuration contracts, and notes about
-what has actually been measured belong here. Generated worlds, raw geographic
-downloads, source photographs, model weights, archives, run logs, and
-machine-local paths do not belong in source history. The `.gitignore` is
-deliberately strict; please do not work around it by committing a convenient
-copy of a local dataset. When a user explicitly asks for a playable snapshot,
-the current Java save may be published as a separate GitHub release asset with
-its own provenance and checksum, without adding the world to ordinary source
-commits. A project screenshot can be included when it is clearly labeled;
-source photographs still belong in the source-specific, rights-reviewed
-workflow.
+Keep code, tests, synthetic fixtures, and measured findings in this repository.
+Worlds, raw scans, source photographs, archives, credentials, and machine-local
+paths stay out of source history. Playable snapshots have their own artifact
+and attribution workflow. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Source and derived-data licenses are separate questions. Before adding a
-provider, read [docs/SOURCE_LOSSINESS.md](docs/SOURCE_LOSSINESS.md) and record
-the source ID, date, terms, transformation, and distribution decision. Map or
-imagery access is not automatically permission to redistribute a generated
-world.
+Before adding a data provider, record its source, date, terms, transformations,
+and distribution rights. [Source lossiness](docs/SOURCE_LOSSINESS.md) explains
+what can change between a source measurement and a Minecraft block.
 
-## Disclaimer
+## License and attribution
 
-Earthcraft is an independent experiment. It is not affiliated with Arnis,
-Mojang, Microsoft, OpenStreetMap, the USGS, Cook County, or any other source
-provider. Arnis is credited here as an inspiration and baseline; Earthcraft's
-code, experiments, generated worlds, and claims are separate.
+Earthcraft code uses the [Apache License 2.0](LICENSE). Third-party software,
+fonts, maps, imagery, LiDAR, Minecraft files, and generated worlds retain their
+own terms. See [NOTICE](NOTICE) before redistributing those materials.
 
-The screenshot above is my own capture of an early Earthcraft world. It is
-useful for showing what the project looked like, but it is not a survey, a
-fidelity benchmark, or proof that unseen buildings, interiors, geology, or
-land-cover details are correct. Source data, derived data, photographs,
-Minecraft files, and generated worlds can have terms that are different from
-the Apache-licensed code in this repository. Check [NOTICE](NOTICE) and the
-source records before redistributing them.
-
-## Working with other people
-
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). A small branch, a focused pull
-request, a plain explanation of the change, and a test result are more useful
-here than a large rewrite. If a result is not measured, say that directly.
-
-Earthcraft is maintained by human contributors. Do not add model or bot
-co-authors, `Co-authored-by` trailers, or generated filler to commits, issues,
-pull requests, or documentation. If a tool helped with an edit, a human still
-owns the review, wording, and commit.
-
-## License
-
-The project code is available under the [Apache License 2.0](LICENSE). Third-
-party programs, map data, imagery, elevation data, LiDAR, Minecraft files,
-and generated worlds keep their own terms. See [NOTICE](NOTICE) before
-redistributing anything beyond the source code.
+Earthcraft is an independent experiment, unaffiliated with Arnis, Mojang,
+Microsoft, OpenStreetMap, the USGS, Cook County, or other data providers.

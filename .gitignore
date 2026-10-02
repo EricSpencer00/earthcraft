@@ -65,3 +65,7 @@ __pycache__/
 *.sqlite-wal
 *.partial
 roofer.log.json
+
+# Isolated frontend verification output and browser-only dependencies.
+/test-results/
+/node_modules/

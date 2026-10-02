@@ -1,0 +1,43 @@
+name: Atlas browser checks
+
+on:
+  push:
+    paths:
+      - dashboard/**
+      - tests/dashboard_browser.mjs
+      - .github/workflows/dashboard.yml
+      - progress/earth.json
+      - docs/photos/watertower-sep-10-26.png
+  pull_request:
+    paths:
+      - dashboard/**
+      - tests/dashboard_browser.mjs
+      - .github/workflows/dashboard.yml
+      - progress/earth.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Install browser check tools
+        run: npm install --no-save --package-lock=false @playwright/test@1.58.2 @axe-core/playwright@4.11.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Check the atlas and capture each layout
+        run: node tests/dashboard_browser.mjs
+      - name: Save screenshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: atlas-browser-proof
+          path: test-results/
+          retention-days: 7

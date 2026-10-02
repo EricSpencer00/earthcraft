@@ -9,6 +9,24 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 spec=importlib.util.spec_from_file_location('dashboard',Path(__file__).resolve().parents[1]/'scripts/dashboard.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class RegionTests(unittest.TestCase):
+    def test_dashboard_assets_stay_inside_the_public_asset_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            assets=root/'dashboard/assets/fonts';assets.mkdir(parents=True)
+            font=assets/'sample.woff2';font.write_bytes(b'font')
+            private=root/'private.json';private.write_text('private')
+            (assets/'escape.json').symlink_to(private)
+            with patch.object(m,'REPO',root):
+                self.assertEqual(m.dashboard_asset('/assets/fonts/sample.woff2'),font.resolve())
+                self.assertIsNone(m.dashboard_asset('/assets/../../private.json'))
+                self.assertIsNone(m.dashboard_asset('/assets/fonts/escape.json'))
+                self.assertIsNone(m.dashboard_asset('/assets/missing.woff2'))
+
+    def test_dashboard_photo_uses_the_existing_project_capture(self):
+        with patch.object(m,'REPO',Path('/project')):
+            self.assertEqual(m.dashboard_asset('/assets/water-tower.png'),
+                Path('/project/docs/photos/watertower-sep-10-26.png'))
+
     def test_partial_chunk_not_counted(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'r.-1.2.mca'

@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import math
+import mimetypes
 import re
 import sqlite3
 import threading
@@ -414,6 +415,15 @@ def snapshot(stage):
         CACHE[stage] = (time.time(),payload)
         return payload
 
+def dashboard_asset(request_path):
+    """Resolve only dashboard assets, including the existing public screenshot."""
+    if request_path == '/assets/water-tower.png':
+        return REPO / 'docs/photos/watertower-sep-10-26.png'
+    root = (REPO / 'dashboard/assets').resolve()
+    path = (REPO / 'dashboard' / request_path.lstrip('/')).resolve()
+    return path if path.is_relative_to(root) and path.is_file() else None
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -440,6 +450,12 @@ class Handler(BaseHTTPRequestHandler):
             path = REPO/'dashboard'/({'/':'index.html'}.get(parsed.path,parsed.path[1:]))
             content = path.read_bytes()
             mime = {'html':'text/html','js':'text/javascript','css':'text/css'}[path.suffix[1:]]
+        elif parsed.path.startswith('/assets/'):
+            path = dashboard_asset(parsed.path)
+            if path is None:
+                self.send_error(404); return
+            content = path.read_bytes()
+            mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
         else:
             self.send_error(404); return
         self.send_response(200)

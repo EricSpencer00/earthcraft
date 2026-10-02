@@ -31,6 +31,8 @@ jobs:
         run: |
           mkdir -p site/progress
           cp dashboard/index.html dashboard/app.js dashboard/style.css site/
+          cp -R dashboard/assets site/assets
+          cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
           touch site/.nojekyll
       - name: Configure GitHub Pages
