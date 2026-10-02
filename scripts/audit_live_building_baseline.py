@@ -47,6 +47,23 @@ def protected_bootstrap_receipt(receipt, key, cells):
             receipt.get('written', 0) + receipt.get('already_target', 0) == cells)
 
 
+def _receipt_paths(exchange, pattern):
+    """Use ripgrep when available, with a standard-library offline fallback."""
+    receipts = exchange / 'receipts'
+    if not receipts.is_dir():
+        raise RuntimeError(f'Missing receipt directory: {receipts}')
+    try:
+        search = subprocess.run(['rg', '-l', '--glob', '*.json', pattern, str(receipts)],
+                                capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        matcher = re.compile(pattern)
+        return [path for path in sorted(receipts.rglob('*.json'))
+                if path.is_file() and matcher.search(path.read_text())]
+    if search.returncode not in (0, 1):
+        raise RuntimeError(search.stderr.strip())
+    return [Path(path) for path in search.stdout.splitlines()]
+
+
 def historic_packets(exchange,chunks):
     """Read archived new-chunk packets for just the requested chunk coordinates.
 
@@ -57,13 +74,10 @@ def historic_packets(exchange,chunks):
     """
     keys={f'{x},{z}' for x,z in chunks}
     if not keys:return {}
-    pattern='"chunk": "(?:'+'|'.join(re.escape(key) for key in sorted(keys))+')"'
-    search=subprocess.run(['rg','-l','--glob','*.json',pattern,str(exchange/'receipts')],
-                          capture_output=True,text=True,check=False)
-    if search.returncode not in (0,1):raise RuntimeError(search.stderr.strip())
+    pattern=r'"chunk"\s*:\s*"(?:'+'|'.join(re.escape(key) for key in sorted(keys))+')"'
     result={}
-    for raw_path in search.stdout.splitlines():
-        receipt_path=Path(raw_path);receipt=json.loads(receipt_path.read_text())
+    for receipt_path in _receipt_paths(exchange, pattern):
+        receipt=json.loads(receipt_path.read_text())
         if receipt.get('mode')!='new_chunk' or receipt.get('result')!='applied_in_memory':continue
         key=receipt.get('chunk')
         if key not in keys:continue

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -26,9 +27,13 @@ class HistoricPacketTests(unittest.TestCase):
             identity='a'*64
             (exchange/'receipts'/(identity+'.json')).write_text(json.dumps({
                 'patch':identity,'chunk':'2,3','mode':'new_chunk','result':'applied_in_memory',
-                'time':'2026-09-12T00:00:00Z'}))
+                'time':'2026-09-12T00:00:00Z'}, separators=(',', ':')))
             (exchange/'archive'/(identity+'.json.gz')).write_bytes(gzip.compress(json.dumps(packet).encode(),mtime=0))
             found=historic_packets(exchange,{(2,3):object()})
+            with patch('audit_live_building_baseline.subprocess.run',
+                       side_effect=FileNotFoundError('rg')):
+                without_rg=historic_packets(exchange,{(2,3):object()})
+            self.assertEqual(without_rg, found)
         self.assertIn((2,3),found)
         self.assertEqual(found[(2,3)][0]['patch'],identity)
         self.assertEqual(found[(2,3)][1]['runs'],[[0,1,0]])

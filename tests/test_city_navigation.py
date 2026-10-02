@@ -69,10 +69,10 @@ class CityNavigationTests(unittest.TestCase):
         target = target_for_city(elmhurst, frame, 95, world_offset, size)
         self.assertAlmostEqual(target[0], point['x'], places=7)
         self.assertAlmostEqual(target[2], point['z'], places=7)
-        chicago_frame = json.loads((Path(__file__).resolve().parents[1] /
-                                    'runs/chicago-adaptation-city-001/frame.json').read_text())
+        chicago_crs = ('+proj=tmerc +lat_0=41.8972 +lon_0=-87.62443 +k=1 '
+                       '+x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
         self.assertFalse(CRS.from_user_input(frame['crs']).equals(
-            CRS.from_user_input(chicago_frame['crs'])))
+            CRS.from_user_input(chicago_crs)))
 
     def test_travel_pack_contains_city_and_coordinate_dialogs(self):
         with tempfile.TemporaryDirectory() as path:
