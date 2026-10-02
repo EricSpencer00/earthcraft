@@ -8,13 +8,25 @@ import nbtlib as n
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from metric_world import check_output_capacity, packed, region_write, select_spawn_cell
+from metric_world import check_output_capacity, packed, region_write, select_spawn_cell, paint_building
 from verify_metric_world import point_provenance_matches, preview_spawn_safe
 from inspect_world import chunks
 from osm_json_to_kml import convert
 
 
 class MetricWorldTests(unittest.TestCase):
+    def test_roof_below_chunk_does_not_wrap_or_erase_ground(self):
+        volume = np.zeros((64, 16, 16), np.uint8)
+        ground = np.full((16, 16), 200)
+        volume[8] = 2
+        mask = np.ones((16, 16), bool)
+        paint_building(volume, ground, 192, {'low': 0, 'high': 5, 'block': 9}, mask, mask)
+        self.assertEqual(np.count_nonzero(volume == 9), 0)
+        self.assertTrue((volume[8] == 2).all())
+        paint_building(volume, ground, 192, {'low': 190, 'high': 210, 'block': 9}, mask, mask)
+        self.assertTrue((volume[8] == 2).all())
+        self.assertTrue((volume[9:19] == 9).all())
+
     def test_capacity_check_uses_destination_volume(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'tiles' / 'tile-1'

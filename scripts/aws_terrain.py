@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import urllib.request
@@ -26,6 +27,22 @@ SOURCE_DOC='https://github.com/tilezen/joerd/blob/master/docs/data-sources.md'
 
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_rasters(path, elevation, cover):
+    """Publish the ZIP only after all arrays are written, flushed and readable."""
+    path = Path(path)
+    temporary = path.with_name(path.name + '.writing')
+    with temporary.open('wb') as stream:
+        np.savez_compressed(stream, elevation=elevation, cover=cover)
+        stream.flush()
+        os.fsync(stream.fileno())
+    with np.load(temporary, allow_pickle=False) as rasters:
+        if (rasters['elevation'].shape != elevation.shape or
+                not np.isfinite(rasters['elevation']).all() or
+                rasters['cover'].shape != cover.shape):
+            raise ValueError('Incomplete terrain rasters')
+    temporary.replace(path)
 
 
 def tile_pixels(lon,lat,zoom=15):
@@ -99,11 +116,12 @@ def prepare(lon,lat,size,destination,cache=None,chart_meta=None):
     with rasterio.open(raster,'w',driver='GTiff',width=size,height=size,count=1,dtype='float32',
                        crs=meta['crs'],transform=Affine(1,0,meta['west'],0,-1,meta['north'])) as target:
         target.write(elevation.astype(np.float32),1)
-    np.savez_compressed(destination/'rasters.npz',elevation=elevation.astype(np.float32),cover=np.zeros((size,size),np.uint8))
+    write_rasters(destination/'rasters.npz',elevation.astype(np.float32),np.zeros((size,size),np.uint8))
     # Explicitly empty acquired layers, not a claim that no buildings exist.
     (destination/'osm-ways.json').write_text('[]')
     (destination/'cook-buildings-2022.json').write_text('{"features":[]}')
     meta.update(elevation_raster='elevation.tif',elevation_sha256=digest(raster),
+        rasters_sha256=digest(destination/'rasters.npz'),
         elevation_range_m=[float(elevation.min()),float(elevation.max())],
         elevation_source='Mapzen Terrain Tiles on AWS',elevation_assets=assets,
         elevation_resolution='Zoom-15 tile sampling; upstream varies; output sampling does not establish accuracy',

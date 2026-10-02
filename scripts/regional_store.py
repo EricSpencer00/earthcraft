@@ -18,13 +18,25 @@ def region_hashes(world):
     return {name:hashlib.sha256(region_bytes(region/name)).hexdigest() for name in sorted(names)}
 
 
-def compact(world):
+def compact(world, expected=None):
     """Replace only reproducible task MCA files with verified gzip originals."""
     world=Path(world)
     for path in (world/'region').glob('r.*.*.mca'):
         raw=path.read_bytes();target=path.with_suffix('.mca.gz')
         if not target.exists():atomic(target,gzip.compress(raw,compresslevel=1,mtime=0))
-        if gzip.decompress(target.read_bytes())!=raw:raise ValueError('Compressed region differs; retain both versions')
+        if gzip.decompress(target.read_bytes())!=raw:
+            # Explicit verified-candidate recovery. Never guess which version
+            # is authoritative, and retain the old compressed bytes by hash.
+            if expected is None or expected.get(path.name)!=hashlib.sha256(raw).hexdigest():
+                raise ValueError('Compressed region differs; retain both versions')
+            old=target.read_bytes()
+            retained=target.with_name(target.name+'.retained-'+hashlib.sha256(old).hexdigest())
+            if retained.exists() and retained.read_bytes()!=old:
+                raise ValueError('Retained compressed original changed')
+            if not retained.exists():atomic(retained,old)
+            atomic(target,gzip.compress(raw,compresslevel=1,mtime=0))
+            if gzip.decompress(target.read_bytes())!=raw:
+                raise ValueError('Compressed replacement differs; retain raw original')
         path.unlink()
 
 

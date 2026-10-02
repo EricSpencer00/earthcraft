@@ -90,7 +90,14 @@ class RegionalDeliveryTests(unittest.TestCase):
             self.assertFalse(p.exists())
             p.write_bytes(raw);p.with_suffix('.mca.gz').write_bytes(gzip.compress(b'changed'))
             with self.assertRaises(ValueError):compact(world)
+            with self.assertRaises(ValueError):compact(world, expected={p.name:'wrong'})
             self.assertTrue(p.exists())
+            compact(world, expected=expected)
+            self.assertEqual(region_bytes(p), raw)
+            retained=list(p.parent.glob('*.retained-*'))
+            self.assertEqual(len(retained),1)
+            self.assertEqual(gzip.decompress(retained[0].read_bytes()),b'changed')
+            self.assertFalse(p.exists())
 
     def test_export_unpack_rejects_path_traversal_and_changed_replay(self):
         with tempfile.TemporaryDirectory() as directory:

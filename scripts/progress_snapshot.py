@@ -17,6 +17,7 @@ from global_projection import (
     ATLAS_SCHEMA, WORLD_PAGE_COUNT, address_for, page_coordinates, page_manifest,
 )
 from pyproj import Transformer
+from world_coverage import read_world_coverage
 
 
 STAGES = ('sources', 'geometry', 'appearance', 'game_verify')
@@ -210,6 +211,34 @@ def _valid_public_snapshot(snapshot):
         return False
     if not _valid_rollup(snapshot.get('rollup', {}), len(cells) if cells is not None else None):
         return False
+    world = snapshot.get('generated_world')
+    if world is not None:
+        if (not isinstance(world, dict) or world.get('schema_version') != 1 or
+                world.get('basis') != 'installed_save_tile_manifest' or
+                world.get('cell_size_m') != CELL_SIZE_M or
+                world.get('current_block_fill_verified') is not False):
+            return False
+        rows = world.get('cells')
+        if (not isinstance(rows, list) or len(rows) > 500_000 or
+                world.get('unique_cells') != len(rows) or
+                world.get('unique_area_km2') != len(rows) * CELL_SIZE_M ** 2 / 1e6 or
+                not all(_valid_cell(cell) and cell.get('size_m') == CELL_SIZE_M
+                        for cell in rows) or
+                len({cell['id'] for cell in rows}) != len(rows)):
+            return False
+        for cell in rows:
+            corners = cell.get('corners_lonlat')
+            if (not isinstance(corners, list) or len(corners) != 4 or
+                    any(not isinstance(p, list) or len(p) != 2 or
+                        not _is_number(p[0]) or not -180 <= p[0] <= 180 or
+                        not _is_number(p[1]) or not -90 <= p[1] <= 90 for p in corners)):
+                return False
+        for field in ('native_tiles', 'omitted_declarations', 'scan_upgrade_parent_tiles', 'photo_colored_cells'):
+            if not _is_integer(world.get(field)):
+                return False
+        for field in ('manifest_sha256', 'frame_sha256'):
+            if not isinstance(world.get(field), str) or not re.fullmatch('[a-f0-9]{64}', world[field]):
+                return False
     return True
 
 
@@ -384,6 +413,8 @@ def _active_save_coverage(root):
         for tile in tiles.values():
             size = tile.get('size_m')
             chunks = tile.get('chunks')
+            if chunks is None and tile.get('status') == 'geometry_verified_existing_chunks_preserved' and type(size) is int:
+                chunks = (size // MINECRAFT_CHUNK_SIZE_M) ** 2
             if (type(size) is not int or size <= 0 or size % MINECRAFT_CHUNK_SIZE_M or
                     type(chunks) is not int or chunks < 0):
                 raise ValueError('invalid tile size or chunk declaration')
@@ -484,6 +515,10 @@ def _city_destinations(root, active_save_coverage):
 def build_snapshot(root, now=None):
     root = Path(root)
     active_save_coverage = _active_save_coverage(root)
+    try:
+        generated_world = read_world_coverage(root)
+    except (OSError, KeyError, TypeError, ValueError):
+        generated_world = None
     city_destinations = _city_destinations(root, active_save_coverage)
     journal_path = _latest_journal(root)
     counts = _journal_counts(root)
@@ -506,14 +541,17 @@ def build_snapshot(root, now=None):
                 cell['atlas_page_center_basis'] = 'published_cell_center'
             except (KeyError, TypeError, ValueError):
                 continue
-        previous['active_save_coverage'] = active_save_coverage
+        if active_save_coverage['state'] != 'unavailable':
+            previous['active_save_coverage'] = active_save_coverage
+        if generated_world is not None:
+            previous['generated_world'] = generated_world
         previous['city_destinations'] = city_destinations
         return previous
     local_state = _status(root) if has_local_journal else 'no_local_run'
     cells = _cell_rows(journal_path) if has_local_journal else []
     cell_summary = _cell_summary(cells)
     materialized_chunks = sum(cell['chunks_total'] for cell in cells)
-    return {
+    snapshot = {
         'schema_version': 1,
         'updated_utc': (now or datetime.now(timezone.utc)).isoformat(),
         'scope': {
@@ -595,13 +633,38 @@ def build_snapshot(root, now=None):
             'private_data_in_snapshot': False,
         },
     }
+    if generated_world is not None:
+        snapshot['generated_world'] = generated_world
+    return snapshot
 
 
-def write_snapshot(root, output):
+def serialize_snapshot(snapshot):
+    """Keep dense geographic records on one line each for reviewable diffs."""
+    world = snapshot.get('generated_world')
+    if world is None:
+        return json.dumps(snapshot, indent=2) + '\n'
+    public = {**snapshot, 'generated_world': {**world, 'cells': []}}
+    body = json.dumps(public, indent=2)
+    start = body.index('"generated_world"')
+    marker = body.index('"cells": []', start)
+    rows = ',\n'.join('      ' + json.dumps(cell, separators=(',', ':')) for cell in world['cells'])
+    return body[:marker] + '"cells": [\n' + rows + '\n    ]' + body[marker + len('"cells": []'):] + '\n'
+
+
+def write_snapshot(root, output, save_footprint=False):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(output.name + '.tmp')
-    temporary.write_text(json.dumps(build_snapshot(root), indent=2) + '\n')
+    if save_footprint:
+        snapshot = _previous_public_snapshot(Path(root))
+        if snapshot is None:
+            raise ValueError('A validated public build record is required')
+        snapshot['generated_world'] = read_world_coverage(root)
+        snapshot['active_save_coverage'] = _active_save_coverage(root)
+        snapshot['updated_utc'] = datetime.now(timezone.utc).isoformat()
+    else:
+        snapshot = build_snapshot(root)
+    temporary.write_text(serialize_snapshot(snapshot))
     temporary.replace(output)
     return output
 
@@ -612,5 +675,7 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--output', type=Path,
                         default=Path(__file__).resolve().parents[1] / 'progress/earth.json')
+    parser.add_argument('--save-footprint', action='store_true',
+                        help='Refresh the saved footprint while preserving the published build record')
     args = parser.parse_args()
-    print(write_snapshot(args.root, args.output))
+    print(write_snapshot(args.root, args.output, args.save_footprint))

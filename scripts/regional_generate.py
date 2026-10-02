@@ -32,6 +32,8 @@ from region_expansion import atomic, sha
 from regional_scans import acquire, discover, frozen_get
 from verify_metric_world import verify
 from regional_store import compact, materialized, region_hashes
+from regional_sources import validate as validate_sources
+from worker_lease import heartbeat
 
 _SCAN_COVERAGES = {}
 
@@ -108,7 +110,7 @@ def select_ways(readers, tile, frame):
 def make_source(tile, frame, root, readers, cache):
     source = root/'sources'
     if (root/'sources-receipt.json').exists():
-        return source
+        return validate_sources(root, tile)
     if source.exists():
         source.rename(root/f'sources.incomplete-{time.time_ns()}')
     inverse = Transformer.from_crs(frame['crs'], 4326, always_xy=True)
@@ -397,6 +399,7 @@ def run(args):
                 stopping = True
             signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
             processed = 0
+            consecutive_failures = 0
             while not stopping and processed < args.limit:
                 if shutil.disk_usage(bulk).free < args.reserve_gib*2**30:
                     raise ValueError('Regional bulk reserve reached; preserve existing artifacts')
@@ -413,33 +416,49 @@ def run(args):
                     break
                 tile = tiles[job['tile']]; root = bulk/'tiles'/tile['id']; root.mkdir(parents=True, exist_ok=True)
                 print(json.dumps({'tile': tile['id'], 'lane': args.lane, 'stage': job['stage']}), flush=True)
-                if job['stage'] == 'sources':
-                    make_source(tile, frame, root, readers, bulk/'terrain-cache')
-                    journal.finish(job, root/'sources-receipt.json')
-                elif job['stage'] == 'geometry':
-                    world = root/'world'
-                    if not world.exists():
-                        staging = root/'world.building'
-                        if staging.exists(): staging.rename(root/f'world.incomplete-{time.time_ns()}')
-                        build(root/'sources', staging, world_frame=frame)
-                        checks = verify(staging); staging.rename(world)
-                    else:
-                        with materialized(world):checks = verify(world)
-                    receipt = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass',
-                        'world': str(world.resolve()), 'quality': 'LQ', 'installed': False,
-                        'world_manifest_sha256': sha(world/'earthcraft.json'),
-                        'regions': region_hashes(world), 'checks': checks}
-                    atomic(root/'geometry-receipt.json', json.dumps(receipt).encode())
-                    compact(world)
-                    journal.finish(job, root/'geometry-receipt.json')
-                else:
-                    receipt = scan_tile(tile, frame, root, select_pair(tile, frame, catalog),
-                                        point_catalog, bulk/'ept-cache',control/'cook2022/catalog.json',control/'will2021/catalog.json')
-                    atomic(root/'scan-receipt.json', json.dumps(receipt).encode())
-                    for candidate in root.glob('world*'):
-                        if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
-                            compact(candidate)
-                    journal.finish(job, root/'scan-receipt.json')
+                try:
+                    with heartbeat(control/'jobs.sqlite', job, ('sources','geometry','appearance','game_verify').index(job['stage'])):
+                        if job['stage'] == 'sources':
+                            make_source(tile, frame, root, readers, bulk/'terrain-cache')
+                            receipt_file = root/'sources-receipt.json'
+                        elif job['stage'] == 'geometry':
+                            validate_sources(root, tile)
+                            world = root/'world'
+                            if not world.exists():
+                                staging = root/'world.building'
+                                if staging.exists(): staging.rename(root/f'world.incomplete-{time.time_ns()}')
+                                build(root/'sources', staging, world_frame=frame)
+                                checks = verify(staging); staging.rename(world)
+                            else:
+                                with materialized(world):checks = verify(world)
+                            receipt = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass',
+                                'world': str(world.resolve()), 'quality': 'LQ', 'installed': False,
+                                'world_manifest_sha256': sha(world/'earthcraft.json'),
+                                'regions': region_hashes(world), 'checks': checks}
+                            atomic(root/'geometry-receipt.json', json.dumps(receipt).encode())
+                            compact(world, expected=receipt['regions'])
+                            receipt_file = root/'geometry-receipt.json'
+                        else:
+                            receipt = scan_tile(tile, frame, root, select_pair(tile, frame, catalog),
+                                                point_catalog, bulk/'ept-cache',control/'cook2022/catalog.json',control/'will2021/catalog.json')
+                            atomic(root/'scan-receipt.json', json.dumps(receipt).encode())
+                            for candidate in root.glob('world*'):
+                                if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
+                                    expected = receipt.get('regions') if str(candidate.resolve()) == receipt.get('world') else None
+                                    compact(candidate, expected=expected)
+                            receipt_file = root/'scan-receipt.json'
+                    journal.finish(job, receipt_file)
+                    consecutive_failures = 0
+                except Exception as error:
+                    failure_file = root/('failure-'+job['stage']+'-'+str(time.time_ns())+'.json')
+                    atomic(failure_file, json.dumps({'tile': tile['id'], 'stage': job['stage'],
+                        'result': 'failed', 'error_type': type(error).__name__, 'reason': str(error)[:500],
+                        'installed': False}).encode())
+                    journal.fail(job, failure_file)
+                    print(json.dumps({'tile': tile['id'], 'result': 'failed', 'error_type': type(error).__name__}), flush=True)
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        raise RuntimeError('Three consecutive tile failures; inspect retained evidence') from error
                 processed += 1
             print(json.dumps({'processed': processed, 'summary': journal.summary(), 'installed': False}), flush=True)
 

@@ -40,8 +40,8 @@ const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
 page.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
 
-async function ready(){
-  await page.goto(url);
+async function ready(view='published'){
+  await page.goto(view==='world'?url.replace('?view=published',''):url);
   await expect(page.locator('#connection')).toHaveText('Published snapshot');
   await expect(page.locator('#mapwrap')).toHaveAttribute('aria-busy','false');
   if(await page.locator('#panel-toggle').getAttribute('aria-expanded')==='false')await page.locator('#panel-toggle').click();
@@ -57,6 +57,28 @@ async function capture(name){
 }
 
 try{
+  // The current save is independent of the older generation journal.
+  if(snapshot.generated_world){
+    for(const [name,width,height] of [['world-desktop',1440,1000],['world-phone',390,844]]){
+      await page.setViewportSize({width,height});
+      await ready('world');
+      await expect(page.locator('#map-title')).toHaveText('Generated world');
+      await expect(page.locator('#grid-size')).toHaveText(snapshot.generated_world.unique_cells.toLocaleString()+' cells');
+      await page.locator('#place-elmhurst').click();
+      await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
+      await expect(page.locator('#selection-details')).toContainText('Street-photo colorPending');
+      await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
+      await expect(page.locator('#mapnote')).toContainText('Elmhurst · cell');
+      await expect(page.locator('body')).toHaveAttribute('data-camera','idle',{timeout:15000});
+      const accessibility=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
+      assert.deepEqual(accessibility.violations,[],`${name}: accessibility violations`);
+      await capture(name+'-elmhurst');
+      await page.getByRole('button',{name:'Clear selection'}).click();
+      await page.getByRole('button',{name:'Fit the map'}).click();
+      await capture(name);
+    }
+    console.log('Complete saved footprint, Elmhurst coordinates, and photo-detail honesty passed');
+  }
   for(const [name,width,height] of [['desktop',1440,1000],['tablet',768,1024],['phone',390,844],['small-phone',320,720]]){
     await page.setViewportSize({width,height});
     await ready();

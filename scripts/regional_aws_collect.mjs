@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {sshOptions} from './mini_transport.mjs';
 const exec=promisify(execFile),aws=process.env.EARTHCRAFT_AWS_CLI??path.join(process.env.HOME,'.local/bin/aws');
 const control=path.resolve(process.argv[2]);
 const publisher=JSON.parse(await fs.readFile(path.join(control,'../publisher-config.json'),'utf8'));
@@ -24,10 +25,10 @@ const quote=v=>"'"+String(v).replaceAll("'","'\\''")+"'";
 async function route(){const {stdout}=await command('/usr/bin/ssh',['-G',publisher.host]);
  const values=Object.fromEntries(stdout.trim().split('\n').map(l=>[l.split(' ')[0],l.slice(l.indexOf(' ')+1)]));
  if(values.hostname!==publisher.hostname||values.user!==publisher.user||(values.proxyjump??'none')!=='none')throw new Error('Mini route changed');}
-async function remote(args){await route();return command('/usr/bin/ssh',['-o','BatchMode=yes',publisher.host,
+async function remote(args){await route();return command('/usr/bin/ssh',[...sshOptions(path.dirname(control),publisher),publisher.host,
  ['/usr/bin/env','PYTHONPATH='+remoteRoot+'/scripts','EARTHCRAFT_CLIENT_JAR='+publisher.supervisor.client_jar,
   'EARTHCRAFT_BULK_ROOT='+publisher.supervisor.bulk_root,...args].map(quote).join(' ')]);}
-async function transfer(source,destination){await route();return command('/usr/bin/rsync',['-az','--timeout=120',source,destination]);}
+async function transfer(source,destination){await route();const shell=['/usr/bin/ssh',...sshOptions(path.dirname(control),publisher)].map(quote).join(' ');return command('/usr/bin/rsync',['-az','--timeout=120','-e',shell,source,destination]);}
 const cloud=async(service,operation,args)=>command(aws,[service,operation,...args,'--region','us-east-1','--output','json']);
 const hash=async(file)=>crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 async function save(){await fs.writeFile(statePath+'.partial',JSON.stringify({...state,time:Date.now()/1000},null,2));await fs.rename(statePath+'.partial',statePath);}

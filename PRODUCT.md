@@ -13,7 +13,7 @@ having to read a build report.
 
 The target scale is one Minecraft block per metre. Scan coverage and source
 age limit building detail. Geography, appearance, installation, and game checks
-are separate stages. The public explorer reads a published snapshot; the local
+are separate stages. The public explorer defaults to the saved footprint, merging overlapping 256 m and 512 m tile declarations on the inherited metre grid. It keeps the older build journal available separately; the local
 server can also show build queues and imported Minecraft chunks. The October
 world backup and the public generation grid are different records.
 
@@ -38,6 +38,5 @@ Real geography supplies the map; dated project captures supply the imagery.
 
 Keep the map primary, support keyboard and touch inspection, and preserve
 selection and camera position during refresh. Show streets and the lake under
-published cells using their recorded geographic bounds. The Elmhurst shortcut
-must say when this snapshot has no cell there. Keep the existing Minecraft
+published cells using their recorded geographic bounds. The Elmhurst shortcut must select the saved cell there; a view with no record must say so. Keep the existing Minecraft
 frame unchanged. Keep source uncertainty visible in the details drawer.

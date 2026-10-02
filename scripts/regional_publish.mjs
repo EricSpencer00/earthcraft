@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import {spawn} from 'node:child_process';
+import {sshOptions} from './mini_transport.mjs';
 
 const argv=process.argv.slice(2);
 const config=JSON.parse(await fs.readFile(argv[argv.indexOf('--config')+1],'utf8'));
@@ -44,9 +45,10 @@ async function route() {
   if(values.hostname!==config.hostname||values.user!==config.user||(values.proxyjump??'none')!=='none')throw new Error('Personal mini SSH route changed');
 }
 async function remote(args,input=null) {
-  await route();return command('/usr/bin/ssh',['-o','BatchMode=yes','-o','ConnectTimeout=15',config.host,args.map(quote).join(' ')],input);
+  await route();return command('/usr/bin/ssh',[...sshOptions(control,config),config.host,args.map(quote).join(' ')],input);
 }
-async function transfer(source,destination) {await route();await command('/usr/bin/rsync',['-az','--timeout=120',source,destination]);}
+const rsyncShell=()=>['/usr/bin/ssh',...sshOptions(control,config)].map(quote).join(' ');
+async function transfer(source,destination) {await route();await command('/usr/bin/rsync',['-az','--timeout=120','-e',rsyncShell(),source,destination]);}
 async function fence(target) {
   const binary=await fs.readFile(config.lock_helper);
   if(digest(binary)!==config.lock_helper_sha256)throw new Error('Save-lock helper changed');
@@ -97,7 +99,8 @@ try {
       'EARTHCRAFT_BULK_ROOT='+args.bulk_root,'EARTHCRAFT_CLIENT_JAR='+args.client_jar,
       ...(args.building_index?['EARTHCRAFT_BUILDING_INDEX='+args.building_index]:[]),
       config.python,config.root+'/scripts/regional_supervisor.py','--ensure','--control',config.control,
-      '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150']));
+      '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150',
+      '--base-workers',String(args.base_workers??1),'--scan-workers',String(args.scan_workers??1)]));
    }
    await cleanup();
    const disk=await fs.statfs(config.world);
@@ -133,7 +136,7 @@ try {
      if(JSON.stringify(result.originals)!==JSON.stringify(originals))throw new Error('Merge used another save snapshot');
      const files=Object.keys(result.changed);for(const name of files)safeName(name);
      const list=path.join(local,'changed-files.txt');await atomic(list,files.join('\n')+'\n');
-     await route();await command('/usr/bin/rsync',['-az','--timeout=120','--files-from='+list,config.host+':'+destination+'/current/',local+'/result/']);
+     await route();await command('/usr/bin/rsync',['-az','--timeout=120','-e',rsyncShell(),'--files-from='+list,config.host+':'+destination+'/current/',local+'/result/']);
      for(const [name,checksum] of Object.entries(originals))if(digest(await fs.readFile(path.join(config.world,name)))!==checksum)throw new Error('Save changed inside the session fence');
      for(const name of absent)if(await readOptional(path.join(config.world,name))!==null)throw new Error('Absent save file appeared inside fence');
      const backup=path.join(control,'installation-backups',attempt);await fs.mkdir(backup,{recursive:true});

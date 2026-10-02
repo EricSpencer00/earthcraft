@@ -41,6 +41,21 @@ BLOCK = {name: i for i, name in enumerate(PALETTE)}
 OUTPUT_FREE_SPACE_RESERVE = 20 * 1024**3
 
 
+def paint_building(volume, ground, bottom, building, wall, cap):
+    """Clip estimated geometry to this slab and keep it above local terrain."""
+    low = max(bottom, building['low'])
+    high = min(bottom + volume.shape[0] - 1, building['high'])
+    if high < low:
+        return
+    levels = np.arange(low, high + 1)[:, None, None]
+    selected = wall[None, :, :] & (levels > ground)
+    slab = volume[low - bottom:high - bottom + 1]
+    slab[selected] = building['block']
+    roof = building['high']
+    if bottom <= roof < bottom + volume.shape[0]:
+        volume[roof - bottom, cap & (roof > ground)] = building['block']
+
+
 def output_volume(destination):
     """Nearest existing ancestor whose free space backs a new destination."""
     volume = Path(destination).parent
@@ -518,15 +533,14 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
                     fallback = ~observed[zs,xs]
                     wall = b['wall'][zs,xs] & fallback
                     cap = b['mask'][zs,xs] & fallback
-                    volume[b['low']-chunk_bottom:b['high']-chunk_bottom+1,wall] = b['block']
-                    if cap.any():
-                        volume[b['high']-chunk_bottom,cap] = b['block']
+                    paint_building(volume, g, chunk_bottom, b, wall, cap)
                     if classified_scan is not None:
                         for z,x in np.argwhere(wall):
                             fallback_cells.extend((cx*16+int(x),y,cz*16+int(z))
-                                for y in range(b['low'],b['high']+1))
+                                for y in range(max(b['low'],chunk_bottom,int(g[z,x])+1),min(b['high'],chunk_top-1)+1))
                         fallback_cells.extend((cx*16+int(x),b['high'],cz*16+int(z))
-                                              for z,x in np.argwhere(cap))
+                                              for z,x in np.argwhere(cap)
+                                              if chunk_bottom <= b['high'] < chunk_top and b['high'] > g[z,x])
                 exposed = (roof_mask[zs,xs] & (yy >= roof_floor[zs,xs]) &
                            (yy <= roof_top[zs,xs]))
                 volume[exposed] = BLOCK['stone_bricks']
@@ -534,8 +548,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
                 for b in local_buildings:
                     mask,wall=b['mask'][zs,xs],b['wall'][zs,xs]
                     if mask.any():
-                        volume[b['low']-chunk_bottom:b['high']-chunk_bottom+1,wall]=b['block']
-                        volume[b['high']-chunk_bottom,mask]=b['block']
+                        paint_building(volume, g, chunk_bottom, b, wall, mask)
             if local_points is not None:
                 volume[local_points[:,1]-chunk_bottom, local_points[:,2]%16, local_points[:,0]%16] = BLOCK['stone_bricks']
             # Route appearance only onto occupied building cells; never fill gaps.
