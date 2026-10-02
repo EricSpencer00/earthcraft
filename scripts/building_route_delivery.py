@@ -196,7 +196,7 @@ def _write_checkpoint(path, value):
 
 def wait_for_headroom(checkpoint):
     """Pause safely when the live publisher reserve would be threatened."""
-    while shutil.disk_usage('/Users/eric/earthcraft').free < MIN_FREE_BYTES:
+    while shutil.disk_usage(_fixture('headroom').parent).free < MIN_FREE_BYTES:
         _write_checkpoint(checkpoint, {'state': 'waiting_for_disk_headroom',
                                        'minimum_free_bytes': MIN_FREE_BYTES})
         time.sleep(30)
