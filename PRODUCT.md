@@ -4,19 +4,16 @@ register: product
 
 ## People and purpose
 
-Earthcraft is for people who want to explore familiar places in Minecraft and
-contributors who build those places from geographic data. The atlas lets them
-inspect which cells have source data, generated geometry, surface detail, or a
-Minecraft check. Chicago and Elmhurst are the working areas.
-
-A contributor glances at the atlas on a daylight desktop while a build runs;
-a visitor checks progress on a phone. The map should be useful in both settings.
+Earthcraft lets people explore familiar places in Minecraft. Contributors use
+the world map to inspect generation and surface-detail records. Chicago and
+Elmhurst are the working areas. A visitor should recognize a place before
+having to read a build report.
 
 ## Product facts
 
 The target scale is one Minecraft block per metre. Scan coverage and source
 age limit building detail. Geography, appearance, installation, and game checks
-are separate stages. The public atlas reads a published snapshot; the local
+are separate stages. The public explorer reads a published snapshot; the local
 server can also show build queues and imported Minecraft chunks. The October
 world backup and the public generation grid are different records.
 
@@ -32,14 +29,15 @@ Keep dates and missing information visible. Label a plan as a plan.
 
 ## Identity
 
-A field atlas with a build record alongside it. The name appears as lowercase
-“earthcraft” in the wordmark and as Earthcraft in prose. The project line is
-“Real places. Block by block.” A stepped block mark refers to Minecraft's
-building units. Maps and actual project captures supply the imagery.
+A precise world explorer: a full-screen map, compact tools, and a quiet dark
+interface. The name appears as lowercase “earthcraft” in the wordmark and as
+Earthcraft in prose. A stepped block mark refers to Minecraft's building units.
+Real geography supplies the map; dated project captures supply the imagery.
 
 ## Priorities
 
 Keep the map primary, support keyboard and touch inspection, and preserve
-selection during refresh. Keep the pipeline deterministic by default and show
-source uncertainty. Avoid invented completion percentages, repeated claims,
-stock city imagery, decorative animation, and uniform feature-card grids.
+selection and camera position during refresh. Show streets and the lake under
+published cells using their recorded geographic bounds. The Elmhurst shortcut
+must say when this snapshot has no cell there. Keep the existing Minecraft
+frame unchanged. Keep source uncertainty visible in the details drawer.

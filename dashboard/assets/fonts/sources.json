@@ -2,12 +2,12 @@
   "retrieved": "2026-10-02",
   "fonts": [
     {
-      "family": "Fraunces",
-      "file": "fraunces-latin.woff2",
-      "source_url": "https://fonts.gstatic.com/s/fraunces/v38/6NU78FyLNQOQZAnv9bYEvDiIdE9Ea92uemAk_WBq8U_9v0c2Wa0KxC9TeP2Xz5c.woff2",
-      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/fraunces/OFL.txt",
-      "sha256": "48282a415ec22e31beaf0a0666e6fae0c8cbddcd0b1f6e729f27c3ade8a64e43",
-      "bytes": 67388
+      "family": "Space Grotesk",
+      "file": "space-grotesk-latin.woff2",
+      "source_url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4C_k3HqU.woff2",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/spacegrotesk/OFL.txt",
+      "sha256": "a0d054c4af557de20afd6ca59f47ab353bcaec49c63ff04b6c9d39d0f8910557",
+      "bytes": 22320
     },
     {
       "family": "Libre Franklin",

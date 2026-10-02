@@ -1,0 +1,38 @@
+{
+  "package": "maplibre-gl",
+  "version": "6.11.2",
+  "retrieved": "2026-10-02",
+  "license": "BSD-3-Clause",
+  "files": [
+    {
+      "file": "LICENSE.txt",
+      "source_url": "https://unpkg.com/maplibre-gl@6.11.2/LICENSE.txt",
+      "sha256": "ee5fc05a0677eaf69601d2c7db0d9ecd6cc27c3abc1d0733bc9ed34707cf8ef2",
+      "bytes": 5984
+    },
+    {
+      "file": "maplibre-gl-shared.mjs",
+      "source_url": "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl-shared.mjs",
+      "sha256": "76b5f55bdee928c65d592684aaff2b913d50b6b17b0ec6334e88b09b6aa47960",
+      "bytes": 515924
+    },
+    {
+      "file": "maplibre-gl-worker.mjs",
+      "source_url": "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl-worker.mjs",
+      "sha256": "01ad197aa7f4cec258a890febd71b7515e96309881b036a7095befc01a45296e",
+      "bytes": 19133
+    },
+    {
+      "file": "maplibre-gl.css",
+      "source_url": "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css",
+      "sha256": "d8617d8421930e3fc6185365400e788c374c1a5d9fbe87999998c0bc14a202d3",
+      "bytes": 83310
+    },
+    {
+      "file": "maplibre-gl.mjs",
+      "source_url": "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs",
+      "sha256": "3f55566295583644617fe17d008a36c580414b8c71dd2e1fcff1309de6fdee5d",
+      "bytes": 590228
+    }
+  ]
+}

@@ -7,7 +7,7 @@ Maps set roads, water, and building footprints. Elevation data sets the ground.
 LiDAR adds building height and shape where scans are available. Chicago and
 Elmhurst are the current working areas.
 
-[Explore the Chicago atlas](https://ericspencer.us/earthcraft/) ·
+[Explore the world map](https://ericspencer.us/earthcraft/) ·
 [Build plan](docs/PLAN.md) · [World snapshot](docs/WORLD_DATASET.md)
 
 ![Early Earthcraft build around the Chicago Water Tower](docs/photos/watertower-sep-10-26.png)
@@ -27,7 +27,7 @@ The complete generated save is backed up in a **private Hugging Face dataset**:
 Elmhurst restores passed checksum checks. The restored save has not been
 launched in Minecraft. [Restore instructions and access](docs/WORLD_DATASET.md).
 
-The atlas shows a separate Chicago generation record with **256 m cells**.
+The explorer shows a separate Chicago generation record with **256 m cells**.
 Source data, generated geometry, surface detail, and Minecraft checks have
 separate counts. Green cells show generated terrain and buildings; they do not
 establish that those cells were imported into the game or checked for accuracy.
@@ -70,7 +70,7 @@ PYTHONPATH=scripts .venv/bin/python -m unittest discover -s tests -v
 ```
 
 The suite checks coordinates, source handling, world writing, imports, replay,
-and appearance observations. GitHub also checks the atlas in a browser at
+and appearance observations. GitHub also checks the explorer in a browser at
 phone, tablet, and desktop sizes and saves screenshots with the test results.
 
 Geographic generation needs macOS, a separate Minecraft Java installation,

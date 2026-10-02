@@ -12,8 +12,14 @@ terms with any artifact that uses them. Do not treat the Apache license for
 Earthcraft source as permission to redistribute provider data, model weights,
 Minecraft assets, or a generated world.
 
-The dashboard bundles Fraunces and Libre Franklin, obtained from Google
+The dashboard bundles Space Grotesk and Libre Franklin, obtained from Google
 Fonts. Both fonts use the SIL Open Font License 1.1. Their original copyright
-notices and license text are in dashboard/assets/fonts/fraunces-OFL.txt and
+notices and license text are in dashboard/assets/fonts/spacegrotesk-OFL.txt and
 dashboard/assets/fonts/librefranklin-OFL.txt. File sources and checksums are
 recorded in dashboard/assets/fonts/sources.json.
+
+The dashboard bundles MapLibre GL JS 6.11.2 under the BSD 3-Clause license.
+Its license and file sources are in dashboard/assets/vendor/maplibre.
+The street basemap is served by OpenFreeMap using OpenMapTiles and
+OpenStreetMap data. Map credits link to their attribution pages; these
+third-party data terms remain separate from the Earthcraft source license.

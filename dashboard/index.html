@@ -3,50 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Earthcraft builds real places in Minecraft, one block per metre. Explore the Chicago atlas and see where terrain, buildings, and surface detail have been generated.">
-  <meta name="theme-color" content="#eeeade">
-  <title>Earthcraft · Chicago atlas</title>
+  <meta name="description" content="Explore the Earthcraft Minecraft world. Find Chicago and Elmhurst, inspect generated cells, and compare buildings with surface detail.">
+  <meta name="theme-color" content="#14191a">
+  <title>Earthcraft · World explorer</title>
   <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
-  <link rel="preload" href="./assets/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/space-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./style.css?v=field-atlas-1">
-  <script src="./app.js?v=field-atlas-1" defer></script>
+  <link rel="stylesheet" href="./assets/vendor/maplibre/maplibre-gl.css">
+  <link rel="stylesheet" href="./style.css?v=explorer-2">
+  <script src="./app.js?v=explorer-2" type="module"></script>
 </head>
-<body>
-  <a class="skip-link" href="#atlas">Skip to the atlas</a>
+<body data-panel="open" data-section="world">
+  <a class="skip-link" href="#map">Skip to the map</a>
   <header class="site-header">
-    <a href="./" class="brand" aria-label="Earthcraft home"><svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M3 25V15h8V7h10v8h8v10H3Z"/><path d="M3 21h26M11 15v10M21 15v10M11 11h10"/></svg>earthcraft<span class="brand-caption">A world in blocks</span></a>
-    <nav aria-label="Main navigation"><a href="#atlas" aria-current="page">Atlas</a><a href="#field-notes">Field notes</a><a href="https://github.com/EricSpencer00/earthcraft">Source code <span aria-hidden="true">↗</span></a></nav>
+    <a href="./" class="brand" aria-label="Earthcraft home"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M3 25V15h8V7h10v8h8v10H3Z"/><path d="M3 21h26M11 15v10M21 15v10M11 11h10"/></svg>earthcraft</a>
+    <span class="world-tag">1 block / metre</span>
+    <nav aria-label="Main navigation"><button id="panel-toggle" aria-expanded="true" aria-controls="details-panel" type="button">World details</button><button id="about-open" type="button">About</button><a class="source-link" href="https://github.com/EricSpencer00/earthcraft">GitHub <span aria-hidden="true">↗</span></a></nav>
   </header>
-  <main>
-    <section class="intro" aria-labelledby="page-title">
-      <div class="intro-title"><p class="edition">Chicago &amp; Elmhurst, Illinois</p><h1 id="page-title">Real places.<br><span>Block by block.</span></h1></div>
-      <div class="intro-copy"><p>Terrain and buildings from maps and LiDAR. <br>One Minecraft block per metre.</p><p class="intro-detail">Explore the Chicago build below. Street-level color and window detail are the next step.</p><a class="text-link" href="#field-notes">How the world is built <span aria-hidden="true">↓</span></a></div>
-    </section>
-    <section id="atlas" class="atlas-section" aria-labelledby="atlas-heading">
-      <div class="section-heading"><div><p class="section-index">01 / Atlas</p><h2 id="atlas-heading">The Chicago build</h2></div><div class="feed-status"><span class="status-dot" aria-hidden="true"></span><span id="connection" role="status">Reading the latest snapshot</span></div></div>
-      <div class="toolbar"><label class="view-control" for="area"><span>Map view</span><select id="area"><option value="live">In Minecraft</option><option value="queue">Build queue</option><option value="installed">Original footprint</option><option value="published">Published progress</option></select></label><div class="refresh-controls"><label class="auto-control"><input type="checkbox" id="auto" checked><span>Auto-refresh</span></label><button id="refresh" class="refresh-button" type="button">Refresh <span aria-hidden="true">↻</span></button></div></div>
-      <div id="warning" class="warning" role="status" hidden></div>
-      <div class="workspace">
-        <div class="atlas">
-          <div class="maphead"><div><span class="map-unit" id="map-unit">Generation cells</span><h3 id="map-title">Chicago</h3></div><span id="grid-size" class="map-extent">Reading extent</span></div>
-          <div class="mapwrap" id="mapwrap" aria-busy="true"><canvas id="map" role="img" tabindex="0" aria-label="Chicago generation map. Use arrow keys to select a cell." aria-describedby="map-summary map-instructions"></canvas><div class="north-mark" aria-hidden="true"><span>N</span><svg viewBox="0 0 16 30" fill="none"><path d="M8 28V3M2 10l6-7 6 7"/></svg></div><div class="map-controls" aria-label="Map zoom"><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="zoom-out" type="button" aria-label="Zoom out" disabled>−</button><button id="zoom-reset" type="button" aria-label="Fit the map">Fit</button></div><div class="map-scale" id="map-scale" aria-hidden="true"></div><div class="mapnote" id="mapnote">Reading the Chicago atlas</div></div>
-          <div class="legend" aria-label="Map status legend"><span id="legend-outside"><i class="outside"></i><span id="legend-outside-label">Unlisted</span></span><span id="legend-queued"><i class="nothing"></i><span id="legend-queued-label">Queued</span></span><span id="legend-source"><i class="source"></i><span id="legend-source-label">Source ready</span></span><span id="legend-finished"><i class="finished"></i><span id="legend-finished-label">Terrain &amp; buildings</span></span><span id="legend-running" hidden><i class="running"></i><span id="legend-running-label">Building</span></span><span id="legend-failed" hidden><i class="failed"></i><span id="legend-failed-label">Needs review</span></span><span id="legend-installed"><i class="installed"></i>In Minecraft</span></div>
-          <div class="map-caption"><p id="map-caption">Each square shows a recorded generation cell.</p><span id="map-updated"></span></div><p id="map-summary" class="sr-only"></p><p id="map-instructions" class="sr-only">Click or tap a square for its details. On the map, use the arrow keys to select cells and Escape to clear the selection.</p>
-        </div>
-        <aside class="ledger" aria-label="Build summary and selected cell">
-          <section class="build-summary"><p class="section-label">Build record</p><h3 id="phase">Reading progress</h3><p id="updated" class="record-date"></p><dl class="totals"><div><dt>Terrain &amp; buildings</dt><dd id="geometry">—</dd></div><div><dt>Source data ready</dt><dd id="sources">—</dd></div><div><dt>Surface detail</dt><dd id="appearance">—</dd></div></dl><p class="record-note">Generated cells may still need surface detail and a Minecraft check.</p></section>
-          <section class="inspector" aria-labelledby="selection-title"><div class="inspector-heading"><p class="section-label">Selected cell</p><span class="selection-mark" aria-hidden="true">⌖</span></div><h3 id="selection-title">Choose a square</h3><p id="cell" role="status">Click the atlas to inspect a cell.</p><dl id="selection-details" class="selection-details" hidden></dl><button id="clear-selection" class="text-button" type="button" hidden>Clear selection</button></section>
-          <details class="run-details"><summary>Run details</summary><dl class="run-values"><div><dt>Map cells</dt><dd id="chunk-count">—</dd></div><div><dt>World border</dt><dd id="border">—</dd></div><div><dt>Workers</dt><dd id="leases">—</dd></div><div><dt>Stage</dt><dd id="rollup">—</dd></div></dl><p id="grid-count" class="record-note"></p><p id="recovery" class="record-note"></p><pre id="log">Reading the build record</pre></details>
-        </aside>
+  <main id="atlas" class="explorer" aria-labelledby="page-title">
+    <div class="mapwrap" id="mapwrap" aria-busy="true"><div id="basemap" aria-hidden="true"></div><canvas id="map" role="img" tabindex="0" aria-label="Earthcraft map. Use arrow keys to inspect cells." aria-describedby="map-summary map-instructions"></canvas></div>
+    <div class="maphead"><div><span class="map-unit" id="map-unit">Earthcraft world</span><h1 id="page-title">Chicagoland</h1></div><div class="place-switch" aria-label="Places"><button id="place-chicago" type="button">Chicago</button><button id="place-elmhurst" type="button">Elmhurst</button></div></div>
+    <div class="toolbar"><label class="view-control" for="area"><span class="sr-only">Map view</span><select id="area"><option value="live">In Minecraft</option><option value="queue">Build queue</option><option value="installed">Original footprint</option><option value="published">Published build</option></select></label><button id="refresh" type="button" aria-label="Refresh snapshot" title="Refresh snapshot">↻</button></div>
+    <div class="layer-switch" aria-label="Map layer"><button id="layer-build" type="button" aria-pressed="true">Build status</button><button id="layer-appearance" type="button" aria-pressed="false">Surface detail</button></div>
+    <div id="warning" class="warning" role="status" hidden></div>
+    <div class="map-controls" aria-label="Map zoom"><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="zoom-out" type="button" aria-label="Zoom out" disabled>−</button><button id="zoom-reset" type="button" aria-label="Fit the map">Fit</button></div>
+    <div class="map-bottom"><div class="map-readout"><span id="mapnote">Reading the world</span><span id="grid-size" class="sr-only"></span><span class="map-scale" id="map-scale" aria-hidden="true"></span></div><div class="legend" aria-label="Map status legend"><span id="legend-outside"><i class="outside"></i><span id="legend-outside-label">No record</span></span><span id="legend-queued"><i class="nothing"></i><span id="legend-queued-label">Queued</span></span><span id="legend-source"><i class="source"></i><span id="legend-source-label">Source ready</span></span><span id="legend-finished"><i class="finished"></i><span id="legend-finished-label">Generated</span></span><span id="legend-running" hidden><i class="running"></i>Building</span><span id="legend-failed" hidden><i class="failed"></i>Needs review</span><span id="legend-installed"><i class="installed"></i>In Minecraft</span></div></div>
+    <div class="basemap-note" id="basemap-state" role="status" hidden></div>
+    <div class="map-attribution" id="map-attribution" hidden><a href="https://openfreemap.org/">OpenFreeMap</a> · <a href="https://www.openmaptiles.org/">OpenMapTiles</a> · <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap</a></div>
+    <p id="map-summary" class="sr-only"></p><p id="map-instructions" class="sr-only">Drag to pan and scroll or pinch to zoom. Use arrow keys to inspect cells, Shift and arrow keys to pan, and Escape to clear the selection.</p>
+    <aside class="details-panel" id="details-panel" aria-label="World details">
+      <div class="panel-heading"><span>Earthcraft world</span><button id="panel-close" type="button" aria-label="Close details">×</button></div>
+      <div class="panel-tabs" aria-label="Details view"><button id="tab-world" type="button" aria-pressed="true">Overview</button><button id="tab-cell" type="button" aria-pressed="false">Selected cell</button><button id="tab-about" type="button" aria-pressed="false">About</button></div>
+      <div class="panel-content">
+        <section id="world-panel" aria-label="Build overview"><div class="feed-status"><span class="status-dot" aria-hidden="true"></span><span id="connection" role="status">Reading snapshot</span></div><h2 id="phase">Chicago build</h2><p id="updated" class="record-date"></p><dl class="totals"><div><dt>Terrain &amp; buildings</dt><dd id="geometry">—</dd></div><div><dt>Source data ready</dt><dd id="sources">—</dd></div><div><dt>Surface detail</dt><dd id="appearance">—</dd></div></dl><p class="record-note">Generated cells still need a Minecraft check. Surface detail is recorded separately.</p><label class="auto-control"><input type="checkbox" id="auto" checked><span>Auto-refresh</span></label><details class="run-details"><summary>Run details</summary><dl class="run-values"><div><dt>Map cells</dt><dd id="chunk-count">—</dd></div><div><dt>World border</dt><dd id="border">—</dd></div><div><dt>Workers</dt><dd id="leases">—</dd></div><div><dt>Stage</dt><dd id="rollup">—</dd></div></dl><p id="grid-count" class="record-note"></p><p id="recovery" class="record-note"></p><pre id="log">Reading the build record</pre></details></section>
+        <section id="cell-panel" aria-labelledby="selection-title" hidden><span class="section-label">Selected cell</span><h2 id="selection-title">Choose a cell</h2><p id="cell" role="status">Select a square on the map to see its build record.</p><dl id="selection-details" class="selection-details" hidden></dl><button id="clear-selection" class="text-button" type="button" hidden>Clear selection</button></section>
+        <section id="about-panel" aria-labelledby="about-title" hidden><h2 id="about-title">Real places in Minecraft.</h2><p>One block per metre. Maps and elevation data set the ground; LiDAR adds measured building shape where scans exist.</p><figure class="world-photo"><img src="./assets/water-tower.png" alt="An early Minecraft build around the Chicago Water Tower, with nearby buildings partly reconstructed." loading="lazy" width="1659" height="990"><figcaption>Water Tower · Early build · 10 Sep 2026</figcaption></figure><p>Street-level color, windows, and entrances are planned for an Elmhurst and downtown pilot.</p><a class="text-link" href="https://github.com/EricSpencer00/earthcraft/blob/main/docs/CV_BUILDING_POLISH.md">Appearance plan ↗</a><p>The partial Chicagoland save is backed up in a private dataset. Access requires permission.</p><a class="text-link" href="https://huggingface.co/datasets/EricSpencer00/earthcraft-minecraft-world">World backup ↗</a></section>
       </div>
-    </section>
-    <section id="field-notes" class="field-notes" aria-labelledby="notes-heading">
-      <div class="section-heading"><div><p class="section-index">02 / Field notes</p><h2 id="notes-heading">From ground to street.</h2></div><a class="text-link" href="https://github.com/EricSpencer00/earthcraft/blob/main/docs/CV_BUILDING_POLISH.md">Read the appearance plan <span aria-hidden="true">↗</span></a></div>
-      <div class="notes-layout"><figure class="world-photo"><img src="./assets/water-tower.png" alt="An early Minecraft reconstruction of the Chicago Water Tower, surrounded by partly reconstructed grey buildings." loading="lazy" width="1659" height="990"><figcaption><span>Water Tower, Chicago</span><span>Early build · 10 Sep 2026</span></figcaption></figure><div class="notes-text"><article><span class="note-number">01</span><div><h3>Ground</h3><p>Elevation data sets the terrain. Roads and water come from mapped geography.</p></div></article><article><span class="note-number">02</span><div><h3>Buildings</h3><p>LiDAR adds measured height and shape where scans are available. Coverage and scan age limit the detail.</p></div></article><article><span class="note-number">03</span><div><h3>The street</h3><p>Next: registered street photos for wall color, windows, and entrances. The Elmhurst and downtown pilot is planned.</p></div></article></div></div>
-      <div class="snapshot-note"><span class="section-label">World download</span><p>The generated save is backed up in <a href="https://huggingface.co/datasets/EricSpencer00/earthcraft-minecraft-world">a private Hugging Face dataset</a>. It covers part of Chicagoland; access requires permission.</p></div>
-    </section>
+      <div class="panel-footer"><span id="footer-state">Reading the record</span><a href="https://github.com/EricSpencer00/earthcraft/blob/main/NOTICE">Attribution</a></div>
+    </aside>
+    <div class="map-caption sr-only"><p id="map-caption"></p><span id="map-title"></span><span id="map-updated"></span></div>
   </main>
-  <footer><a href="./" class="footer-brand">earthcraft</a><p>Real geography. A work in progress.</p><span id="footer-state">Reading the latest record</span><a href="https://github.com/EricSpencer00/earthcraft/blob/main/NOTICE">Sources &amp; attribution</a></footer>
 </body>
 </html>

@@ -1,64 +1,58 @@
-# Earthcraft field atlas
+# Earthcraft world explorer
 
 ## Direction
 
-Editorial typography meets a technical atlas. The wide map and narrow build
-record reflect how a contributor checks a running world. A warm paper surface
-stays readable on a daylight screen. The field notes use an actual Water Tower
-capture, labeled with its date and early-build state.
+Start in the world. The map fills the screen below a compact header. Streets,
+place names, and the lake give the generated cells a recognizable setting.
+A narrow drawer holds build counts and selected-cell details; on phones it
+opens as a bottom sheet. The initial phone view keeps the drawer closed.
 
-## Type
+## Type and color
 
-Fraunces, weights 400–600, sets the wordmark and headings. Libre Franklin,
+Space Grotesk, weights 400–700, sets the wordmark and headings. Libre Franklin,
 weights 400–700, sets body copy and controls. Both are bundled WOFF2 files with
-SIL Open Font License notices in dashboard/assets/fonts. No external font
-request is needed. Native monospace handles dates, scale, and coordinates.
+SIL Open Font License notices in dashboard/assets/fonts. Native monospace
+handles coordinates and scale. Headings are 23–26 px; controls are 12–14 px,
+with at least 44 px touch targets. Important phone detail text is 14 px.
 
-Use a 44–80 px main heading and 32–39 px section headings. Limit prose to
-65 characters per line. At phone width, controls and important map details
-use 14 px type or larger. Small metadata remains secondary.
+CSS custom properties in dashboard/style.css are the source of truth. Dark
+forest-gray surfaces use light text, restrained green for generated geometry,
+amber for active work, and rust for failures. Muted text still needs readable
+contrast. Spacing follows 4, 8, 12, 16, 24, and 32 px steps. Opaque surfaces
+and thin borders keep controls readable against the geographic map.
 
-## Color and spacing
+## Geography and rendering
 
-CSS custom properties in dashboard/style.css are the source of truth:
+MapLibre GL JS is bundled under its BSD license. OpenFreeMap supplies the
+public dark street map. OpenFreeMap, OpenMapTiles, and OpenStreetMap credits
+remain visible while that map is used. No account key or external font is
+needed. Basemap requests contain public geographic coordinates.
 
-| Role | OKLCH | Use |
-| --- | --- | --- |
-| paper | .941 .019 88 | Page |
-| surface | .978 .009 88 | Controls and queued cells |
-| ink | .275 .027 152 | Text |
-| muted | .475 .024 150 | Supporting text |
-| line | .806 .025 100 | Rules and boundaries |
-| green | .446 .09 153 | Generated cells and focus |
-| gray | .73 .029 143 | Source-ready cells |
-| amber | .655 .122 73 | Active builds and installed overlays |
-| rust | .545 .15 31 | Failed cells and unreadable snapshots |
-| outside | .916 .02 94 | Unlisted map squares |
+Published cells use their recorded latitude, longitude, width, and height.
+Their Mercator corners are cached; the canvas overlay shares one transform
+per frame. Rotation and pitch are disabled so cells stay aligned while
+panning and zooming. Local chunk views retain the Minecraft coordinate grid.
+The generation pipeline, installed world, and coordinate frame are unchanged.
+If the basemap fails, cell inspection remains available. If WebGL is unavailable,
+the generation grid is shown with an explicit notice.
 
-Spacing follows 4, 8, 12, 16, 24, 32, 48, and 64 px steps. Use thin rules to
-separate sections. Controls have square corners and at least 44 px touch
-height. Hover and focus are visible; reduced motion disables transitions.
+## Interaction
 
-## Layout and behavior
+Chicago and Elmhurst shortcuts use the anchors from configs/cities.json.
+Select a cell to open its record. Build status and surface detail are separate
+layers. Missing appearance is shown as awaiting detail. An area without a
+published cell says so rather than selecting a distant cell.
 
-The introduction pairs a large place-led heading with a short explanation.
-The atlas uses a flexible map and a 284 px ledger. At 800 px the ledger moves
-below the map; at 540 px the introduction, toolbar, and ledger become single
-columns. Field notes pair the real capture with open rows for ground,
-buildings, and planned street detail.
+Drag and pinch or scroll to navigate the geographic map. Arrow keys inspect
+cells; Shift and arrows pan; Escape clears selection. Fit shows the whole
+recorded extent. Refresh preserves the camera and selection when the grid is
+unchanged. Published progress refreshes once a minute while visible; local
+views refresh every ten seconds. A failed snapshot request keeps the last map
+and offers Refresh. Empty snapshots say that no cells were recorded.
 
-Native selects, checkboxes, and disclosure controls keep interactions familiar.
-Click, tap, or arrow keys select a cell; Escape clears it. Zoom is capped at
-4× and Fit returns to the full extent. Refresh retains a selection when the
-grid is unchanged. Published progress refreshes once a minute while visible;
-local views refresh every ten seconds. A failed request keeps the last map
-and offers an inline retry. Empty snapshots say that no cells were recorded.
+## Copy
 
-## Copy and exclusions
-
-Keep geography, geometry, appearance, import, and verification distinct. Use
-“Not recorded” for missing counts. Do not claim that a snapshot represents
-complete coverage or independent building accuracy. Date project photographs.
-Use paper, ink, and green without gradients, glass panels, invented geography,
-or a repeated marketing card grid. Avoid slogans where a specific status or
-instruction would help the reader more.
+Describe the place, state, or available action. Keep geometry, appearance,
+import, and verification distinct. Use “Not recorded” for missing counts.
+Date project captures and label early builds. Put build explanations and the
+appearance plan inside the drawer so they do not displace the map.
