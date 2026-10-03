@@ -23,7 +23,7 @@ is on `codex/playable-pilot-20261002`.
 | Existing wall audit | 606 exposed block anchors near the twenty footprints; no missing sampled native columns; proximity alone does not establish measured building identity |
 | Targeted tests | 39 passed, covering selection, snapshot bounds, registration admission, geometry preservation and the existing CAS codec |
 | New photo colors in owner save | **0** |
-| Client render / actual player walkthrough | **Unverified**; desktop UI tools returned `Transport closed` |
+| Client render / actual player walkthrough | **Unverified**; later native window access worked, but supported launcher control could not pass its existing crash modal; see the [preparation report](photo-display-dedup-preparation.md) |
 
 The pinned Mojang server SHA-1 is
 `95495a7f485eedd84ce928cef5e223b757d2f764`. The installed importer tested here has
@@ -45,6 +45,11 @@ resource manifest declares **193** panels. Both native cycles preserved those
 386 displays; the test did not create the duplication. This is an appearance
 acceptance issue, not a passed 193-panel check. The owner save was not repaired
 or deduplicated under this continuation.
+
+The subsequent [deduplication preparation](photo-display-dedup-preparation.md)
+identified 193 exact duplicate pairs, verified a backup and simulated reversible
+removal in memory. It retained historical UUIDs in the proposed plan and did not
+write a changed entity region or remove any world entities.
 
 Nearby cached photo metadata supplies 8–34 positional candidates per selected
 Elmhurst building. The selected downtown buildings near Water Tower have zero
