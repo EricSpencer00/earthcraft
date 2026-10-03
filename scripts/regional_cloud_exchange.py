@@ -22,6 +22,12 @@ from regional_store import materialized,region_hashes
 from verify_metric_world import verify
 
 
+def require_mini_bulk(bulk):
+    if (not Path('/Volumes/LaCie').is_mount() or
+            not Path(bulk).resolve().is_relative_to('/Volumes/LaCie/Earthcraft')):
+        raise ValueError('Cloud imports require mounted LaCie; no internal-disk fallback')
+
+
 def extract(archive,destination,max_bytes=4*2**30):
     destination=Path(destination)
     with tarfile.open(archive) as stream:
@@ -36,6 +42,7 @@ def extract(archive,destination,max_bytes=4*2**30):
 
 
 def prepare(control,bulk,output,limit=24):
+    require_mini_bulk(bulk)
     if not 1<=limit<=128:raise ValueError('Bounded cloud scan batch required')
     plan=json.loads((control/'plan.json').read_text());tiles={tile['id']:tile for tile in plan['tiles']}
     index=control/'regional-footprints.sqlite'
@@ -84,6 +91,7 @@ def renew(control,request):
 
 
 def accept(control,bulk,request,archive,tile):
+    require_mini_bulk(bulk)
     locks=control/'cloud-imports';locks.mkdir(parents=True,exist_ok=True)
     if not re.fullmatch(r'-?\d+_-?\d+',tile):raise ValueError('Invalid cloud tile')
     with (locks/(tile+'.lock')).open('a+') as lock:

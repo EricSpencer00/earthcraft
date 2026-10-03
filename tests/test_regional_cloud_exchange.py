@@ -9,13 +9,14 @@ import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from chicago_tiles import Journal
-from regional_cloud_exchange import extract,renew,prepare
+from regional_cloud_exchange import accept,extract,renew,prepare
 from unittest.mock import patch
 from region_expansion import sha
 
 
 class CloudExchangeTests(unittest.TestCase):
-    def test_cloud_input_freezes_footprint_crop_without_changing_base_source(self):
+    @patch('regional_cloud_exchange.require_mini_bulk')
+    def test_cloud_input_freezes_footprint_crop_without_changing_base_source(self,_storage):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);control=root/'control';control.mkdir();bulk=root/'bulk'
             source=bulk/'tiles/0_0/sources';source.mkdir(parents=True)
@@ -41,6 +42,16 @@ class CloudExchangeTests(unittest.TestCase):
             self.assertEqual(entry['footprints']['sha256'],sha(restored/'tiles/0_0/footprints/scan-footprints.geojson'))
             self.assertEqual((source/'sources.json').read_bytes(),original)
             self.assertEqual((restored/'tiles/0_0/sources/sources.json').read_bytes(),original)
+
+    def test_missing_lacie_rejects_before_queue_claim_or_import_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);control=root/'control';bulk=root/'bulk'
+            with patch('regional_cloud_exchange.Path.is_mount',return_value=False):
+                with self.assertRaisesRegex(ValueError,'mounted LaCie'):
+                    prepare(control,bulk,root/'batch.tar.gz')
+                with self.assertRaisesRegex(ValueError,'mounted LaCie'):
+                    accept(control,bulk,{},root/'batch.tar.gz','0_0')
+            self.assertFalse(control.exists());self.assertFalse(bulk.exists())
 
     def test_heartbeat_cannot_revive_expired_or_reclaimed_lease(self):
         with tempfile.TemporaryDirectory() as directory:

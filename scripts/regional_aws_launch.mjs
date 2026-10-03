@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import crypto from 'node:crypto';
 const exec=promisify(execFile),aws=process.env.EARTHCRAFT_AWS_CLI??path.join(process.env.HOME,'.local/bin/aws');
 const control=path.resolve(process.argv[2]);await fs.mkdir(control,{recursive:true});
 const settings=JSON.parse(await fs.readFile(path.join(control,'aws-settings.json'),'utf8'));
@@ -51,6 +52,12 @@ if(process.argv.includes('--check')) {
  console.log(JSON.stringify({result:'pass',account:identity.Account,maximum_hourly:cost.maximum_hourly,launch:false}));
  process.exit(0);
 }
+// Frozen catalogs may be reused; the worker code must be current. An old
+// worker can otherwise emit a candidate without the expected footprint proof.
+const seedProof=JSON.parse(await fs.readFile(path.join(control,'seed.tar.json'),'utf8'));
+const revision=(await exec('git',['rev-parse','HEAD'])).stdout.trim();
+const seedHash=crypto.createHash('sha256').update(await fs.readFile(path.join(control,'seed.tar.gz'))).digest('hex');
+if(seedProof.revision!==revision||seedProof.sha256!==seedHash||!seedProof.scripts?.['scripts/regional_cloud_worker.py'])throw Error('Rebuild the cloud seed from current committed code before launch');
 await call('s3api','create-bucket',['--bucket',bucket]);
 await input('s3api','put-public-access-block',{Bucket:bucket,PublicAccessBlockConfiguration:{BlockPublicAcls:true,IgnorePublicAcls:true,BlockPublicPolicy:true,RestrictPublicBuckets:true}});
 await input('s3api','put-bucket-ownership-controls',{Bucket:bucket,OwnershipControls:{Rules:[{ObjectOwnership:'BucketOwnerEnforced'}]}});

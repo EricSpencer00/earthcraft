@@ -6,6 +6,7 @@ is filled, scanned, or photo-colored.
 """
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from pyproj import Transformer
@@ -28,8 +29,10 @@ def read_world_coverage(root):
         raise ValueError('Unbounded or invalid save declarations')
     inverse = Transformer.from_crs(frame['crs'], 'EPSG:4326', always_xy=True)
     try:
-        quality = json.loads((save / 'regional-quality.json').read_text())
+        quality_bytes = (save / 'regional-quality.json').read_bytes()
+        quality = json.loads(quality_bytes)
     except FileNotFoundError:
+        quality_bytes = None
         quality = {'frame': frame, 'tiles': {}}
     if quality['frame'] != frame:
         raise ValueError('Quality receipts use a different frame')
@@ -49,14 +52,28 @@ def read_world_coverage(root):
             omitted += 1
             continue
         x, z = offset
-        receipt = quality['tiles'].get(f'{size}:{x // size}_{z // size}', {})
-        scan = receipt.get('quality') == 'scan-points-and-roof' and receipt.get('upgraded_chunks', 0) > 0
         for dz in range(0, size, CELL):
             for dx in range(0, size, CELL):
                 key = ((x + dx) // CELL, (z + dz) // CELL)
-                cells[key] = cells.get(key, False) or scan
+                cells.setdefault(key, False)
         if len(cells) > 500_000:
             raise ValueError('Unbounded save footprint')
+    # An upgrade can replace existing chunks without adding a new 512 m
+    # declaration. Join its footprint to the existing cells independently.
+    for identity, receipt in quality['tiles'].items():
+        if receipt.get('quality') != 'scan-points-and-roof' or receipt.get('upgraded_chunks', 0) <= 0:
+            continue
+        match = re.fullmatch(r'(\d+):(-?\d+)_(-?\d+)', identity)
+        if not match:
+            raise ValueError('Invalid scan receipt address')
+        size, tx, tz = map(int, match.groups())
+        if size % CELL or not CELL <= size <= 4096:
+            raise ValueError('Invalid scan receipt dimensions')
+        for dz in range(size // CELL):
+            for dx in range(size // CELL):
+                key = (tx * size // CELL + dx, tz * size // CELL + dz)
+                if key in cells:
+                    cells[key] = True
     rows = []
     for (x, z), scan in sorted(cells.items(), key=lambda item: (item[0][1], item[0][0])):
         east, north = frame['west'] + x * CELL, frame['north'] - z * CELL
@@ -76,6 +93,8 @@ def read_world_coverage(root):
     # Metadata is atomic per file, but two independently updated files can race.
     if (save / 'city-coverage.json').read_bytes() != manifest_bytes:
         raise ValueError('Save manifest changed during export; retry later')
+    if quality_bytes is not None and (save / 'regional-quality.json').read_bytes() != quality_bytes:
+        raise ValueError('Quality receipts changed during export; retry later')
     return {
         'schema_version': 1, 'basis': 'installed_save_tile_manifest',
         'native_tiles': len(tiles), 'omitted_declarations': omitted,

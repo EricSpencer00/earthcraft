@@ -56,6 +56,17 @@ class WorldCoverageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'frames differ'):
                 read_world_coverage(root)
 
+    def test_upgrade_without_new_declaration_joins_existing_cells(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            save = self.fixture(root)
+            manifest = json.loads((save / 'city-coverage.json').read_text())
+            del manifest['tiles']['large']
+            (save / 'city-coverage.json').write_text(json.dumps(manifest))
+            world = read_world_coverage(root)
+            self.assertEqual(world['unique_cells'], 1)
+            self.assertTrue(world['cells'][0]['scan_upgrade_recorded_in_parent_tile'])
+
     def test_ci_preserves_export_and_rejects_tampered_coordinates(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

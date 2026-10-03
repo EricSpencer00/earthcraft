@@ -401,6 +401,8 @@ def run(args):
             processed = 0
             consecutive_failures = 0
             while not stopping and processed < args.limit:
+                if not Path('/Volumes/LaCie').is_mount():
+                    raise ValueError('LaCie unmounted during generation; stop bulk writes')
                 if shutil.disk_usage(bulk).free < args.reserve_gib*2**30:
                     raise ValueError('Regional bulk reserve reached; preserve existing artifacts')
                 if shutil.disk_usage(control).free < 12*2**30:

@@ -101,6 +101,10 @@ try {
       config.python,config.root+'/scripts/regional_supervisor.py','--ensure','--control',config.control,
       '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150',
       '--base-workers',String(args.base_workers??1),'--scan-workers',String(args.scan_workers??1)]));
+    if(status.generation.state==='waiting_for_storage') {
+     status.state='waiting_for_storage';
+     throw new Error('External generation storage is unavailable; waiting for LaCie');
+    }
    }
    await cleanup();
    const disk=await fs.statfs(config.world);
@@ -165,7 +169,7 @@ try {
   } catch(error) {
    status.reason=error.message;
    if(error.message==='world_open')status.state='waiting_for_closed_world';
-   else if(status.state!=='storage_boundary'){status.state='retrying';status.failures=++failures;}
+   else if(!['storage_boundary','waiting_for_storage'].includes(status.state)){status.state='retrying';status.failures=++failures;}
   }
   status.delivered_tiles=Object.keys(state.known).length;await atomic(path.join(control,'publisher-status.json'),JSON.stringify(status));
   if(status.state==='storage_boundary'||failures>=10)break;

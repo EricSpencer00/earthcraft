@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -18,8 +19,22 @@ import psutil
 from region_expansion import atomic
 
 
+def bulk_storage_ready(args):
+    """A missing external disk is a wait, never an internal-disk fallback."""
+    mount = Path('/Volumes/LaCie')
+    bulk = args.bulk.resolve()
+    if not mount.is_mount() or not bulk.is_relative_to(mount/'Earthcraft'):
+        return False
+    try:
+        return shutil.disk_usage(mount).free >= args.reserve_gib * 2**30
+    except OSError:
+        return False
+
+
 def ensure(args):
     """Start a missing task supervisor from the authorized SSH context."""
+    if not bulk_storage_ready(args):
+        return {'state':'waiting_for_storage'}
     control=args.control.resolve();control.mkdir(parents=True,exist_ok=True)
     with (control/'supervisor.lock').open('a+') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -66,6 +81,7 @@ def run(args):
         try:
             while not stopping and time.time() < deadline:
                 waiting_for_memory=[]
+                storage_ready = bulk_storage_ready(args)
                 for owner,lane in workers.items():
                     child=children.get(owner)
                     if child is not None and child.poll() is not None:
@@ -77,9 +93,11 @@ def run(args):
                                     ','.join('?' for _ in stages)+") AND state!='complete'",stages).fetchone()[0]
                             if not pending:completed.add(owner)
                             else:next_start[owner]=time.time()+15
-                        else:
+                        elif storage_ready:
                             failures[owner]=failures.get(owner,0)+1
                             next_start[owner]=time.time()+min(600,30*2**(failures[owner]-1))
+                    if not storage_ready:
+                        continue
                     if owner in completed or failures.get(owner,0)>=10 or time.time()<next_start.get(owner,0):continue
                     if owner.startswith('scans-') and owner!='scans-1' and time.time()-started<60:continue
                     if owner not in children and psutil.virtual_memory().available<2*2**30:
@@ -95,6 +113,7 @@ def run(args):
                                 if other.startswith('scans-') and other not in children:
                                     next_start[other]=max(next_start.get(other,0),time.time()+30)
                 atomic(control/'supervisor-status.json',json.dumps({'time':time.time(),'supervisor_pid':os.getpid(),
+                    'state':'running' if storage_ready else 'waiting_for_storage',
                     'workers':{owner:child.pid for owner,child in children.items()},
                     'failed_restarts':failures,'completed_workers':sorted(completed),
                     'waiting_for_memory':waiting_for_memory,'maximum_scan_workers':args.scan_workers,

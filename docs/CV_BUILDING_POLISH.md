@@ -48,9 +48,25 @@ its own integration decision. The benchmark photos used for fitting and
 held-out evaluation will also come from permitted sources.
 [Google Maps Platform terms, section 3.2.3](https://cloud.google.com/maps-platform/terms)
 
+An October 2 bounded discovery probe found 358 nearby Elmhurst images and 250
+downtown images. The Elmhurst sample used ordinary perspective cameras;
+downtown included 67 panoramas. These counts are discovery samples, not a
+measurement of visible facade coverage. Two actual source photos and their
+calibrated multi-view reconstructions were projected on a private CPU worker:
+11,827 Elmhurst point/color candidates and 41,735 downtown candidates. None
+has been admitted into the world. Sparse reconstruction observations do not
+prove facade ownership, occlusion, or the inherited world datum.
+
+`street_photo_projection.py` supports the measured OpenSfM perspective lens
+and spherical panorama models. `street_photo_candidates.py` retains source
+hashes, capture time and unregistered observations. Its outputs require an
+independent LiDAR alignment, static-surface masks, depth checks and source
+attribution before a color delta can be generated. This also permits ordinary
+street photos to contribute where panoramas are unavailable.
+
 Before any large download, map *usable street-facing wall coverage*, not just
-the number of panoramas. Elmhurst and downtown coverage have not yet been
-measured. If a façade has no usable photograph, retain its current material and
+the number of panoramas. Usable wall coverage remains unmeasured. If a façade
+has no usable photograph, retain its current material and
 report the gap. Do not copy another building's façade onto it. Standard Arnis
 `--building-facades` presets are a stylistic fallback, not real-building evidence.
 
