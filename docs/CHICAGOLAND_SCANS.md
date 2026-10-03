@@ -193,7 +193,15 @@ verified MacBook-to-mini route. It starts a missing detached supervisor,
 preserves the existing lock and deadline, and refuses to restart completed
 work or a lane at its ten-failure boundary. Source checks and disk reserves
 remain identical. The original task LaunchAgent must be stopped before
-changing the startup route; do not change filesystem privacy permissions.
+changing the startup route. Verify its label, owned PIDs and current leases
+first. Disable that same service to prevent login from restoring the stalled
+context, and retain its plist and startup-input backups. Leave filesystem
+privacy permissions unchanged. The existing publisher then owns recovery
+through `--ensure`; keep the recorded worker counts and resource boundaries.
+Verify fresh generation receipts and actual installation reports after the
+handoff. A live PID or renewed lease alone does not establish progress.
+The [October 3 recovery record](METRO_RECOVERY_20261003.md) documents this
+procedure against the existing metro queue.
 
 `supervisor-status.json`, the SQLite stage summary and the worker logs record
 generation progress. `publisher-state.json` tracks acknowledged source
