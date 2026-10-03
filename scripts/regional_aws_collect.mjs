@@ -32,6 +32,37 @@ async function transfer(source,destination){await route();const shell=['/usr/bin
 const cloud=async(service,operation,args)=>command(aws,[service,operation,...args,'--region','us-east-1','--output','json']);
 const hash=async(file)=>crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 async function save(){await fs.writeFile(statePath+'.partial',JSON.stringify({...state,time:Date.now()/1000},null,2));await fs.rename(statePath+'.partial',statePath);}
+async function retireCompute() {
+ if(state.compute_terminated)return;
+ const identity=JSON.parse((await cloud('sts','get-caller-identity',[])).stdout);
+ if(identity.Account!==resource.account)throw new Error('Task AWS account changed');
+ await cloud('ec2','terminate-instances',['--instance-ids',resource.instance]);
+ state.compute_terminated=true;await save();
+}
+async function retireAccess() {
+ if(state.identity_cleaned&&state.network_cleaned)return;
+ const identity=JSON.parse((await cloud('sts','get-caller-identity',[])).stdout);
+ if(identity.Account!==resource.account)throw new Error('Task AWS account changed');
+ const remove=async(service,operation,args)=>{
+  try{return await cloud(service,operation,args);}
+  catch(error){if(!error.message.includes('NoSuchEntity'))throw error;}
+ };
+ if(!state.identity_cleaned) {
+  await remove('iam','remove-role-from-instance-profile',['--instance-profile-name',resource.role,'--role-name',resource.role]);
+  await remove('iam','delete-instance-profile',['--instance-profile-name',resource.role]);
+  await remove('iam','detach-role-policy',['--role-name',resource.role,'--policy-arn','arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore']);
+  await remove('iam','delete-role-policy',['--role-name',resource.role,'--policy-name','task-bucket-only']);
+  await remove('iam','delete-role',['--role-name',resource.role]);
+  state.identity_cleaned=true;await save();
+ }
+ if(!state.network_cleaned) {
+  try{await cloud('ec2','delete-security-group',['--group-id',resource.group]);state.network_cleaned=true;await save();}
+  catch(error){
+   if(error.message.includes('InvalidGroup.NotFound')){state.network_cleaned=true;await save();}
+   else if(!error.message.includes('DependencyViolation'))throw error;
+  }
+ }
+}
 const remoteRequest=remoteControl+'/aws-fast-inputs.tar.json';
 let lastRenew=0;
 while(Date.now()/1000<resource.deadline) {
@@ -42,6 +73,20 @@ while(Date.now()/1000<resource.deadline) {
       status=JSON.parse(await fs.readFile(control+'/status.json','utf8'));}
   catch{state.state='waiting_for_cloud';await save();await new Promise(r=>setTimeout(r,20000));continue;}
   state.cloud=status;
+  if(status.complete) {
+   const original=JSON.parse((await cloud('s3api','head-object',['--bucket',resource.bucket,'--key','source-cache.tar'])).stdout);
+   if(original.ContentLength!==status.source_cache_bytes||!/^[a-f0-9]{64}$/.test(status.source_cache_sha256))throw new Error('Original scan archive is not retained');
+   // Stop paid compute as soon as all candidate/source objects are uploaded.
+   // Collection can keep waiting for LaCie without holding an idle instance.
+   await retireCompute();
+   await retireAccess();
+  }
+  const storage=await remote([remoteRoot+'/.venv/bin/python','-c',
+   `from pathlib import Path; import json; p=Path('/Volumes/LaCie'); print(json.dumps({'mounted':p.is_mount()}))`]);
+  if(!JSON.parse(storage.stdout).mounted) {
+   state.state='waiting_for_storage';delete state.error;await save();
+   await new Promise(resolve=>setTimeout(resolve,20000));continue;
+  }
   for(const record of status.records) {
    if(record.result==='failed'||state.accepted[record.tile])continue;
    const local=control+'/'+record.tile+'.tar.gz';
@@ -58,7 +103,7 @@ while(Date.now()/1000<resource.deadline) {
  }catch(error){state.state='retrying';state.error=error.message.slice(-3000);await save();}
  await new Promise(resolve=>setTimeout(resolve,20000));
 }
-if(state.cloud?.complete) {
+if(state.cloud?.complete&&Object.keys(state.accepted).length===request.jobs.length) {
  const local=control+'/source-cache.tar';
  await command(aws,['s3','cp','s3://'+resource.bucket+'/source-cache.tar',local,'--only-show-errors'],7200000);
  // Streaming digest keeps original archive verification from using bulk RAM.
@@ -66,27 +111,23 @@ if(state.cloud?.complete) {
  for await(const buffer of createReadStream(local))digest.update(buffer);
  if(digest.digest('hex')!==state.cloud.source_cache_sha256)throw new Error('Original source archive changed');
  const target=bulk+'/cloud-originals/'+request.owner;
- await remote(['/bin/mkdir','-p',target]);await transfer(local,publisher.host+':'+target+'/source-cache.tar');
+ await remote([remoteRoot+'/.venv/bin/python','-c',`from pathlib import Path; from regional_cloud_exchange import require_mini_bulk; require_mini_bulk(${JSON.stringify(bulk)}); Path(${JSON.stringify(target)}).mkdir(parents=True,exist_ok=True)`]);
+ await transfer(local,publisher.host+':'+target+'/source-cache.tar');
  await remote([remoteRoot+'/.venv/bin/python','-c',`from pathlib import Path; from region_expansion import sha; p=Path(${JSON.stringify(target+'/source-cache.tar')}); assert sha(p)==${JSON.stringify(state.cloud.source_cache_sha256)}`]);
  state.originals_retained_on_lacie=true;await save();await fs.unlink(local);
 }
 // Release only this batch's remaining tokens, then remove only owned resources.
 await remote([remoteRoot+'/.venv/bin/python','-c',`import sqlite3; db=sqlite3.connect(${JSON.stringify(remoteControl+'/jobs.sqlite')}); db.execute("UPDATE jobs SET state='pending',token=NULL,owner=NULL,expires=NULL WHERE state='running' AND owner=?",(${JSON.stringify(request.owner)},)); db.commit()`]);
-await cloud('ec2','terminate-instances',['--instance-ids',resource.instance]);
-state.state='complete';state.compute_terminated=true;await save();
+await retireCompute();
+state.state=Object.keys(state.accepted).length===request.jobs.length?'complete':'partial';await save();
 if(state.originals_retained_on_lacie&&Object.keys(state.accepted).length===request.jobs.length) {
  await command(aws,['s3','rm','s3://'+resource.bucket,'--recursive','--only-show-errors']);
  await cloud('s3api','delete-bucket',['--bucket',resource.bucket]);
  state.bucket_cleaned=true;await save();
 }
-await cloud('iam','remove-role-from-instance-profile',['--instance-profile-name',resource.role,'--role-name',resource.role]);
-await cloud('iam','delete-instance-profile',['--instance-profile-name',resource.role]);
-await cloud('iam','detach-role-policy',['--role-name',resource.role,'--policy-arn','arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore']);
-await cloud('iam','delete-role-policy',['--role-name',resource.role,'--policy-name','task-bucket-only']);
-await cloud('iam','delete-role',['--role-name',resource.role]);
-state.identity_cleaned=true;await save();
 // Termination can take a little time before the task security group detaches.
 for(let attempt=0;attempt<8;attempt++) {
- try{await cloud('ec2','delete-security-group',['--group-id',resource.group]);state.network_cleaned=true;await save();break;}
- catch(error){if(!error.message.includes('DependencyViolation'))throw error;await new Promise(r=>setTimeout(r,15000));}
+ await retireAccess();
+ if(state.network_cleaned)break;
+ await new Promise(r=>setTimeout(r,15000));
 }
