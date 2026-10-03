@@ -12,6 +12,14 @@ area plus Kenosha County, Wisconsin. The September 2026 boundary produced
 scan tiles. This definition does not include every county in the larger
 Chicago combined statistical area. A planned tile is not completed coverage.
 
+This is a metro-wide target. The frozen plan includes Elmhurst, Naperville,
+Aurora, Elgin, Schaumburg, Joliet, Waukegan, DeKalb, McHenry and Morris, as well
+as Gary and Valparaiso in northwest Indiana and Kenosha in Wisconsin. All
+fourteen checked town/city anchors, including Chicago, fell in planned tiles
+on October 3, 2026. The base reads Illinois, Indiana and Wisconsin indexes in
+the existing world coordinate frame. The twenty-building photo pilot is a
+separate appearance check; it does not limit the generation boundary.
+
 ## Sources and quality
 
 The source inventory uses the [Illinois county collections](https://clearinghouse.isgs.illinois.edu/lidar-county)
