@@ -52,6 +52,11 @@ api.legend('build');
 assert.equal(element('legend-queued-label').textContent,'Planned');
 assert.equal(element('legend-installed').hidden,false);
 
+api.set({...data,metro:{...data.metro,generation_state:'waiting_for_storage'}});
+api.render();assert.match(element('warning').textContent,/Generation is waiting for storage/);
+assert.doesNotMatch(element('warning').textContent,/Generation is running/);
+api.set({...data,metro:{...data.metro,save_record_utc:'2026-10-03T03:00:00Z'}});
+api.render();assert.match(element('updated').textContent,/Queue .* Save records/);
 api.set({...data,metro:{...data.metro,queue_stale:true}});
 api.render();const warning=element('warning').textContent;
 api.render();assert.equal(element('warning').textContent,warning);

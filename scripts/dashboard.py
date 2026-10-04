@@ -496,6 +496,7 @@ if __name__ == '__main__':
     parser.add_argument('--data-root',type=Path,default=REPO)
     parser.add_argument('--map-cache',type=Path)
     parser.add_argument('--metro-config',type=Path)
+    parser.add_argument('--metro-control',type=Path,help='Read the journal on its existing execution host')
     args=parser.parse_args()
     UI_ROOT = REPO
     REPO = args.data_root.resolve()
@@ -503,14 +504,17 @@ if __name__ == '__main__':
     INSTALLED_COVERAGE_PATH = REPO / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
     LIVE_EXCHANGE = REPO / 'runs/chicago-live-001'
     if args.map_cache:
-        from metro_map import MetroMap, follow_queue, sync_queue
-        if args.metro_config:
+        from metro_map import MetroMap, follow_queue, sync_queue, sync_control
+        if args.metro_config and args.metro_control:
+            parser.error('Choose one metro journal route')
+        source = args.metro_control or args.metro_config
+        if source:
             try:
-                sync_queue(args.metro_config, args.map_cache/'queue.json')
+                (sync_control if args.metro_control else sync_queue)(source, args.map_cache/'queue.json')
             except (OSError, ValueError, subprocess.SubprocessError):
                 if not (args.map_cache/'queue.json').exists():
                     print('Metro queue not yet available; saved-world records remain readable',flush=True)
-            threading.Thread(target=follow_queue,args=(args.metro_config,args.map_cache/'queue.json'),daemon=True).start()
+            threading.Thread(target=follow_queue,args=(source,args.map_cache/'queue.json',bool(args.metro_control)),daemon=True).start()
         METRO_MAP = MetroMap(args.data_root, args.map_cache)
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     print(f'Earthcraft dashboard: http://127.0.0.1:{args.port}',flush=True)

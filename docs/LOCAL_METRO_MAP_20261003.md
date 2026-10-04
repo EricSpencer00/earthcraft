@@ -26,13 +26,43 @@ reserve. Generation remained running. Street-photo colors and all regional game
 checks remain pending. Elmhurst tile `-52_-1` retained world offset
 `[-26624, -512]` and its exact inherited geographic corners.
 
-The local launch agent `com.eric.earthcraft.map` runs existing Python, serves only
-loopback, and reads original save metadata while serving assets from the isolated
-checkout. Its configuration and private map cache live under
-`/Users/eric/earthcraft/runs/chicagoland-scans-20260929/map/`. It does not write
-Minecraft entities, chunks, save metadata, credentials, or worker state. The
-original publisher and storage thresholds are unchanged.
+The private map preview runs in `/Users/ericspencer/earthcraft-map-20261004`
+on the existing mini using existing Python. It opens the original journal
+read-only on that host; it starts no generation workers. Thirty copied files,
+23.6 MB total, passed SHA-256 checks. Only interface assets and save metadata were
+copied, never Minecraft entities or chunks. The plan is linked to its original
+frozen file. The copied save footprint and frame hashes were compared with the
+original MacBook save through both final HTTP views and matched exactly. The
+save metadata copy is dated; original save delivery remains storage-paused. Its
+observation date is shown separately from the fresh queue date, and the copied
+coverage and scan receipt hashes must match that observation before export.
 
+An SSH tunnel keeps the browser address at `http://127.0.0.1:8767/`. Both ends
+bind only loopback. Before every tunnel reconnect, its wrapper checks the
+MacBook origin and the configured `mac-mini` alias. The preview and the tunnel
+have separate per-host launch agents named `com.eric.earthcraft.map`. Their
+private configurations are in the isolated mini preview and
+`/Users/eric/earthcraft/runs/chicagoland-scans-20260929/map/` respectively.
+The original publisher, workers, and storage thresholds are unchanged. The
+saved-record copy was refreshed and all 31 preview files verified at
+2026-10-04 03:21 UTC. This is a dated private preview, not a continuously synced
+copy of the original save.
+
+The first local Python server passed an HTTP check, but repeatedly received
+external SIGTERM roughly every 33 seconds. A tracked local execution session was
+also terminated. That background restart loop was stopped before moving the
+read-only preview to the mini. The origin of those stop signals was not
+identified; no stop handler, policy, or other process was disabled.
+
+The forwarded check on 2026-10-04 03:12 UTC returned 9,748 regional
+geometry jobs complete, 9,945 full metro tiles covered by saved records, 303
+saved tiles with scan upgrades, and a fresh journal observation. The saved view
+contained 40,006 unique 256 m cells over 2,621.8 km². Its manifest and frame
+hashes matched the original save. Photo-colored cells and regional game checks
+remain zero and pending respectively. At the final 03:24 UTC check, geometry
+completion had advanced to 9,762, two worker leases were active, the queue read
+was fresh, and the local tunnel remained running with a single launch. Its
+saved-record observation was still correctly dated 03:21 UTC.
 Validation: eight metro data regressions, nine existing dashboard regressions,
 and four saved-coverage regressions passed. The frontend logic checks cover
 negative world coordinates, independent saved/generated counts, scan labels,

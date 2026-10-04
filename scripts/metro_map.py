@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import threading
 import time
 
@@ -36,17 +37,8 @@ def validate_queue(record):
         raise ValueError('Metro queue counts disagree with tile records')
 
 
-def sync_queue(config, destination):
-    """Copy only sanitized read-only journal states over the established route."""
-    config = read(config)
-    route = subprocess.run(['/usr/bin/ssh', '-G', config['host']], capture_output=True,
-                           text=True, check=True, timeout=10)
-    values = dict(line.split(' ', 1) for line in route.stdout.splitlines())
-    if (config['host'] != 'mac-mini' or values.get('hostname') != config['hostname'] or
-            values.get('user') != config['user'] or values.get('proxyjump', 'none') != 'none' or
-            values.get('identityfile') != '~/.ssh/id_ed25519_mac_mini'):
-        raise ValueError('Metro map SSH route differs from the authorized mini route')
-    code = '''from pathlib import Path
+def queue_code(control):
+    return '''from pathlib import Path
 import json,sqlite3,time,gzip,sys,hashlib
 from collections import Counter
 c=Path(CONTROL);now=time.time();jobs={};counts=[{} for _ in range(4)];owners=set()
@@ -64,14 +56,13 @@ record={'schema_version':1,'observed_unix':now,'jobs':jobs,'counts':counts,
  'plan_sha256':hashlib.sha256((c/'plan.json').read_bytes()).hexdigest(),
  'active_workers':len(owners),'generation_state':s.get('state','unknown')}
 sys.stdout.buffer.write(gzip.compress(json.dumps(record,separators=(',',':')).encode(),compresslevel=1))
-'''.replace('CONTROL', json.dumps(config['control']))
-    command = ' '.join(shlex.quote(v) for v in [config['python'], '-u', '-'])
-    result = subprocess.run(['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'AddressFamily=inet',
-                             '-o', 'ConnectTimeout=20', config['host'], command],
-                            input=code.encode(), capture_output=True, check=True, timeout=45)
-    if len(result.stdout) > 8 * 2**20:
+'''.replace('CONTROL', json.dumps(str(control)))
+
+
+def save_queue(output, destination):
+    if len(output) > 8 * 2**20:
         raise ValueError('Unbounded metro queue response')
-    with gzip.GzipFile(fileobj=io.BytesIO(result.stdout)) as compressed:
+    with gzip.GzipFile(fileobj=io.BytesIO(output)) as compressed:
         raw = compressed.read(32 * 2**20 + 1)
         if len(raw) > 32 * 2**20:
             raise ValueError('Unbounded metro queue snapshot')
@@ -83,11 +74,36 @@ sys.stdout.buffer.write(gzip.compress(json.dumps(record,separators=(',',':')).en
     temporary.replace(destination)
 
 
-def follow_queue(config, destination):
+def sync_control(control, destination):
+    """Read the same sanitized journal on its existing execution host."""
+    result = subprocess.run([sys.executable, '-u', '-'], input=queue_code(control).encode(),
+                            capture_output=True, check=True, timeout=20)
+    save_queue(result.stdout, destination)
+
+
+def sync_queue(config, destination):
+    """Copy only sanitized read-only journal states over the established route."""
+    config = read(config)
+    route = subprocess.run(['/usr/bin/ssh', '-G', config['host']], capture_output=True,
+                           text=True, check=True, timeout=10)
+    values = dict(line.split(' ', 1) for line in route.stdout.splitlines())
+    if (config['host'] != 'mac-mini' or values.get('hostname') != config['hostname'] or
+            values.get('user') != config['user'] or values.get('proxyjump', 'none') != 'none' or
+            values.get('identityfile') != '~/.ssh/id_ed25519_mac_mini'):
+        raise ValueError('Metro map SSH route differs from the authorized mini route')
+    code = queue_code(config['control'])
+    command = ' '.join(shlex.quote(v) for v in [config['python'], '-u', '-'])
+    result = subprocess.run(['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'AddressFamily=inet',
+                             '-o', 'ConnectTimeout=20', config['host'], command],
+                            input=code.encode(), capture_output=True, check=True, timeout=45)
+    save_queue(result.stdout, destination)
+
+
+def follow_queue(config, destination, local=False):
     while True:
         time.sleep(60)
         try:
-            sync_queue(config, destination)
+            (sync_control if local else sync_queue)(config, destination)
         except (OSError, ValueError, subprocess.SubprocessError):
             # Keep the last observed record, including its original timestamp.
             pass
@@ -135,7 +151,7 @@ class MetroMap:
             raise ValueError('Unknown metro map view')
         paths = [self.cache / 'queue.json', self.save / 'city-coverage.json',
                  self.save / 'regional-quality.json',
-                 self.cache.parent / 'publisher-status.json']
+                 self.cache.parent / 'publisher-status.json', self.root / 'save-observation.json']
         fingerprint = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None for p in paths)
         with self.lock:
             previous = self.cached.get(view)
@@ -204,6 +220,13 @@ class MetroMap:
                                  'queue_available': bool(queue),
                                  'queue_stale': observed is None or now - observed > 180,
                                  'photo_colored_cells': 0}}
+            if paths[4].exists():
+                observation = read(paths[4])
+                for path, field in ((paths[1], 'manifest_sha256'), (paths[2], 'quality_sha256')):
+                    if hashlib.sha256(path.read_bytes()).hexdigest() != observation.get(field):
+                        raise ValueError('Copied save records differ from their observation')
+                payload['metro']['save_record_utc'] = datetime.fromisoformat(
+                    observation['observed_utc']).isoformat()
             if not queue:
                 for row in rows:
                     for field in STAGE_FIELDS:

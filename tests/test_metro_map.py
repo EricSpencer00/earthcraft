@@ -88,6 +88,14 @@ class MetroMapTests(unittest.TestCase):
             self.assertFalse(world['current_block_fill_verified'])
             self.assertEqual(before, {p: p.read_bytes() for p in save.iterdir()})
             self.assertNotIn(str(root), json.dumps(result))
+            (root / 'save-observation.json').write_text(json.dumps({
+                'manifest_sha256': hashlib.sha256((save / 'city-coverage.json').read_bytes()).hexdigest(),
+                'quality_sha256': hashlib.sha256((save / 'regional-quality.json').read_bytes()).hexdigest(),
+                'observed_utc': '2026-10-03T04:00:00+00:00'}))
+            self.assertEqual(provider.snapshot()['metro']['save_record_utc'], '2026-10-03T04:00:00+00:00')
+            (save / 'regional-quality.json').write_text((save / 'regional-quality.json').read_text()+' ')
+            with self.assertRaisesRegex(ValueError, 'observation'):
+                provider.snapshot()
 
     def test_one_legacy_cell_does_not_claim_a_whole_512m_tile(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -189,6 +197,9 @@ class MetroMapTests(unittest.TestCase):
             self.assertEqual(record['jobs']['-1_-1'][1], 'pending')
             self.assertEqual(record['active_workers'], 1)
             self.assertNotIn('private-worker-name', json.dumps(record))
+            self.assertEqual(database_before, (cache / 'jobs.sqlite').read_bytes())
+            m.sync_control(cache, cache / 'queue.json')
+            self.assertEqual(m.read(cache / 'queue.json')['active_workers'], 1)
             self.assertEqual(database_before, (cache / 'jobs.sqlite').read_bytes())
             self.assertEqual(commands[0], ['/usr/bin/ssh', '-G', 'mac-mini'])
             self.assertFalse((cache / 'queue.partial').exists())

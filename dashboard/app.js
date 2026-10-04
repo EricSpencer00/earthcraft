@@ -292,6 +292,10 @@ function renderSnapshot(){
   $('warning').textContent='';
   const metro=snapshot.metro;
   if(metro){
+    if(metro.save_record_utc){
+      const date=value=>new Date(value).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+      $('updated').textContent='Queue · '+date(snapshot.updated_utc)+' · Save records · '+date(metro.save_record_utc);
+    }
     $('phase').textContent=world?'Chicagoland save':'Chicagoland metro';
     $('connection').textContent='Local metro record';
     $('geometry-label').textContent='In saved world';
@@ -305,7 +309,10 @@ function renderSnapshot(){
     $('leases').textContent=number(metro.active_workers)+' active workers';
     if(metro.delivery_state==='storage_boundary'){
       $('warning').hidden=false;
-      $('warning').textContent='Save delivery paused: storage limit reached. Generation continues on the mini.';
+      const generation=metro.queue_stale?'Generation status is from the last received snapshot.':metro.generation_state==='running'?'Generation is running on the mini.'
+        :metro.generation_state==='waiting_for_storage'?'Generation is waiting for storage on the mini.'
+        :'Generation: '+stateLabel(metro.generation_state)+'.';
+      $('warning').textContent='Save delivery paused: storage limit reached. '+generation;
     }
     if(metro.queue_stale){
       $('warning').hidden=false;

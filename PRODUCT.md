@@ -15,7 +15,11 @@ The target scale is one Minecraft block per metre. Scan coverage and source
 age limit building detail. Geography, appearance, installation, and game checks
 are separate stages. The public explorer defaults to the saved footprint, merging overlapping 256 m and 512 m tile declarations on the inherited metre grid. It keeps the older build journal available separately; the local
 server can also show build queues and imported Minecraft chunks. The October
-world backup and the public generation grid are different records.
+world backup and the public generation grid are different records. The private
+metro preview defaults to the complete frozen Chicagoland plan, with its
+boundary and planned tiles visible. Its live journal and dated saved-record
+copy are labeled separately; installed scans do not imply photo colors or
+Minecraft acceptance.
 
 The imagery adapter exports candidates. Street-photo coloring remains planned.
 Chicagoland coverage is partial; whole-Earth generation is an on-demand design.
