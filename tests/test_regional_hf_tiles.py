@@ -68,6 +68,15 @@ class GeneratedArchiveTests(unittest.TestCase):
         self.assertEqual(export(self.control,self.bulk,self.root/'out',{'-1_0':sha(self.evidence)},8)['state'],'caught_up')
         self.assertEqual(self.pack()['sha256'],result['sha256'])
 
+    def test_memory_transport_validates_bytes_and_rejects_corruption(self):
+        result = self.pack()
+        raw = Path(result['archive']).read_bytes()
+        manifest = validate(io.BytesIO(raw), result['sha256'], sha(self.control/'plan.json'))
+        self.assertEqual(manifest['entries'][0]['world_offset_xz'], [-512, 0])
+        changed = io.BytesIO(bytes([raw[0] ^ 1]) + raw[1:])
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            validate(changed, result['sha256'], sha(self.control/'plan.json'))
+
     def test_entities_prevent_export(self):
         self.tag['entities'] = n.List[n.Compound]([n.Compound({'id':n.String('minecraft:player')})])
         self.write_region(); self.refresh_receipt()

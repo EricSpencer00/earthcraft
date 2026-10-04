@@ -21,15 +21,23 @@ ENTRY_KEYS = {'tile', 'quality', 'world_offset_xz', 'size_m', 'metres_per_block'
 
 
 def digest(path):
+    if isinstance(path, io.BytesIO):
+        position = path.tell(); path.seek(0)
+        try: return hashlib.file_digest(path, 'sha256').hexdigest()
+        finally: path.seek(position)
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def size(archive):
+    return len(archive.getbuffer()) if isinstance(archive, io.BytesIO) else Path(archive).stat().st_size
+
+
 def validate(archive, expected, plan_sha256):
-    archive = Path(archive)
-    if archive.stat().st_size > 256*2**20 or digest(archive) != expected:
+    if size(archive) > 256*2**20 or digest(archive) != expected:
         raise ValueError('Bounded immutable shard checksum required')
-    with tarfile.open(archive) as tar:
+    if isinstance(archive, io.BytesIO): archive.seek(0)
+    with (tarfile.open(fileobj=archive) if isinstance(archive, io.BytesIO) else tarfile.open(archive)) as tar:
         members = tar.getmembers()
         if any(not m.isfile() for m in members) or len({m.name for m in members}) != len(members):
             raise ValueError('Only unique regular generated files allowed')
@@ -69,7 +77,9 @@ def matches(item, path):
     lfs = getattr(item, 'lfs', None)
     checksum = lfs.get('sha256') if isinstance(lfs, dict) else getattr(lfs, 'sha256', None)
     if checksum: return checksum == digest(path)
-    raw = Path(path).read_bytes()
+    if isinstance(path, io.BytesIO):
+        raw = path.getvalue()
+    else: raw = Path(path).read_bytes()
     return getattr(item, 'blob_id', None) == hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
 
 
@@ -88,7 +98,8 @@ def upload(archive, expected, plan_sha256, repo_id, proof_path):
     remote = 'generated-tiles/v1/shards/'+expected[:2]+'/'+expected+'.tar'
     info, files = inventory()
     if not matches(files.get(remote), archive):
-        api.upload_file(path_or_fileobj=Path(archive), path_in_repo=remote,
+        if isinstance(archive, io.BytesIO): archive.seek(0)
+        api.upload_file(path_or_fileobj=archive if isinstance(archive, io.BytesIO) else Path(archive), path_in_repo=remote,
                         repo_id=repo_id, repo_type='dataset',
                         commit_message='Archive verified Earthcraft generator regions')
     info, files = inventory()
@@ -107,7 +118,7 @@ def upload(archive, expected, plan_sha256, repo_id, proof_path):
                  'attribution': manifest['attribution'], 'note': manifest['note']}
     if index['frame'] != manifest['frame']: raise ValueError('World frame changed')
     index_base_revision = info.sha
-    index['shards'][expected] = {'path': remote, 'sha256': expected, 'bytes': Path(archive).stat().st_size}
+    index['shards'][expected] = {'path': remote, 'sha256': expected, 'bytes': size(archive)}
     ranks = {'LQ': 1, 'scan-roof': 2, 'scan-points-and-roof': 3}
     for item in manifest['entries']:
         old = index['tiles'].get(item['tile'])
@@ -134,10 +145,20 @@ def upload(archive, expected, plan_sha256, repo_id, proof_path):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--archive', type=Path, required=True)
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument('--archive', type=Path)
+    source.add_argument('--archive-stdin', action='store_true')
     p.add_argument('--sha256', required=True); p.add_argument('--plan-sha256', required=True)
     p.add_argument('--repo-id', default='EricSpencer00/earthcraft-minecraft-world')
     p.add_argument('--proof', type=Path, required=True)
     a = p.parse_args()
-    r = upload(a.archive, a.sha256, a.plan_sha256, a.repo_id, a.proof)
+    archive = a.archive
+    if a.archive_stdin:
+        import os, sys
+        # This route uses bounded RAM, never local bulk staging or the Xet cache.
+        os.environ['HF_HUB_DISABLE_XET'] = '1'
+        raw = sys.stdin.buffer.read(64*2**20+1)
+        if len(raw) > 64*2**20: raise ValueError('In-memory transport exceeds 64 MiB')
+        archive = io.BytesIO(raw)
+    r = upload(archive, a.sha256, a.plan_sha256, a.repo_id, a.proof)
     print(json.dumps({k:v for k,v in r.items() if k != 'entries'}))
