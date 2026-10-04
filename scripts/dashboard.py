@@ -1,11 +1,13 @@
 """Loopback-only, read-only Earthcraft progress server. No inference or external assets."""
 import argparse
+import gzip
 from datetime import datetime, timezone
 import json
 import math
 import mimetypes
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +20,7 @@ from progress_snapshot import build_snapshot
 from world_border import bounds_for_plan
 
 REPO = Path(__file__).resolve().parents[1]
+UI_ROOT = None
 ROOT = bulk_path('chicago')
 STAGES = ('city-draft', 'loop-pilot')
 CACHE = {}
@@ -28,6 +31,7 @@ LOCK = threading.Lock()
 PLAN_PATH = REPO / 'runs/chicago-adaptation-city-001/plan.json'
 INSTALLED_COVERAGE_PATH = REPO / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
 LIVE_EXCHANGE = REPO / 'runs/chicago-live-001'
+METRO_MAP = None
 
 def read_json(path):
     try:
@@ -417,10 +421,11 @@ def snapshot(stage):
 
 def dashboard_asset(request_path):
     """Resolve only dashboard assets, including the existing public screenshot."""
+    ui = UI_ROOT or REPO
     if request_path == '/assets/water-tower.png':
-        return REPO / 'docs/photos/watertower-sep-10-26.png'
-    root = (REPO / 'dashboard/assets').resolve()
-    path = (REPO / 'dashboard' / request_path.lstrip('/')).resolve()
+        return ui / 'docs/photos/watertower-sep-10-26.png'
+    root = (ui / 'dashboard/assets').resolve()
+    path = (ui / 'dashboard' / request_path.lstrip('/')).resolve()
     return path if path.is_relative_to(root) and path.is_file() else None
 
 
@@ -432,6 +437,17 @@ class Handler(BaseHTTPRequestHandler):
             if stage not in STAGES:
                 self.send_error(400); return
             content = json.dumps(snapshot(stage)).encode(); mime='application/json'
+        elif parsed.path == '/api/metro':
+            if METRO_MAP is None:
+                self.send_error(404); return
+            view = parse_qs(parsed.query).get('view', ['metro'])[0]
+            if view not in ('metro', 'world'):
+                self.send_error(400); return
+            try:
+                content = json.dumps(METRO_MAP.snapshot(view), separators=(',', ':')).encode()
+            except (OSError, ValueError, KeyError):
+                self.send_error(503, 'Metro map records temporarily unavailable'); return
+            mime = 'application/json'
         elif parsed.path == '/api/earth':
             content = json.dumps(build_snapshot(REPO)).encode(); mime='application/json'
         elif parsed.path == '/api/chunks':
@@ -447,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
             data = read_json(ROOT/'sources/chicago-boundary.geojson')
             content = json.dumps(data).encode(); mime='application/json'
         elif parsed.path in ('/','/app.js','/style.css'):
-            path = REPO/'dashboard'/({'/':'index.html'}.get(parsed.path,parsed.path[1:]))
+            path = (UI_ROOT or REPO)/'dashboard'/({'/':'index.html'}.get(parsed.path,parsed.path[1:]))
             content = path.read_bytes()
             mime = {'html':'text/html','js':'text/javascript','css':'text/css'}[path.suffix[1:]]
         elif parsed.path.startswith('/assets/'):
@@ -458,8 +474,15 @@ class Handler(BaseHTTPRequestHandler):
             mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
         else:
             self.send_error(404); return
+        compressed = 'gzip' in self.headers.get('Accept-Encoding', '') and mime == 'application/json'
+        if compressed:
+            content = gzip.compress(content, compresslevel=1)
         self.send_response(200)
         self.send_header('Content-Type',mime+'; charset=utf-8')
+        self.send_header('Content-Length',str(len(content)))
+        if compressed:
+            self.send_header('Content-Encoding','gzip')
+            self.send_header('Vary','Accept-Encoding')
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self' https://tiles.openfreemap.org; img-src 'self' data: blob: https://tiles.openfreemap.org; worker-src 'self' blob:; frame-ancestors 'none'")
@@ -470,7 +493,25 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port',type=int,default=8765)
+    parser.add_argument('--data-root',type=Path,default=REPO)
+    parser.add_argument('--map-cache',type=Path)
+    parser.add_argument('--metro-config',type=Path)
     args=parser.parse_args()
+    UI_ROOT = REPO
+    REPO = args.data_root.resolve()
+    PLAN_PATH = REPO / 'runs/chicago-adaptation-city-001/plan.json'
+    INSTALLED_COVERAGE_PATH = REPO / 'runtime/traversal/saves/Earthcraft/city-coverage.json'
+    LIVE_EXCHANGE = REPO / 'runs/chicago-live-001'
+    if args.map_cache:
+        from metro_map import MetroMap, follow_queue, sync_queue
+        if args.metro_config:
+            try:
+                sync_queue(args.metro_config, args.map_cache/'queue.json')
+            except (OSError, ValueError, subprocess.SubprocessError):
+                if not (args.map_cache/'queue.json').exists():
+                    print('Metro queue not yet available; saved-world records remain readable',flush=True)
+            threading.Thread(target=follow_queue,args=(args.metro_config,args.map_cache/'queue.json'),daemon=True).start()
+        METRO_MAP = MetroMap(args.data_root, args.map_cache)
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     print(f'Earthcraft dashboard: http://127.0.0.1:{args.port}',flush=True)
     server.serve_forever()
