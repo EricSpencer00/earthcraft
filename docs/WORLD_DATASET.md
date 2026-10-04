@@ -32,6 +32,36 @@ hashes. The restored save has not been launched in Minecraft; those checks
 establish archive integrity and coordinate-preserving restoration, not visual
 accuracy or game compatibility. The private dataset requires authorized access.
 
+## Continuous generated tiles
+
+`generated-tiles/v1/index.json` indexes new, immutable generator regions in the
+same private dataset. These shards contain completed generation inputs only;
+they exclude personal save edits, player data, entities, source photos and
+resource packs. They complement the full saved-world snapshot above.
+
+`regional_hf_tiles.py` reads completed job receipts on the existing mini and
+checks the frozen plan, coordinate frame, each region hash and every chunk's
+coordinates/content before packaging. One block remains one metre; no new
+origin or vertical offset is introduced. Higher-quality scan results supersede
+base tiles in the index without discarding earlier immutable shards.
+
+`hf_tile_archive.mjs` coordinates bounded batches from the MacBook through the
+configured `mac-mini` alias. It records a pending shard before transfer, keeps
+the single-writer lock and original resource deadline, and acknowledges a batch
+only after `upload_generated_tiles.py` verifies the remote checksums. An index
+change from another writer requires a reload rather than an overwrite. Only the
+task's verified local transfer file is released; original source data and the
+playable save are preserved. Transient transport errors get bounded retries.
+
+Each shard states that real facade photo colors have not been applied and that
+the entire shard has not been visually verified in Minecraft. Scan geometry and
+aerial roof colors do not establish street-level appearance accuracy. Individual
+client walkthroughs and real-photo registration evidence are recorded separately.
+
+These shards omit `level.dat` and personal state. Restore them into a separate
+save under the existing frame, or use the coordinate-preserving shared importer
+with its edit checks. Do not replace a user-edited region wholesale.
+
 ## Freeze before packaging
 
 Save and Quit to Title in Minecraft. The staging command takes the same POSIX
