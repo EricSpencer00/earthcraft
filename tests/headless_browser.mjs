@@ -20,7 +20,7 @@ const server=createServer(async(req,res)=>{
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const browser=await chromium.launch();
 try{
-  const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const context=await browser.newContext();const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   for(const [width,height] of [[1440,1000],[390,844],[320,720]]){
     await page.setViewportSize({width,height});await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await expect(page.getByRole('heading',{level:1})).toHaveText('Built from stored blocks.');

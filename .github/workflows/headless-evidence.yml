@@ -6,6 +6,7 @@ on:
       - scripts/headless_blocks.py
       - scripts/headless_site.py
       - tests/test_headless_blocks.py
+      - tests/headless_browser.mjs
       - progress/headless/**
       - requirements-headless.txt
       - .github/workflows/headless-evidence.yml
@@ -14,6 +15,7 @@ on:
       - scripts/headless_blocks.py
       - scripts/headless_site.py
       - tests/test_headless_blocks.py
+      - tests/headless_browser.mjs
       - progress/headless/**
       - requirements-headless.txt
       - .github/workflows/headless-evidence.yml
