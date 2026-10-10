@@ -1,0 +1,227 @@
+{
+  "checks": {
+    "actual_block_decoding": "verified",
+    "archive_and_region_hashes": "verified",
+    "completeness": "complete chunk coverage in sampled tiles; global and facade coverage incomplete",
+    "coordinates_and_generator_privacy": "verified",
+    "datum": "unresolved_inherited_frame",
+    "game_visual_acceptance": "not_performed",
+    "independent_geometry_accuracy": "unresolved",
+    "measured_color": "unresolved_no_source_color_receipt",
+    "native_heightmaps": "verified"
+  },
+  "frame": {
+    "crs": "PROJCRS[\"unknown\",BASEGEOGCRS[\"unknown\",DATUM[\"Unknown based on WGS 84 ellipsoid\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",7030]]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8901]]],CONVERSION[\"unknown\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",41.8972,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",-87.62443,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",1,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]]]",
+    "dimension_height": 1024,
+    "dimension_min_y": -64,
+    "north": 33,
+    "vertical_offset_m": -116,
+    "vertical_reference": "Inherited Water Tower metric frame; datum agreement must be verified for every new source",
+    "west": -32
+  },
+  "inference_used": false,
+  "limits": [
+    "Previously archived sample; no new generation or installation claimed.",
+    "LQ shapes can be inferred or extruded; block correctness is not survey accuracy.",
+    "Image geometry comes only from decoded cells. Cropping exposes cut faces.",
+    "Display palette is illustrative; no facade photography or measured material claim."
+  ],
+  "minecraft_opened": false,
+  "observed_utc": "2026-10-10T20:49:40.094064+00:00",
+  "render": {
+    "block_shape_role": "unit cubes; blockstate-specific meshes and liquid heights are not modeled",
+    "crop_local_xz": [
+      288,
+      176
+    ],
+    "crop_size_m": 96,
+    "display_palette": {
+      "minecraft:dirt": [
+        135,
+        108,
+        82
+      ],
+      "minecraft:grass_block": [
+        107,
+        145,
+        91
+      ],
+      "minecraft:gray_concrete": [
+        110,
+        118,
+        121
+      ],
+      "minecraft:stone_bricks": [
+        151,
+        157,
+        157
+      ]
+    },
+    "occupied_voxels_in_render_window": 29714,
+    "palette_role": "illustrative block-identity colors; not measured imagery or game textures",
+    "png_sha256": "917e7fc0ec7bd661ca3b75d0f36cc7994ad646092b31ba2d3a812910eb6f28e3",
+    "renderer_sha256": "85236d553b113e982de7cdf0364c1eb341ee0ae2d1a79ca71bbdfeb504558797",
+    "tile": "-10_-33",
+    "topdown_sha256": "886f78b9edf9e660b0450b6b3c8d33bbbf7acf53080f03e4685b5cefe7eecfbd",
+    "vertical_crop_y": [
+      62,
+      73
+    ],
+    "visible_faces": 20806,
+    "world_offset_xz": [
+      -5120,
+      -16896
+    ]
+  },
+  "schema": "earthcraft.headless-block-evidence.v1",
+  "source": {
+    "actual_chunks": 4096,
+    "archive_sha256": "14d0f3d72a01ddded2c77b0884e191d82fc045c639e624556c47dd6fb5d527e1",
+    "attribution": [
+      {
+        "license": "ODbL-1.0",
+        "source": "OpenStreetMap contributors",
+        "url": "https://www.openstreetmap.org/copyright"
+      },
+      {
+        "license": "US Government Public Domain",
+        "source": "USGS 3DEP",
+        "url": "https://registry.opendata.aws/usgs-lidar/"
+      },
+      {
+        "license": "Source metadata retained locally; attribution required",
+        "source": "Illinois Height Modernization / county surveys",
+        "url": "https://clearinghouse.isgs.illinois.edu/node/495"
+      },
+      {
+        "license": "Per upstream terrain source",
+        "source": "Terrain Tiles",
+        "url": "https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+      },
+      {
+        "license": "US Government Public Domain",
+        "source": "USDA NAIP",
+        "url": "https://www.fsa.usda.gov/resources/programs/naip-imagery"
+      }
+    ],
+    "audited_tiles": 4,
+    "plan_sha256": "8f5ef6708cf51d2e3ea17f4036eb337e7689fd8a7a96b96fb34fb4bf767f5121",
+    "revision": "f87e9f2154a011a05524e343fcbe831c82db41d5",
+    "source_observation_is_new_generation": false
+  },
+  "tiles": [
+    {
+      "actual_chunks": 1024,
+      "actual_non_air_blocks": 596128,
+      "block_counts": {
+        "minecraft:air": 3643232,
+        "minecraft:bricks": 8616,
+        "minecraft:dirt": 262144,
+        "minecraft:grass_block": 208550,
+        "minecraft:gray_concrete": 50494,
+        "minecraft:stone_bricks": 63224,
+        "minecraft:water": 3100
+      },
+      "data_versions": [
+        3955
+      ],
+      "facade_photo_colors_declared": 0,
+      "game_visual_verified": false,
+      "geometry_grid_privacy_checks": "verified",
+      "heightmap_columns_checked": 262144,
+      "measured_roof_cells_declared": 0,
+      "occupied_columns": 262144,
+      "quality": "LQ",
+      "receipt_sha256": "3a02fbdd86ca97723da7b656fb645ed4abae8697fda905e4aea099d8947ccbd1",
+      "region_sha256": "5585d1292a26bcc0d2647e6a8535ca39878b5b5c6363e5d1d8017cf39063d054",
+      "tile": "-59_-53",
+      "top_y_range": [
+        98,
+        112
+      ]
+    },
+    {
+      "actual_chunks": 1024,
+      "actual_non_air_blocks": 715389,
+      "block_counts": {
+        "minecraft:air": 3663235,
+        "minecraft:dirt": 262144,
+        "minecraft:grass_block": 212148,
+        "minecraft:gray_concrete": 49866,
+        "minecraft:stone_bricks": 191101,
+        "minecraft:water": 130
+      },
+      "data_versions": [
+        3955
+      ],
+      "facade_photo_colors_declared": 0,
+      "game_visual_verified": false,
+      "geometry_grid_privacy_checks": "verified",
+      "heightmap_columns_checked": 262144,
+      "measured_roof_cells_declared": 0,
+      "occupied_columns": 262144,
+      "quality": "LQ",
+      "receipt_sha256": "1447368e4ec5f8f2a01f62ac99db790763d261e490faf11460b35a576f959139",
+      "region_sha256": "214ff35e8a1aaf05e89f89ea7b58822abd1523495b738506bceb24119866f32e",
+      "tile": "-10_-33",
+      "top_y_range": [
+        66,
+        151
+      ]
+    },
+    {
+      "actual_chunks": 1024,
+      "actual_non_air_blocks": 524288,
+      "block_counts": {
+        "minecraft:air": 3670016,
+        "minecraft:dirt": 262144,
+        "minecraft:grass_block": 262144
+      },
+      "data_versions": [
+        3955
+      ],
+      "facade_photo_colors_declared": 0,
+      "game_visual_verified": false,
+      "geometry_grid_privacy_checks": "verified",
+      "heightmap_columns_checked": 262144,
+      "measured_roof_cells_declared": 0,
+      "occupied_columns": 262144,
+      "quality": "LQ",
+      "receipt_sha256": "ebd86163ad8bf1cf082087f41a2064e307025769ad5b9be02eacd625cbfa7eca",
+      "region_sha256": "eb4c883e8ede73245e2409fab843bad22c7df470006af8372ebd32f355e52fc5",
+      "tile": "-6_-27",
+      "top_y_range": [
+        59,
+        59
+      ]
+    },
+    {
+      "actual_chunks": 1024,
+      "actual_non_air_blocks": 566447,
+      "block_counts": {
+        "minecraft:air": 4250449,
+        "minecraft:dirt": 262144,
+        "minecraft:grass_block": 252195,
+        "minecraft:gray_concrete": 9949,
+        "minecraft:stone_bricks": 42159
+      },
+      "data_versions": [
+        3955
+      ],
+      "facade_photo_colors_declared": 0,
+      "game_visual_verified": false,
+      "geometry_grid_privacy_checks": "verified",
+      "heightmap_columns_checked": 262144,
+      "measured_roof_cells_declared": 0,
+      "occupied_columns": 262144,
+      "quality": "LQ",
+      "receipt_sha256": "89ac2f2b5f87ca5f615669da463308e84b7ca8a8078c2250e3d94f8a78e95a50",
+      "region_sha256": "a0cf02802e0f8742f1b80bbcbb03cd5e241a55aea9f3116bcedb1bda414b9cee",
+      "tile": "-64_50",
+      "top_y_range": [
+        76,
+        115
+      ]
+    }
+  ]
+}

@@ -7,11 +7,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: offline-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
+    if: github.event.repository.private == false
     # The offline suite covers the real installer too; its exclusive atomic
     # publication primitive is intentionally macOS-only.
     runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -27,7 +33,9 @@ jobs:
         run: PYTHONPATH=scripts python -m unittest discover -s tests -v
 
   public-tree:
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4

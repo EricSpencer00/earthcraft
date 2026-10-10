@@ -19,8 +19,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: atlas-browser-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   browser:
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -42,4 +47,4 @@ jobs:
         with:
           name: atlas-browser-proof
           path: test-results/
-          retention-days: 7
+          retention-days: 1

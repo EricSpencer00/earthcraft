@@ -9,8 +9,9 @@ import {chromium, expect} from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const assets=resolve(root,'dashboard');
-const snapshot=JSON.parse(await readFile(resolve(root,'progress/earth.json'),'utf8'));
+const siteRoot=process.argv[2]?resolve(process.argv[2]):null;
+const assets=siteRoot||resolve(root,'dashboard');
+const snapshot=JSON.parse(await readFile(resolve(siteRoot||root,'progress/earth.json'),'utf8'));
 const mime={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2','.json':'application/json'};
 const server=createServer(async(req,res)=>{
   const pathname=new URL(req.url,'http://localhost').pathname;
@@ -20,7 +21,7 @@ const server=createServer(async(req,res)=>{
       body=JSON.stringify(snapshot);filename='earth.json';
     }else{
       filename=pathname==='/assets/water-tower.png'
-        ?resolve(root,'docs/photos/watertower-sep-10-26.png')
+        ?(siteRoot?resolve(siteRoot,'assets/water-tower.png'):resolve(root,'docs/photos/watertower-sep-10-26.png'))
         :resolve(assets,pathname==='/'?'index.html':pathname.slice(1));
       if(pathname!=='/assets/water-tower.png'&&!filename.startsWith(assets+sep))throw Error('Outside dashboard');
       body=await readFile(filename);
