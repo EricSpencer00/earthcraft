@@ -32,6 +32,11 @@ try{
       images:[...document.images].map(image=>[image.naturalWidth,image.naturalHeight])}));
     assert(layout.scroll<=layout.width,'Page overflows the viewport');
     assert.deepEqual(layout.images,[[1280,960],[512,512]]);
+    const table=page.getByRole('region',{name:'Sample coverage'});
+    if(await table.evaluate(element=>element.scrollWidth>element.clientWidth)){
+      await table.focus();await expect(table).toBeFocused();await table.press('ArrowRight');
+      await expect.poll(()=>table.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    }
     const accessibility=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
     assert.deepEqual(accessibility.violations,[],`Evidence page accessibility: ${width}`);
     const receipt=await page.request.get(`http://127.0.0.1:${server.address().port}/report.json`);
