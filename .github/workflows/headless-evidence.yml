@@ -5,6 +5,8 @@ on:
     paths:
       - scripts/headless_blocks.py
       - scripts/headless_site.py
+      - dashboard/evidence.css
+      - dashboard/assets/fonts/**
       - tests/test_headless_blocks.py
       - tests/headless_browser.mjs
       - progress/headless/**
@@ -14,6 +16,8 @@ on:
     paths:
       - scripts/headless_blocks.py
       - scripts/headless_site.py
+      - dashboard/evidence.css
+      - dashboard/assets/fonts/**
       - tests/test_headless_blocks.py
       - tests/headless_browser.mjs
       - progress/headless/**
