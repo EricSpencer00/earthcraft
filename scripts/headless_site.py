@@ -23,6 +23,9 @@ def build_site(bundle, output):
     credits=[]
     for credit in source['attribution']:
         label=escape(credit['source']);license=escape(credit['license']);url=credit.get('url','')
+        # Keep the historical receipt unchanged while linking to USDA's current page.
+        if url=='https://www.fsa.usda.gov/resources/programs/naip-imagery':
+            url='https://www.fpacbc.usda.gov/geospatial-services/customer-services/naip-coverage-map'
         require(not url or (urlsplit(url).scheme=='https' and urlsplit(url).netloc),'Unsafe attribution URL')
         label=f'<a href="{escape(url,quote=True)}">{label}</a>' if url else label
         credits.append(f'<li>{label} — {license}</li>')
@@ -44,7 +47,7 @@ def build_site(bundle, output):
 <section><h2>Evidence trail</h2><p>Analysis recorded <time>{escape(report['observed_utc'])}</time>. The source is a previously archived sample; this date records its analysis, not a new generation or installation.</p>
 <dl class="provenance"><dt>Archive SHA-256</dt><dd><code>{source['archive_sha256']}</code></dd><dt>Pinned source revision</dt><dd><code>{source['revision']}</code></dd><dt>Renderer SHA-256</dt><dd><code>{render['renderer_sha256']}</code></dd><dt>Image SHA-256</dt><dd><code>{render['png_sha256']}</code></dd></dl>
 <p><a href="report.json">Download the block-analysis receipt (JSON)</a> · <a href="https://github.com/EricSpencer00/earthcraft/blob/main/docs/HEADLESS_EVIDENCE.md">Reproduce and update this view</a></p></section>
-<section><h2>Source credits</h2><p>The original source declarations are retained below. Their presence does not establish measured color or independent geometry accuracy for this LQ sample.</p><ul>{''.join(credits)}</ul></section>
+<section><h2>Source credits</h2><p>Source and license declarations are retained below. Their presence does not establish measured color or independent geometry accuracy for this LQ sample.</p><ul>{''.join(credits)}</ul></section>
 <footer>No Minecraft or model inference was used for this analysis.</footer>
 </main></body></html>'''
     assets=Path(__file__).resolve().parents[1]/'dashboard'
