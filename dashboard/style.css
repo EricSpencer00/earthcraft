@@ -101,9 +101,8 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 .panel-footer { padding: 10px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); margin: -1px; white-space: nowrap; }
 @media (max-width: 1023px) {
-  /* Paint the sheet by section so it does not occlude the WebGL surface. */
-  .details-panel { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 64%; border: 0; border-top: 1px solid var(--control-line); background: transparent; }
-  .panel-tabs, .panel-content, .panel-footer { background: var(--paper); }
+  /* Chromium can drop the WebGL surface behind a fully opaque sheet. */
+  .details-panel { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 64%; border: 0; border-top: 1px solid var(--control-line); opacity: .999; }
   body[data-panel='open'] .map-bottom, body[data-panel='open'] .map-controls { display: none; }
   body[data-panel='open'] .map-attribution { top: 60px; bottom: auto; }
 }
