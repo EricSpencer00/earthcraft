@@ -1,0 +1,261 @@
+--- /dev/null
++++ b/scripts/archive_command.mjs
+@@ -0,0 +1,63 @@
++/** Bound archive subprocesses without depending on inherited pipes closing. */
++import {spawn} from 'node:child_process';
++import {sshOptions} from './mini_transport.mjs';
++
++// An auto-forked SSH master can retain this command's stderr after its child
++// exits. Keep archive SSH in the foreground; other jobs retain their settings.
++export function archiveSshOptions(control,config={}){
++ const source=sshOptions(control,config),options=[];
++ for(let i=0;i<source.length;i+=2){
++  if(!/^Control(?:Master|Persist|Path)=/i.test(source[i+1]))options.push(source[i],source[i+1]);
++ }
++ return [...options,'-o','ControlMaster=no','-o','ControlPersist=no','-o','ControlPath=none'];
++}
++
++export function command(executable,args,input=null,timeout=300000,
++ {binary=false,maxBytes=4*1024**2,killGraceMs=1000}={}){
++ if(!Number.isInteger(timeout)||timeout<1||!Number.isInteger(maxBytes)||maxBytes<1||
++    !Number.isInteger(killGraceMs)||killGraceMs<1||killGraceMs>5000)throw Error('Bounded command settings required');
++ return new Promise((resolve,reject)=>{
++  const grouped=process.platform!=='win32';
++  const child=spawn(executable,args,{stdio:['pipe','pipe','pipe'],detached:grouped});
++  let settled=false,failure=null,bytes=0,err='',killTimer;
++  const chunks=[];
++  const signal=kind=>{
++   if(!child.pid)return;
++   try{if(grouped)process.kill(-child.pid,kind);else child.kill(kind);}
++   catch(error){if(error.code!=='ESRCH')child.kill(kind);}
++  };
++  const destroyPipes=()=>{child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();};
++  const finish=(error,value)=>{
++   if(settled)return;
++   settled=true;clearTimeout(timer);clearTimeout(killTimer);destroyPipes();
++   if(error)reject(error);else resolve(value);
++  };
++  const abort=error=>{
++   if(settled||failure)return;
++   failure=error;clearTimeout(timer);signal('SIGTERM');
++   killTimer=setTimeout(()=>{signal('SIGKILL');finish(failure);},killGraceMs);
++   // Detached or inherited writers cannot hold the promise open past this bound.
++   destroyPipes();
++  };
++  const timer=setTimeout(()=>abort(Object.assign(
++   Error(`${executable}: timeout after ${timeout}ms: ${err}`),
++   {executable,code:'ETIMEDOUT',timedOut:true})),timeout);
++  child.stdout.on('data',data=>{
++   bytes+=data.length;
++   if(bytes>maxBytes){abort(Object.assign(Error(`${executable}: output exceeds ${maxBytes} bytes`),
++    {executable,code:'ERR_OUTPUT_LIMIT'}));return;}
++   chunks.push(data);
++  });
++  child.stderr.on('data',data=>err=(err+data).slice(-4000));
++  child.once('error',error=>finish(Object.assign(error,{executable})));
++  child.once('close',(code,closeSignal)=>{
++   if(failure){
++    failure.exitCode=code;failure.signal=closeSignal;signal('SIGKILL');finish(failure);return;
++   }
++   if(code!==0){finish(Object.assign(Error(`${executable}: ${code??closeSignal}: ${err}`),
++    {executable,code,signal:closeSignal}));return;}
++   const raw=Buffer.concat(chunks,bytes);finish(null,binary?raw:raw.toString('utf8'));
++  });
++  child.stdin.on('error',()=>{});child.stdin.end(input);
++ });
++}
+--- a/scripts/archive_transport_retry.mjs
++++ b/scripts/archive_transport_retry.mjs
+@@ -1,8 +1,8 @@
+ /** Retry only transient transport failures; never restart generation or authentication. */
+ export function isTransientTransport(error) {
+   if (/permission denied|authentication|host key|identity file|configuration|bad owner/i.test(error.message)) return false;
+-  return (error.executable === '/usr/bin/ssh' && error.code === 255) ||
+-    (error.executable === '/usr/bin/rsync' && [10, 12, 30, 35, 255].includes(error.code));
++  return (error.executable === '/usr/bin/ssh' && (error.code === 255 || error.timedOut === true)) ||
++    (error.executable === '/usr/bin/rsync' && ([10, 12, 30, 35, 255].includes(error.code) || error.timedOut === true));
+ }
+ 
+ export async function retryTransport(work, {sleep = ms => new Promise(r => setTimeout(r, ms)),
+--- /dev/null
++++ b/tests/archive_command.test.mjs
+@@ -0,0 +1,82 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import {command,archiveSshOptions} from '../scripts/archive_command.mjs';
++import {sshOptions} from '../scripts/mini_transport.mjs';
++
++test('bounded binary stdin/stdout preserves exact archive bytes',async()=>{
++ const bytes=Buffer.from([0,255,128,10,13,65]);
++ const result=await command(process.execPath,['-e',
++  "const chunks=[];process.stdin.on('data',x=>chunks.push(x));process.stdin.on('end',()=>process.stdout.write(Buffer.concat(chunks)));"],
++  bytes,2000,{binary:true,maxBytes:bytes.length});
++ assert.deepEqual(result,bytes);
++});
++
++async function gone(pid){
++ for(let i=0;i<40;i++){
++  try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')return true;throw error;}
++  await new Promise(resolve=>setTimeout(resolve,25));
++ }
++ return false;
++}
++
++test('timeout settles when an exited parent leaves inherited pipes open, and kills its owned descendant',async()=>{
++ const root=await fs.mkdtemp(path.join(os.tmpdir(),'earthcraft-command-test-')),file=path.join(root,'child.pid');
++ let pid;
++ try{
++  const source="const {spawn}=require('node:child_process');const fs=require('node:fs');"+
++   "const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\"],{stdio:['ignore',process.stdout,process.stderr]});"+
++   "fs.writeFileSync(process.argv[1],String(c.pid));process.exit(0);";
++  const started=Date.now();
++  await assert.rejects(command(process.execPath,['-e',source,file],null,500,{killGraceMs:100}),
++   error=>error.code==='ETIMEDOUT'&&error.timedOut===true);
++  assert(Date.now()-started<2500,'Inherited writer exceeded the timeout settlement bound');
++  pid=Number(await fs.readFile(file,'utf8'));assert(await gone(pid),'Owned descendant survived timeout cleanup');
++ }finally{
++  if(pid){try{process.kill(pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
++  await fs.rm(root,{recursive:true,force:true});
++ }
++});
++
++test('SIGTERM-resistant foreground process is killed within the grace bound',async()=>{
++ const root=await fs.mkdtemp(path.join(os.tmpdir(),'earthcraft-command-test-')),file=path.join(root,'child.pid');
++ let pid;
++ try{
++  const started=Date.now();
++  await assert.rejects(command(process.execPath,['-e',
++   "require('node:fs').writeFileSync(process.argv[1],String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);",file],
++   null,500,{killGraceMs:100}),error=>error.code==='ETIMEDOUT'&&error.timedOut===true);
++  assert(Date.now()-started<2500);
++  pid=Number(await fs.readFile(file,'utf8'));assert(await gone(pid));
++ }finally{
++  if(pid){try{process.kill(pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
++  await fs.rm(root,{recursive:true,force:true});
++ }
++});
++
++test('oversized stdout rejects rather than accepting a partial archive',async()=>{
++ await assert.rejects(command(process.execPath,['-e',
++  "process.stdout.write(Buffer.alloc(65536));setInterval(()=>{},1000);"],null,2000,{maxBytes:1024,killGraceMs:100}),
++  error=>error.code==='ERR_OUTPUT_LIMIT'&&!error.timedOut);
++});
++
++test('nonzero and spawn failures preserve executable and exit classification',async()=>{
++ await assert.rejects(command(process.execPath,['-e','process.exit(255)'],null,2000),
++  error=>error.executable===process.execPath&&error.code===255);
++ await assert.rejects(command('/nonexistent-earthcraft-test-executable',[],null,2000),
++  error=>error.code==='ENOENT'&&error.executable==='/nonexistent-earthcraft-test-executable');
++});
++
++test('archive options disable multiplexing without changing ordinary transport settings',async()=>{
++ const options=archiveSshOptions('/tmp/earthcraft-test-control');
++ assert(options.includes('BatchMode=yes'));assert(options.includes('ConnectTimeout=60'));assert(options.includes('AddressFamily=inet'));
++ assert(options.includes('ControlMaster=no'));assert(options.includes('ControlPersist=no'));assert(options.includes('ControlPath=none'));
++ assert(sshOptions('/tmp/earthcraft-test-control').includes('ControlMaster=auto'));
++ // -G is configuration expansion only; /dev/null and disabled identities avoid credentials and network work.
++ const expanded=await command('/usr/bin/ssh',['-G','-F','/dev/null','-o','IdentityAgent=none',
++  '-o','IdentityFile=none','-o','CertificateFile=none',...options,'unused.invalid'],null,2000);
++ const values=Object.fromEntries(expanded.trim().split('\n').map(line=>[line.split(' ')[0],line.slice(line.indexOf(' ')+1)]));
++ assert.equal(values.controlmaster,'false');assert.equal(values.controlpersist,'no');assert(!values.controlpath||values.controlpath==='none');
++});
+--- a/tests/archive_transport_retry.test.mjs
++++ b/tests/archive_transport_retry.test.mjs
+@@ -29,3 +29,20 @@
+     {shouldStop:()=>true,sleep:async()=>assert.fail('Deadline must stop immediately')}));
+   assert.equal(calls,1);
+ });
++test('explicit transport timeouts retain the four-attempt limit and backoff',async()=>{
++ for(const executable of ['/usr/bin/ssh','/usr/bin/rsync']){
++  let calls=0;const delays=[];
++  const error=Object.assign(failure('ETIMEDOUT','command timeout',executable),{timedOut:true});
++  await assert.rejects(retryTransport(async()=>{calls++;throw error;},{sleep:async ms=>delays.push(ms)}));
++  assert.equal(calls,4);assert.deepEqual(delays,[5000,10000,20000]);
++ }
++});
++test('uploader timeouts, authentication errors and output bounds are not transport retries',async()=>{
++ for(const error of [Object.assign(failure('ETIMEDOUT','timeout','/fake/uploader'),{timedOut:true}),
++  Object.assign(failure('ETIMEDOUT','Permission denied (publickey)'),{timedOut:true}),
++  failure('ERR_OUTPUT_LIMIT','output exceeds bound')]){
++  let calls=0;
++  await assert.rejects(retryTransport(async()=>{calls++;throw error;},{sleep:async()=>{}}));
++  assert.equal(calls,1);
++ }
++});
+--- a/tests/archive_hf_retry.test.mjs
++++ b/tests/archive_hf_retry.test.mjs
+@@ -6,6 +6,7 @@
+ import crypto from 'node:crypto';
+ import {execFile} from 'node:child_process';
+ import {promisify} from 'node:util';
++import {fileURLToPath} from 'node:url';
+ import {legacyRateReceipt,slotTime,reserveAttempt,recordRetry,markVerified,waitForSlot} from '../scripts/archive_hf_retry.mjs';
+ 
+ const pending={sha256:'a'.repeat(64),entries:[{tile:'-1_0',receipt_sha256:'b'.repeat(64)}]};
+@@ -78,7 +79,7 @@
+   await fs.writeFile(config,JSON.stringify({lock_helper:helper,deadline,
+    lock_helper_sha256:crypto.createHash('sha256').update(source).digest('hex'),
+    memory_upload:true,batch_limit:4,hf_python:'/bin/false',hf_uploader:'MUST_NOT_RUN'}));
+-  const run=await promisify(execFile)(process.execPath,[path.resolve('rate-limit-patch/scripts/hf_tile_archive.mjs'),
++  const run=await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../scripts/hf_tile_archive.mjs',import.meta.url)),
+    '--config',config,'--control',root,'--once'],{timeout:5000});
+   assert.equal(run.stderr,'');
+   const after=JSON.parse(await fs.readFile(path.join(root,'state.local.json'),'utf8'));
+--- a/scripts/hf_tile_archive.mjs
++++ b/scripts/hf_tile_archive.mjs
+@@ -4,7 +4,7 @@
+ import crypto from 'node:crypto';
+ import os from 'node:os';
+ import {spawn} from 'node:child_process';
+-import {sshOptions} from './mini_transport.mjs';
++import {command,archiveSshOptions} from './archive_command.mjs';
+ import {retryTransport} from './archive_transport_retry.mjs';
+ import {legacyRateReceipt,reserveAttempt,recordRetry,markVerified,waitForSlot} from './archive_hf_retry.mjs';
+ 
+@@ -18,18 +18,6 @@
+ async function atomic(file, value){
+  const tmp=file+'.partial';await fs.writeFile(tmp,JSON.stringify(value),{mode:0o600});await fs.rename(tmp,file);
+ }
+-async function command(executable,args,input=null,timeout=300000,{binary=false,maxBytes=4*1024**2}={}){
+- return new Promise((resolve,reject)=>{
+-  const child=spawn(executable,args,{stdio:['pipe','pipe','pipe']});let out='',err='',bytes=0;const chunks=[];
+-  child.stdout.on('data',data=>{bytes+=data.length;if(bytes>maxBytes){child.kill();return;}if(binary)chunks.push(data);else out+=data;});
+-  child.stderr.on('data',data=>err=(err+data).slice(-4000));
+-  const timer=setTimeout(()=>child.kill('SIGTERM'),timeout);
+-  child.on('error',reject);child.on('close',(code,signal)=>{clearTimeout(timer);
+-   if(code===0&&bytes<=maxBytes)resolve(binary?Buffer.concat(chunks,bytes):out);
+-   else reject(Object.assign(Error(`${executable}: ${code??signal}: ${err}`),{executable,code,signal}));});
+-  child.stdin.on('error',()=>{});child.stdin.end(input);
+- });
+-}
+ async function route(){
+  const out=await command('/usr/bin/ssh',['-G',config.host]);
+  const v=Object.fromEntries(out.trim().split('\n').map(line=>[line.split(' ')[0],line.slice(line.indexOf(' ')+1)]));
+@@ -42,7 +30,7 @@
+    archived_tiles:Object.keys(state.known).length,batches:state.batches,...progress,
+    generation_restarted:false,original_world_modified:false,new_paid_compute:false})});}
+ async function remote(args,input=null){return transport(async()=>{
+- await route();return command('/usr/bin/ssh',[...sshOptions(control,config),config.host,args.map(quote).join(' ')],input);});}
++ await route();return command('/usr/bin/ssh',[...archiveSshOptions(control,config),config.host,args.map(quote).join(' ')],input);});}
+ const helper=await fs.readFile(config.lock_helper);
+ if(hash(helper)!==config.lock_helper_sha256)throw Error('Task lock helper changed');
+ const lockPath=path.join(control,'archive.lock');await fs.writeFile(lockPath,'',{flag:'a'});
+@@ -104,13 +92,13 @@
+       !/^[a-f0-9]{64}$/.test(record.sha256)||record.archive!==config.bulk+'/hf-generated/'+record.sha256+'.tar')throw Error('Pending archive bounds differ');
+    let payload=null;
+    if(memoryUpload){
+-    payload=await transport(async()=>{await route();return command('/usr/bin/ssh',[...sshOptions(control,config),config.host,
++    payload=await transport(async()=>{await route();return command('/usr/bin/ssh',[...archiveSshOptions(control,config),config.host,
+      ['cat',record.archive].map(quote).join(' ')],null,300000,{binary:true,maxBytes:record.bytes});});
+     if(payload.length!==record.bytes||hash(payload)!==record.sha256)throw Error('In-memory transport checksum differs');
+    }else{
+     let available=false;try{available=hash(await fs.readFile(archive))===record.sha256;}catch(e){if(e.code!=='ENOENT')throw e;}
+     if(!available){await transport(async()=>{await route();return command('/usr/bin/rsync',['-az','--timeout=120','-e',
+-      ['/usr/bin/ssh',...sshOptions(control,config)].map(quote).join(' '),config.host+':'+record.archive,archive]);});}
++      ['/usr/bin/ssh',...archiveSshOptions(control,config)].map(quote).join(' '),config.host+':'+record.archive,archive]);});}
+     if(hash(await fs.readFile(archive))!==record.sha256)throw Error('Transport checksum differs');
+    }
+    const proof=path.join(control,record.sha256+'.proof.local.json');

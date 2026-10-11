@@ -1,0 +1,778 @@
+--- a/scripts/regional_hf_tiles.py
++++ b/scripts/regional_hf_tiles.py
+@@ -18,8 +18,9 @@
+ import nbtlib
+ from region_expansion import records, sha, atomic
+ from regional_store import region_bytes
++from generated_tile_schema import SCHEMA, SCHEMA_V2, FEATURES, validate_entry
++from point_archive_evidence import point_only_evidence
+ 
+-SCHEMA = 'earthcraft.generated-tile-shard.v1'
+ CHUNK_KEYS = {'Status', 'InhabitedTime', 'DataVersion', 'zPos', 'isLightOn',
+               'Heightmaps', 'structures', 'yPos', 'xPos', 'entities',
+               'block_entities', 'PostProcessing', 'LastUpdate', 'sections',
+@@ -83,7 +84,7 @@
+         raise ValueError('Generator path symlink forbidden')
+     meta = json.loads((world / 'earthcraft.json').read_text())
+     if (proof.get('tile') != tile or proof.get('result') != 'pass' or
+-            proof.get('quality') not in ('LQ', 'scan-roof', 'scan-points-and-roof') or
++            not isinstance(proof.get('quality'), str) or proof.get('quality') not in FEATURES or
+             proof.get('world_manifest_sha256') != sha(world / 'earthcraft.json') or
+             meta.get('world_frame') != frame or meta.get('world_offset_xz') != [rx*512, rz*512] or
+             meta.get('source', {}).get('size') != 512):
+@@ -107,9 +108,12 @@
+               'region_sha256': checksum, 'region_file': name, 'chunks': chunks,
+               'source_grid': {k: source[k] for k in ('west', 'north', 'size')},
+               'scan': {k: scan[k] for k in ('county', 'year') if k in scan},
+-              'roof_source_cells': int(proof.get('roof_source_cells', 0)),
++              'roof_source_cells': proof.get('roof_source_cells', 0),
+               'real_facade_photo_colors_applied': 0, 'client_visual_verified': False,
+               'privacy_audit': 'Generator-only region; no entities, block entities, players or local metadata'}
++    if proof['quality'] == 'classified-scan-points':
++        record['point_evidence'] = point_only_evidence(root, world, meta, proof, frame, raw)
++    validate_entry(record, SCHEMA_V2 if 'point_evidence' in record else SCHEMA, frame)
+     return record, gzip.compress(raw, compresslevel=1, mtime=0)
+ 
+ 
+@@ -150,10 +154,17 @@
+         entries.append(entry); payloads.append((tile+'/'+entry['region_file']+'.gz', data))
+         if sum(len(body) for _, body in payloads) > 256*2**20:
+             raise ValueError('Public shard exceeds bounded transfer budget')
+-    manifest = {'schema': SCHEMA, 'frame': frame, 'plan_sha256': sha(plan_path),
++    schema = SCHEMA_V2 if any('point_evidence' in entry for entry in entries) else SCHEMA
++    if schema == SCHEMA_V2:
++        for entry in entries:
++            entry.setdefault('point_evidence', None)
++            validate_entry(entry, schema, frame)
++    manifest = {'schema': schema, 'frame': frame, 'plan_sha256': sha(plan_path),
+                 'entries': entries, 'attribution': ATTRIBUTION,
+                 'excludes': ['player state', 'personal save edits', 'entity regions', 'resource packs', 'source photos', 'credentials'],
+                 'note': 'Generated tiles only; incomplete coverage and incomplete facades. Restore separately and preserve existing edits.'}
++    if schema == SCHEMA_V2:
++        manifest['note'] += ' Point-only observations retain unverified absolute vertical datum; no measured facade colour or independent accuracy claim.'
+     out = io.BytesIO()
+     with tarfile.open(fileobj=out, mode='w') as tar:
+         for name, data in [('manifest.json', json.dumps(manifest, sort_keys=True).encode()), *payloads]:
+@@ -165,7 +176,7 @@
+     if archive.exists() and sha(archive) != checksum:
+         raise ValueError('Immutable shard differs')
+     if not archive.exists(): atomic(archive, raw)
+-    record = {'schema': SCHEMA, 'state': 'ready', 'archive': str(archive), 'sha256': checksum,
++    record = {'schema': schema, 'state': 'ready', 'archive': str(archive), 'sha256': checksum,
+               'bytes': len(raw), 'tiles': len(entries), 'entries': entries,
+               'plan_sha256': manifest['plan_sha256']}
+     atomic(archive.with_suffix('.local.json'), json.dumps(record).encode())
+--- a/scripts/upload_generated_tiles.py
++++ b/scripts/upload_generated_tiles.py
+@@ -12,12 +12,9 @@
+ import re
+ import tarfile
+ import time
+-
+-SCHEMA = 'earthcraft.generated-tile-shard.v1'
+-ENTRY_KEYS = {'tile', 'quality', 'world_offset_xz', 'size_m', 'metres_per_block',
+-              'receipt_sha256', 'region_sha256', 'region_file', 'chunks',
+-              'source_grid', 'scan', 'roof_source_cells',
+-              'real_facade_photo_colors_applied', 'client_visual_verified', 'privacy_audit'}
++from generated_tile_schema import (SCHEMA, SCHEMA_V2, ENTRY_KEYS, ENTRY_KEYS_V2, INDEX_SCHEMAS,
++                                   checksum, validate_entry, should_replace)
++
+ INDEX_LIMIT = 16 * 2**20
+ 
+ 
+@@ -39,7 +36,7 @@
+ 
+ 
+ def validate(archive, expected, plan_sha256):
+-    if size(archive) > 256*2**20 or digest(archive) != expected:
++    if not checksum(expected) or not checksum(plan_sha256) or size(archive) > 256*2**20 or digest(archive) != expected:
+         raise ValueError('Bounded immutable shard checksum required')
+     if isinstance(archive, io.BytesIO): archive.seek(0)
+     with (tarfile.open(fileobj=archive) if isinstance(archive, io.BytesIO) else tarfile.open(archive)) as tar:
+@@ -47,21 +44,19 @@
+         if any(not m.isfile() for m in members) or len({m.name for m in members}) != len(members):
+             raise ValueError('Only unique regular generated files allowed')
+         manifest = json.loads(tar.extractfile('manifest.json').read())
+-        if (set(manifest) != {'schema', 'frame', 'plan_sha256', 'entries', 'attribution', 'excludes', 'note'} or
+-                manifest['schema'] != SCHEMA or manifest['plan_sha256'] != plan_sha256 or
++        if (not isinstance(manifest, dict) or
++                set(manifest) != {'schema', 'frame', 'plan_sha256', 'entries', 'attribution', 'excludes', 'note'} or
++                manifest['schema'] not in (SCHEMA, SCHEMA_V2) or manifest['plan_sha256'] != plan_sha256 or
++                not isinstance(manifest['frame'], dict) or not isinstance(manifest['entries'], list) or
+                 not 1 <= len(manifest['entries']) <= 32):
+             raise ValueError('Frozen generated export schema required')
+         expected_members = {'manifest.json'}
+         seen = set()
+         for item in manifest['entries']:
+-            if set(item) != ENTRY_KEYS or not re.fullmatch(r'-?\d+_-?\d+', item['tile']) or item['tile'] in seen:
++            validate_entry(item, manifest['schema'], manifest['frame'])
++            if item['tile'] in seen:
+                 raise ValueError('Unexpected generated tile metadata')
+             seen.add(item['tile'])
+-            x, z = map(int, item['tile'].split('_'))
+-            if (item['world_offset_xz'] != [x*512, z*512] or item['size_m'] != 512 or
+-                    item['metres_per_block'] != 1 or item['region_file'] != f'r.{x}.{z}.mca' or
+-                    item['real_facade_photo_colors_applied'] != 0 or item['client_visual_verified'] is not False):
+-                raise ValueError('Coordinate or quality claims differ')
+             name = item['tile']+'/'+item['region_file']+'.gz'
+             expected_members.add(name)
+             with gzip.GzipFile(fileobj=tar.extractfile(name)) as stream:
+@@ -96,9 +91,13 @@
+ 
+ def check_references(index, files, *, candidate=None):
+     """Every index reference must resolve in this snapshot or this atomic commit."""
+-    if not isinstance(index.get('shards'), dict) or not isinstance(index.get('tiles'), dict):
++    if (not isinstance(index, dict) or index.get('schema') not in INDEX_SCHEMAS or
++            not isinstance(index.get('shards'), dict) or not isinstance(index.get('tiles'), dict) or
++            not isinstance(index.get('frame'), dict)):
+         raise ValueError('Malformed remote archive index')
+     for checksum, record in index['shards'].items():
++        if not isinstance(checksum, str) or not isinstance(record, dict):
++            raise ValueError('Malformed immutable shard reference')
+         remote = 'generated-tiles/v1/shards/'+checksum[:2]+'/'+checksum+'.tar'
+         if (not re.fullmatch(r'[a-f0-9]{64}', checksum) or record.get('sha256') != checksum or
+                 record.get('path') != remote or type(record.get('bytes')) is not int or
+@@ -112,14 +111,22 @@
+             raise ValueError('Referenced shard unavailable or content hash differs')
+         if getattr(item, 'size', record['bytes']) != record['bytes']:
+             raise ValueError('Referenced shard size differs')
+-    if any(item.get('shard_sha256') not in index['shards'] for item in index['tiles'].values()):
+-        raise ValueError('Dangling tile shard reference')
++    for tile, item in index['tiles'].items():
++        if not isinstance(item, dict) or 'shard_sha256' not in item:
++            raise ValueError('Malformed indexed tile')
++        entry = {key: value for key, value in item.items() if key != 'shard_sha256'}
++        schema = SCHEMA_V2 if 'point_evidence' in entry else SCHEMA
++        if schema == SCHEMA_V2 and index['schema'] != 'earthcraft.generated-tile-index.v2':
++            raise ValueError('Point evidence requires v2 index')
++        validate_entry(entry, schema, index['frame'])
++        if tile != item['tile'] or item['shard_sha256'] not in index['shards']:
++            raise ValueError('Dangling or mismatched tile shard reference')
+ 
+ 
+ def upload(archive, expected, plan_sha256, repo_id, proof_path):
++    manifest = validate(archive, expected, plan_sha256)
+     from huggingface_hub import HfApi, HfFileSystem, CommitOperationAdd
+     api = HfApi()
+-    manifest = validate(archive, expected, plan_sha256)
+     owner = api.whoami()['name']
+     if repo_id.split('/')[0] != owner:
+         raise ValueError('Authenticated owner must match destination')
+@@ -144,7 +151,7 @@
+         if not matches(files[index_remote], io.BytesIO(prior)):
+             raise ValueError('Pinned prior index content differs')
+         index = json.loads(prior)
+-        if index.get('schema') != 'earthcraft.generated-tile-index.v1' or index.get('plan_sha256') != plan_sha256:
++        if index.get('schema') not in INDEX_SCHEMAS or index.get('plan_sha256') != plan_sha256:
+             raise ValueError('Remote archive index belongs to another frozen plan')
+     else:
+         index = {'schema': 'earthcraft.generated-tile-index.v1', 'plan_sha256': plan_sha256,
+@@ -154,11 +161,12 @@
+     # Validate the entire old index before adding the candidate; missing references stop.
+     check_references(index, files)
+     index_base_revision = info.sha
++    if manifest['schema'] == SCHEMA_V2:
++        index['schema'] = 'earthcraft.generated-tile-index.v2'
+     index['shards'][expected] = {'path': remote, 'sha256': expected, 'bytes': size(archive)}
+-    ranks = {'LQ': 1, 'scan-roof': 2, 'scan-points-and-roof': 3}
+     for item in manifest['entries']:
+         old = index['tiles'].get(item['tile'])
+-        if old and ranks[old['quality']] > ranks[item['quality']]: continue
++        if old and not should_replace(old['quality'], item['quality']): continue
+         index['tiles'][item['tile']] = dict(item, shard_sha256=expected)
+     check_references(index, files, candidate=expected)
+     raw_index = json.dumps(index, sort_keys=True).encode()
+--- /dev/null
++++ b/scripts/generated_tile_schema.py
+@@ -0,0 +1,125 @@
++"""Generator archive contracts. Point-only observations never imply paired roofs or appearance."""
++import math
++import re
++
++SCHEMA = 'earthcraft.generated-tile-shard.v1'
++SCHEMA_V2 = 'earthcraft.generated-tile-shard.v2'
++INDEX_SCHEMAS = {'earthcraft.generated-tile-index.v1', 'earthcraft.generated-tile-index.v2'}
++ENTRY_KEYS = {'tile', 'quality', 'world_offset_xz', 'size_m', 'metres_per_block',
++              'receipt_sha256', 'region_sha256', 'region_file', 'chunks',
++              'source_grid', 'scan', 'roof_source_cells',
++              'real_facade_photo_colors_applied', 'client_visual_verified', 'privacy_audit'}
++ENTRY_KEYS_V2 = ENTRY_KEYS | {'point_evidence'}
++PRIVACY = 'Generator-only region; no entities, block entities, players or local metadata'
++FEATURES = {'LQ': frozenset(), 'scan-roof': frozenset({'paired_roofs'}),
++            'classified-scan-points': frozenset({'classified_points'}),
++            'scan-points-and-roof': frozenset({'paired_roofs', 'classified_points'})}
++POINT_KEYS = {'schema', 'project', 'source_manifest_sha256', 'points_sha256',
++              'point_geometry_sha256', 'point_voxels_sha256', 'block_verification_sha256', 'building_points',
++              'occupied_voxels', 'retained_classes', 'output_horizontal_crs', 'grid',
++              'vertical_reference', 'ground_reference', 'datum_status',
++              'ground_comparison_points', 'median_absolute_ground_residual_m',
++              'all_intersecting_octree_levels_acquired', 'downsampling',
++              'independent_accuracy_verified', 'facade_colour_measured', 'source_asset_hashes'}
++
++
++def require(condition, message):
++    if not condition:
++        raise ValueError(message)
++
++
++def integer(value, minimum=0, maximum=None):
++    return type(value) is int and value >= minimum and (maximum is None or value <= maximum)
++
++
++def finite(value):
++    return type(value) in (int, float) and math.isfinite(value)
++
++
++def checksum(value):
++    return isinstance(value, str) and re.fullmatch('[a-f0-9]{64}', value) is not None
++
++
++def validate_point_evidence(value, frame=None):
++    require(isinstance(value, dict) and set(value) == POINT_KEYS, 'Exact point-only evidence required')
++    require(value['schema'] == 'earthcraft.point-only-evidence.v1', 'Point evidence schema differs')
++    require(isinstance(value['project'], str) and 0 < len(value['project']) <= 256 and
++            value['project'] not in {'.', '..'} and '/' not in value['project'] and '\\' not in value['project'],
++            'Public point project identity required')
++    for key in ['source_manifest_sha256', 'points_sha256', 'point_geometry_sha256', 'point_voxels_sha256',
++                'block_verification_sha256']:
++        require(checksum(value[key]), 'Point-source hash required: ' + key)
++    require(integer(value['building_points'], 1) and integer(value['occupied_voxels'], 1, 2_000_000) and
++            value['occupied_voxels'] <= value['building_points'], 'Actual positive point/voxel counts required')
++    require(value['retained_classes'] == [6] and type(value['retained_classes'][0]) is int,
++            'Point-only profile requires provider class-6 observations')
++    require(isinstance(value['output_horizontal_crs'], str) and value['output_horizontal_crs'], 'Point CRS required')
++    grid = value['grid']
++    require(isinstance(grid, dict) and set(grid) == {'crs', 'west', 'north', 'size'} and
++            grid['crs'] == value['output_horizontal_crs'] and type(grid['size']) is int and grid['size'] == 512 and
++            finite(grid['west']) and finite(grid['north']), 'Point grid differs')
++    if frame is not None:
++        require(grid['crs'] == frame.get('crs'), 'Point/output frame CRS differs')
++    require(value['ground_reference'] == 'LQ AWS terrain; absolute scan datum unverified' and
++            value['datum_status'] == 'absolute_vertical_datum_unverified' and
++            value['vertical_reference'] == 'Original EPT Z; metre interpretation checked against ' +
++            value['ground_reference'],
++            'Point-only datum uncertainty must remain explicit')
++    require(integer(value['ground_comparison_points'], 20) and
++            finite(value['median_absolute_ground_residual_m']) and
++            0 <= value['median_absolute_ground_residual_m'] <= 2, 'Measured ground comparison required')
++    require(value['all_intersecting_octree_levels_acquired'] is True and value['downsampling'] is False,
++            'Full-density point acquisition required')
++    require(value['independent_accuracy_verified'] is False and value['facade_colour_measured'] is False,
++            'Unsupported accuracy/appearance claim')
++    require(isinstance(value['source_asset_hashes'], list) and value['source_asset_hashes'] and
++            all(checksum(item) for item in value['source_asset_hashes']), 'Original point asset identities required')
++
++
++def validate_entry(item, schema=SCHEMA, frame=None):
++    keys = ENTRY_KEYS if schema == SCHEMA else ENTRY_KEYS_V2 if schema == SCHEMA_V2 else None
++    require(keys is not None and isinstance(item, dict) and set(item) == keys, 'Exact generated tile metadata required')
++    require(isinstance(item['tile'], str) and re.fullmatch(r'-?\d+_-?\d+', item['tile']), 'Tile identity required')
++    quality = item['quality']
++    require(isinstance(quality, str) and quality in FEATURES, 'Unsupported generated quality class')
++    require(schema == SCHEMA_V2 or quality != 'classified-scan-points', 'Point-only quality requires v2 evidence')
++    x, z = map(int, item['tile'].split('_'))
++    require(isinstance(item['world_offset_xz'], list) and item['world_offset_xz'] == [x * 512, z * 512] and
++            all(type(value) is int for value in item['world_offset_xz']) and
++            type(item['size_m']) is int and item['size_m'] == 512 and
++            finite(item['metres_per_block']) and item['metres_per_block'] == 1 and
++            item['region_file'] == f'r.{x}.{z}.mca', 'Coordinate or scale claims differ')
++    require(checksum(item['receipt_sha256']) and checksum(item['region_sha256']), 'Immutable receipt/region hash required')
++    require(integer(item['chunks'], 1, 1024) and integer(item['roof_source_cells'], 0, 512 ** 2),
++            'Actual bounded chunk/roof counts required')
++    grid = item['source_grid']
++    require(isinstance(grid, dict) and set(grid) == {'west', 'north', 'size'} and
++            all(finite(value) for value in grid.values()) and type(grid['size']) is int and grid['size'] == 512,
++            'Finite source grid required')
++    scan = item['scan']
++    require(isinstance(scan, dict) and not set(scan) - {'county', 'year'} and
++            ('county' not in scan or isinstance(scan['county'], str)) and
++            ('year' not in scan or integer(scan['year'], 1, 9999)), 'Primitive survey facts required')
++    require(type(item['real_facade_photo_colors_applied']) is int and item['real_facade_photo_colors_applied'] == 0 and
++            item['client_visual_verified'] is False and item['privacy_audit'] == PRIVACY,
++            'Unsupported appearance/visual/privacy claim')
++    if schema == SCHEMA_V2:
++        if quality == 'classified-scan-points':
++            require(item['roof_source_cells'] == 0 and scan == {}, 'Point-only data cannot claim paired roof surfaces')
++            validate_point_evidence(item['point_evidence'], frame)
++            require({key: item['point_evidence']['grid'][key] for key in ('west', 'north', 'size')} == grid,
++                    'Point and entry grids differ')
++            require(isinstance(frame, dict) and finite(frame.get('west')) and finite(frame.get('north')) and
++                    grid['west'] == frame['west'] + item['world_offset_xz'][0] and
++                    grid['north'] == frame['north'] - item['world_offset_xz'][1],
++                    'Point source grid must match the canonical tile position')
++        else:
++            require(item['point_evidence'] is None, 'Legacy classes must not borrow point-only evidence')
++
++
++def should_replace(old, candidate):
++    require(isinstance(old, str) and isinstance(candidate, str) and old in FEATURES and candidate in FEATURES,
++            'Unsupported index quality class')
++    # Paired roofs and point-only observations are incomparable. Preserve either
++    # rather than discarding one kind of evidence during an apparent upgrade.
++    return FEATURES[old] <= FEATURES[candidate]
+--- /dev/null
++++ b/scripts/point_archive_evidence.py
+@@ -0,0 +1,145 @@
++"""Read-only admission of the existing point-only EPT profile; no geometry synthesis."""
++import gzip
++import hashlib
++import io
++import json
++from pathlib import Path
++import zlib
++
++import nbtlib
++import numpy as np
++
++from generated_tile_schema import require, integer, checksum, validate_point_evidence
++from point_geometry import voxelize
++from region_expansion import records, sha
++
++
++def occupied_point_cells(raw, cells):
++    """Check every admitted observed voxel against the actual generated blocks."""
++    grouped = {}
++    for x, y, z in cells:
++        grouped.setdefault((int(x) // 16, int(z) // 16), []).append((int(x), int(y), int(z)))
++    chunks = records(raw)
++    air = {'minecraft:air', 'minecraft:cave_air', 'minecraft:void_air', 'minecraft:water', 'minecraft:lava'}
++    for (cx, cz), values in grouped.items():
++        slot = cz * 32 + cx
++        require(slot in chunks, 'Observed point chunk absent')
++        record = chunks[slot][0]
++        payload = record[5:]
++        decoded = zlib.decompress(payload) if record[4] == 2 else gzip.decompress(payload) if record[4] == 1 else payload
++        tag = nbtlib.File.parse(io.BytesIO(decoded))
++        sections = {int(section['Y']): section for section in tag.get('sections', [])}
++        for x, y, z in values:
++            require(y // 16 in sections, 'Observed point section absent')
++            state = sections[y // 16].get('block_states')
++            require(state is not None and len(state['palette']) > 0, 'Observed point block state absent')
++            palette = state['palette']
++            if len(palette) == 1:
++                index = 0
++            else:
++                bits = max(4, (len(palette) - 1).bit_length())
++                position = (y % 16) * 256 + (z % 16) * 16 + x % 16
++                words = state.get('data', [])
++                word = position // (64 // bits)
++                require(word < len(words), 'Observed point packing differs')
++                index = (int(words[word]) & ((1 << 64) - 1)) >> ((position % (64 // bits)) * bits) & ((1 << bits) - 1)
++            require(index < len(palette) and str(palette[index]['Name']) not in air,
++                    'Observed point voxel missing from generated region')
++
++
++def point_only_evidence(root, world, meta, proof, frame, raw):
++    root, world = Path(root), Path(world)
++    require(proof.get('raw_points_acquired') is True and proof.get('facade_measured') is False and
++            proof.get('vertical_check_reference') == 'LQ terrain; absolute vertical datum unverified',
++            'Explicit point-only receipt and datum limitation required')
++    report = meta.get('point_geometry_source')
++    require(isinstance(report, dict) and report.get('extrusion') is False and report.get('llm_used') is False and
++            meta.get('building_geometry') == 'Observed 3D point voxels; no heightfield extrusion',
++            'Point-only geometry must remain observed voxels, without inferred extrusion')
++    source = report.get('source_manifest')
++    require(isinstance(source, dict) and source.get('schema') == 'earthcraft-classified-ept-building-crop-v1' and
++            source == meta.get('source', {}).get('classified_point_receipt'), 'Frozen point source receipt differs')
++    require(integer(source.get('classified_class6_points'), 1) and
++            source['classified_class6_points'] == source.get('building_points') and
++            type(source.get('associated_class1_points')) is int and source['associated_class1_points'] == 0 and
++            source.get('point_admission') == 'Provider class 6 only', 'Direct class-6 source counts differ')
++    assets = source.get('assets')
++    require(isinstance(assets, list) and assets and
++            all(isinstance(asset, dict) and isinstance(asset.get('key'), str) and asset['key'] and
++                checksum(asset.get('sha256')) and integer(asset.get('points')) and integer(asset.get('building_points_in_crop')) and
++                asset['building_points_in_crop'] <= asset['points'] and
++                type(asset.get('associated_class1_points')) is int and asset['associated_class1_points'] == 0
++                for asset in assets) and len({asset['key'] for asset in assets}) == len(assets) and
++            sum(asset['building_points_in_crop'] for asset in assets) == source['classified_class6_points'],
++            'Original point asset counts differ')
++    project = source.get('project')
++    require(isinstance(project, str) and project and project not in {'.', '..'} and '/' not in project and '\\' not in project,
++            'Task-scoped public point project required')
++    crop = root / 'point-only-crops' / project
++    require(crop.resolve().is_relative_to((root / 'point-only-crops').resolve()), 'Point source outside task crop')
++    files = [crop / 'manifest.json', crop / 'points.npz', world / 'point-geometry.json',
++             world / 'point-voxels.npy', world / 'block-verification.json']
++    require(all(path.is_file() and not path.is_symlink() for path in files) and
++            not any(parent.is_symlink() for path in files for parent in path.parents), 'Frozen regular point evidence required')
++    require(json.loads(files[0].read_text()) == source and sha(files[1]) == source.get('points_sha256') and
++            json.loads(files[2].read_text()) == report, 'Point evidence bytes changed')
++    grid = {key: meta['source'][key] for key in ('crs', 'west', 'north', 'size')}
++    require(source.get('grid') == grid and source.get('output_horizontal_crs') == frame.get('crs') and
++            meta.get('vertical_offset_m') == frame.get('vertical_offset_m'), 'Point/world coordinates differ')
++    with np.load(files[1], allow_pickle=False) as data:
++        require(data.files == ['xyz'], 'Canonical EPT point array required')
++        xyz = data['xyz']
++    cells = np.load(files[3], allow_pickle=False)
++    require(xyz.ndim == 2 and xyz.shape[1] == 3 and np.issubdtype(xyz.dtype, np.floating) and np.isfinite(xyz).all(),
++            'Finite acquired point coordinates required')
++    require(cells.ndim == 2 and cells.shape[1] == 3 and np.issubdtype(cells.dtype, np.integer) and
++            0 < len(cells) <= 2_000_000 and len(np.unique(cells, axis=0)) == len(cells), 'Actual unique point voxels required')
++    require(len(xyz) == source.get('building_points') and integer(report.get('occupied_voxels'), 1, 2_000_000) and
++            len(cells) == report['occupied_voxels'],
++            'Point/voxel count differs from arrays')
++    require(np.all((cells[:, 0] >= 0) & (cells[:, 0] < 512) & (cells[:, 2] >= 0) & (cells[:, 2] < 512) &
++                   (cells[:, 1] >= frame.get('dimension_min_y', -64)) &
++                   (cells[:, 1] < frame.get('dimension_min_y', -64) + frame.get('dimension_height', 1024))),
++            'Observed voxels exceed original world bounds')
++    observed = voxelize(xyz, meta['source'], meta['vertical_offset_m'])
++    # voxelize returns lexicographically sorted unique rows. Structured views
++    # retain numeric signed-coordinate order without a large Python tuple set.
++    row_type = np.dtype([(axis, observed.dtype) for axis in ('x', 'y', 'z')])
++    observed_rows = np.ascontiguousarray(observed).view(row_type).reshape(-1)
++    cell_rows = np.ascontiguousarray(cells.astype(observed.dtype, copy=False)).view(row_type).reshape(-1)
++    positions = np.searchsorted(observed_rows, cell_rows)
++    require((positions < len(observed_rows)).all() and np.array_equal(observed_rows[positions], cell_rows),
++            'Generated voxel lacks acquired point observation')
++    del xyz, observed, observed_rows, cell_rows, positions
++    checks = json.loads(files[4].read_text())
++    native_chunks = len(records(raw))
++    require(isinstance(checks, dict) and
++            set(checks) == {'native_chunks', 'ground_support_cells', 'heightmap_cells', 'safe_spawn',
++                           'sampled_roof_cells', 'observed_3d_voxels', 'derived_building_cells',
++                           'classified_road_ground_cells', 'top_y_range', 'game_load_verified', 'appearance_verified'} and
++            checks == proof.get('checks') and integer(checks['native_chunks'], 1, 1024) and
++            checks['native_chunks'] == native_chunks and integer(checks['observed_3d_voxels'], 1, 2_000_000) and
++            checks['observed_3d_voxels'] == len(cells) and
++            integer(checks['ground_support_cells']) and checks['ground_support_cells'] == native_chunks * 256 and
++            integer(checks['heightmap_cells']) and checks['heightmap_cells'] == native_chunks * 256 and
++            integer(checks['sampled_roof_cells']) and checks['sampled_roof_cells'] == 0 and
++            integer(checks['derived_building_cells']) and checks['derived_building_cells'] == 0 and
++            integer(checks['classified_road_ground_cells'], 0, 512 ** 2) and
++            type(checks['safe_spawn']) is bool and checks['game_load_verified'] is False and
++            checks['appearance_verified'] is False and isinstance(checks['top_y_range'], list) and
++            len(checks['top_y_range']) == 2 and all(type(y) is int for y in checks['top_y_range']) and
++            frame.get('dimension_min_y', -64) <= checks['top_y_range'][0] <= checks['top_y_range'][1] <
++            frame.get('dimension_min_y', -64) + frame.get('dimension_height', 1024),
++            'Native point readback receipt differs')
++    occupied_point_cells(raw, cells)
++    value = {key: source[key] for key in ['project', 'points_sha256', 'building_points', 'retained_classes',
++             'output_horizontal_crs', 'grid', 'vertical_reference', 'ground_reference', 'ground_comparison_points',
++             'median_absolute_ground_residual_m', 'all_intersecting_octree_levels_acquired', 'downsampling',
++             'independent_accuracy_verified', 'facade_colour_measured']}
++    value.update(schema='earthcraft.point-only-evidence.v1', source_manifest_sha256=sha(files[0]),
++                 point_geometry_sha256=sha(files[2]), point_voxels_sha256=sha(files[3]),
++                 block_verification_sha256=sha(files[4]),
++                 occupied_voxels=len(cells), datum_status='absolute_vertical_datum_unverified',
++                 source_asset_hashes=[asset['sha256'] for asset in source.get('assets', [])])
++    validate_point_evidence(value, frame)
++    return value
+--- a/tests/test_hf_archive_batching.py
++++ b/tests/test_hf_archive_batching.py
+@@ -172,9 +172,11 @@
+         other_sha = hashlib.sha256(b'other verified generated shard').hexdigest()
+         other_path = 'generated-tiles/v1/shards/'+other_sha[:2]+'/'+other_sha+'.tar'
+         def before(kw):
++            other_entry = dict(self.record['entries'][0], tile='9_9', world_offset_xz=[4608,4608],
++                               region_file='r.9.9.mca', shard_sha256=other_sha)
+             other = {'schema':'earthcraft.generated-tile-index.v1', 'plan_sha256':self.record['plan_sha256'],
+                      'frame':self.fixture.frame, 'shards':{other_sha:{'path':other_path,'sha256':other_sha,'bytes':len(b'other verified generated shard')}},
+-                     'tiles':{'9_9':{'quality':'LQ','shard_sha256':other_sha}}}
++                     'tiles':{'9_9':other_entry}}
+             self.hub.head='b'*40
+             self.hub.files={other_path:b'other verified generated shard', INDEX:json.dumps(other).encode()}
+             self.hub.snapshots[self.hub.head]=copy.copy(self.hub.files)
+--- /dev/null
++++ b/tests/test_generated_tile_contract.py
+@@ -0,0 +1,300 @@
++"""Offline contract repair tests. All source observations and Hub objects are fixtures."""
++import copy
++import gzip
++import hashlib
++import io
++import json
++import importlib.util
++from pathlib import Path
++import sys
++import tarfile
++import unittest
++from unittest.mock import Mock, patch
++
++import numpy as np
++import nbtlib as n
++import test_regional_hf_tiles as base
++from test_hf_archive_batching import FakeHub, INDEX, REPO
++from generated_tile_schema import SCHEMA, SCHEMA_V2, should_replace
++from regional_hf_tiles import export
++from region_expansion import sha
++from upload_generated_tiles import validate, upload
++
++
++def alter_manifest(raw, transform):
++    out = io.BytesIO()
++    with tarfile.open(fileobj=io.BytesIO(raw)) as original, tarfile.open(fileobj=out, mode='w') as changed:
++        for member in original.getmembers():
++            body = original.extractfile(member).read()
++            if member.name == 'manifest.json':
++                manifest = json.loads(body); transform(manifest)
++                body = json.dumps(manifest, sort_keys=True).encode()
++            item = tarfile.TarInfo(member.name); item.size = len(body); item.mode = 0o644
++            changed.addfile(item, io.BytesIO(body))
++    return out.getvalue()
++
++
++class StrictMetadataTests(unittest.TestCase):
++    def setUp(self):
++        self.fixture = base.GeneratedArchiveTests(); self.fixture.setUp()
++        self.addCleanup(self.fixture.doCleanups)
++        self.record = self.fixture.pack()
++        self.raw = Path(self.record['archive']).read_bytes()
++
++    def reject(self, transform):
++        raw = alter_manifest(self.raw, transform)
++        api = Mock()
++        with patch.dict(sys.modules, {'huggingface_hub': api}):
++            with self.assertRaises(ValueError):
++                upload(io.BytesIO(raw), hashlib.sha256(raw).hexdigest(), self.record['plan_sha256'],
++                       REPO, self.fixture.root/'must-not-exist.json')
++        self.assertEqual(api.mock_calls, [])
++        self.assertFalse((self.fixture.root/'must-not-exist.json').exists())
++
++    def test_invalid_metadata_stops_before_client_initialization(self):
++        cases = [('quality', 'QUALITY_SCHEMA_MUTATION_FIXTURE'), ('quality', []),
++                 ('real_facade_photo_colors_applied', False), ('roof_source_cells', -1),
++                 ('chunks', True), ('chunks', 1025), ('receipt_sha256', 'not-a-hash'),
++                 ('world_offset_xz', None), ('source_grid', {'west': float('nan'), 'north': 33, 'size': 512}),
++                 ('privacy_audit', 'unsupported privacy claim'), ('scan', {'year': True})]
++        for key, value in cases:
++            with self.subTest(key=key, value=value):
++                self.reject(lambda m: m['entries'][0].update({key: value}))
++
++    def test_point_only_requires_versioned_evidence(self):
++        self.reject(lambda m: m['entries'][0].update(quality='classified-scan-points'))
++        def unsupported(m):
++            m['schema'] = SCHEMA_V2
++            m['entries'][0].update(quality='classified-scan-points', point_evidence=None)
++        self.reject(unsupported)
++
++    def test_roof_count_is_not_silently_coerced_from_false_or_float(self):
++        for value in (False, 2.5):
++            proof = json.loads(self.fixture.evidence.read_text()); proof['roof_source_cells'] = value
++            self.fixture.evidence.write_text(json.dumps(proof)); self.fixture.refresh_receipt()
++            with self.assertRaisesRegex(ValueError, 'counts'):
++                self.fixture.pack()
++
++    def test_quality_upgrade_relation_preserves_incomparable_evidence(self):
++        self.assertFalse(should_replace('scan-roof', 'classified-scan-points'))
++        self.assertFalse(should_replace('classified-scan-points', 'scan-roof'))
++        for old in ('scan-roof', 'classified-scan-points'):
++            self.assertTrue(should_replace(old, 'scan-points-and-roof'))
++        for quality in ('scan-roof', 'classified-scan-points', 'scan-points-and-roof'):
++            self.assertTrue(should_replace('LQ', quality))
++            self.assertFalse(should_replace(quality, 'LQ'))
++
++    def test_legacy_export_remains_byte_identical(self):
++        prior = Path(__file__).resolve().parents[2]/'prior/scripts/regional_hf_tiles.py'
++        spec = importlib.util.spec_from_file_location('frozen_prior_exporter',prior)
++        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
++        old = module.export(self.fixture.control,self.fixture.bulk,self.fixture.root/'prior-out',{},8)
++        self.assertEqual(old['sha256'],self.record['sha256'])
++        self.assertEqual(Path(old['archive']).read_bytes(),self.raw)
++
++
++class PointOnlyFixtureTests(unittest.TestCase):
++    def setUp(self):
++        self.fixture = base.GeneratedArchiveTests(); self.fixture.setUp()
++        self.addCleanup(self.fixture.doCleanups)
++        f = self.fixture
++        f.frame.update(crs='EPSG:26916', dimension_min_y=-64, dimension_height=1024)
++        (f.control/'plan.json').write_text(json.dumps({'frame': f.frame}))
++        self.crop = f.world.parent/'point-only-crops'/'offline-project'; self.crop.mkdir(parents=True)
++        self.xyz = np.array([[-543.75,32.75,120.25],[-542.75,32.75,121.25]], dtype=np.float64)
++        self.cells = np.array([[0,4,0],[1,5,0]], dtype=np.int32)
++        np.savez_compressed(self.crop/'points.npz', xyz=self.xyz)
++        np.save(f.world/'point-voxels.npy', self.cells)
++        grid = {'crs': 'EPSG:26916', 'west': -544, 'north': 33, 'size': 512}
++        self.source = {'schema':'earthcraft-classified-ept-building-crop-v1', 'project':'offline-project',
++            'output_horizontal_crs':grid['crs'], 'grid':grid, 'points_sha256':sha(self.crop/'points.npz'),
++            'assets':[{'key':'offline-fixture.laz','sha256':'a'*64,'points':22,
++                       'building_points_in_crop':2,'associated_class1_points':0}],
++            'building_points':2, 'all_intersecting_octree_levels_acquired':True, 'downsampling':False,
++            'retained_classes':[6], 'classified_class6_points':2, 'associated_class1_points':0,
++            'point_admission':'Provider class 6 only',
++            'ground_reference':'LQ AWS terrain; absolute scan datum unverified',
++            'vertical_reference':'Original EPT Z; metre interpretation checked against LQ AWS terrain; absolute scan datum unverified',
++            'ground_comparison_points':20, 'median_absolute_ground_residual_m':0.5,
++            'independent_accuracy_verified':False, 'facade_colour_measured':False}
++        self.report = {'source_manifest':self.source, 'occupied_voxels':2, 'method':'Direct provider class-6 voxels',
++                       'extrusion':False, 'llm_used':False}
++        self.checks = {'native_chunks':1, 'ground_support_cells':256, 'heightmap_cells':256, 'safe_spawn':True,
++                       'sampled_roof_cells':0, 'observed_3d_voxels':2, 'derived_building_cells':0,
++                       'classified_road_ground_cells':0, 'top_y_range':[4,5],
++                       'game_load_verified':False, 'appearance_verified':False}
++        words = np.zeros(256, dtype=np.uint64)
++        for x,y,z in self.cells:
++            position = int(y)*256+int(z)*16+int(x)
++            words[position//16] |= np.uint64(1) << np.uint64((position%16)*4)
++        palette = n.List[n.Compound]([n.Compound({'Name':n.String(name)})
++                    for name in ('minecraft:air','minecraft:stone_bricks')])
++        f.tag['sections'] = n.List[n.Compound]([n.Compound({'Y':n.Byte(0),
++                    'block_states':n.Compound({'palette':palette, 'data':n.LongArray(words.view(np.int64))})})])
++        f.meta.update(source=dict(grid, classified_point_receipt=self.source), vertical_offset_m=-116,
++                      building_geometry='Observed 3D point voxels; no heightfield extrusion', point_geometry_source=self.report)
++        (f.world/'earthcraft.json').write_text(json.dumps(f.meta))
++        f.write_region()
++        self.proof = json.loads(f.evidence.read_text())
++        self.proof.update(quality='classified-scan-points', raw_points_acquired=True, facade_measured=False,
++                          vertical_check_reference='LQ terrain; absolute vertical datum unverified', checks=self.checks)
++        self.freeze()
++
++    def freeze(self):
++        f = self.fixture
++        (self.crop/'manifest.json').write_text(json.dumps(self.source))
++        (f.world/'point-geometry.json').write_text(json.dumps(self.report))
++        (f.world/'block-verification.json').write_text(json.dumps(self.checks))
++        (f.world/'earthcraft.json').write_text(json.dumps(f.meta))
++        self.proof['world_manifest_sha256'] = sha(f.world/'earthcraft.json')
++        f.evidence.write_text(json.dumps(self.proof)); f.refresh_receipt()
++
++    def pack(self): return self.fixture.pack()
++
++    def test_actual_fixture_voxels_admitted_without_claiming_verified_datum_or_appearance(self):
++        result = self.pack(); manifest = validate(Path(result['archive']),result['sha256'],result['plan_sha256'])
++        self.assertEqual(manifest['schema'],SCHEMA_V2)
++        entry = manifest['entries'][0]; evidence = entry['point_evidence']
++        self.assertEqual(evidence['building_points'],2); self.assertEqual(evidence['occupied_voxels'],2)
++        self.assertEqual(evidence['datum_status'],'absolute_vertical_datum_unverified')
++        self.assertFalse(evidence['independent_accuracy_verified']); self.assertFalse(evidence['facade_colour_measured'])
++        self.assertEqual(entry['roof_source_cells'],0); self.assertEqual(entry['scan'],{})
++        self.assertNotIn(str(self.fixture.root),json.dumps(manifest))
++        self.assertNotIn('offline-fixture.laz',json.dumps(manifest))
++
++    def test_point_array_hash_must_match(self):
++        np.savez_compressed(self.crop/'points.npz', xyz=self.xyz + 1)
++        with self.assertRaisesRegex(ValueError,'bytes changed'): self.pack()
++
++    def test_generated_cell_requires_actual_point_and_actual_block(self):
++        np.save(self.fixture.world/'point-voxels.npy', np.array([[2,4,0],[1,5,0]],dtype=np.int32))
++        with self.assertRaisesRegex(ValueError,'acquired point'): self.pack()
++        np.save(self.fixture.world/'point-voxels.npy', self.cells)
++        self.fixture.tag['sections'][0]['block_states']['data'] = n.LongArray(np.zeros(256,dtype=np.int64))
++        self.fixture.write_region()
++        replacement = json.loads(self.fixture.evidence.read_text())
++        self.proof['regions'] = replacement['regions']; self.freeze()
++        with self.assertRaisesRegex(ValueError,'voxel missing'): self.pack()
++
++    def test_extrusion_and_native_check_mismatch_are_rejected(self):
++        self.report['extrusion'] = True; self.freeze()
++        with self.assertRaisesRegex(ValueError,'inferred extrusion'): self.pack()
++        self.report['extrusion'] = False; self.freeze()
++        (self.fixture.world/'block-verification.json').write_text('{}')
++        with self.assertRaisesRegex(ValueError,'readback receipt'): self.pack()
++
++    def test_native_chunk_count_and_zero_derived_cells_are_required(self):
++        for key, value in [('native_chunks',2),('derived_building_cells',1),('observed_3d_voxels',True),
++                           ('game_load_verified',True),('sampled_roof_cells',1)]:
++            old=self.checks[key];self.checks[key]=value;self.freeze()
++            with self.subTest(key=key):
++                with self.assertRaisesRegex(ValueError,'readback receipt'):self.pack()
++            self.checks[key]=old;self.freeze()
++
++    def test_false_acquisition_and_accuracy_claims_are_rejected(self):
++        for key, value in [('downsampling',True),('independent_accuracy_verified',True),
++                           ('facade_colour_measured',True),('all_intersecting_octree_levels_acquired',False),
++                           ('ground_comparison_points',19),('median_absolute_ground_residual_m',3),
++                           ('retained_classes',[6.0])]:
++            old = copy.deepcopy(self.source[key]); self.source[key] = value; self.freeze()
++            with self.subTest(key=key):
++                with self.assertRaises(ValueError): self.pack()
++            self.source[key] = old; self.freeze()
++
++    def test_source_class_and_asset_counts_must_agree_with_arrays(self):
++        self.source['classified_class6_points']=3;self.freeze()
++        with self.assertRaisesRegex(ValueError,'source counts'):self.pack()
++        self.source['classified_class6_points']=2
++        self.source['assets'][0]['building_points_in_crop']=1;self.freeze()
++        with self.assertRaisesRegex(ValueError,'asset counts'):self.pack()
++
++    def test_source_grid_and_vertical_reference_cannot_contradict_canonical_frame(self):
++        self.source['vertical_reference']='Independently surveyed verified datum';self.freeze()
++        with self.assertRaisesRegex(ValueError,'datum uncertainty'):self.pack()
++        self.source['vertical_reference']='Original EPT Z; metre interpretation checked against '+self.source['ground_reference']
++        self.source['grid']['west']-=1;self.fixture.meta['source']['west']-=1
++        np.savez_compressed(self.crop/'points.npz', xyz=self.xyz-np.array([1.,0.,0.]))
++        self.source['points_sha256']=sha(self.crop/'points.npz');self.freeze()
++        with self.assertRaisesRegex(ValueError,'canonical tile position'):self.pack()
++
++    def test_upload_fixture_upgrades_index_preserving_legacy_shards_and_preventing_downgrades(self):
++        f = self.fixture; hub = FakeHub(f.root)
++        point = self.pack(); point_raw = Path(point['archive']).read_bytes()
++        # A legacy schema fixture is constructed offline, using identical region bytes.
++        def legacy(m):
++            m['schema']=SCHEMA; entry=m['entries'][0]; entry.pop('point_evidence'); entry['quality']='LQ'
++        legacy_raw = alter_manifest(point_raw,legacy); legacy_sha = hashlib.sha256(legacy_raw).hexdigest()
++        with patch.dict(sys.modules, {'huggingface_hub': hub.module()}):
++            upload(io.BytesIO(legacy_raw),legacy_sha,point['plan_sha256'],REPO,f.root/'legacy-proof.json')
++            old = copy.deepcopy(json.loads(hub.files[INDEX]))
++            upload(io.BytesIO(point_raw),point['sha256'],point['plan_sha256'],REPO,f.root/'point-proof.json')
++            upload(io.BytesIO(point_raw),point['sha256'],point['plan_sha256'],REPO,f.root/'point-proof.json')
++            upload(io.BytesIO(legacy_raw),legacy_sha,point['plan_sha256'],REPO,f.root/'legacy-proof.json')
++        index = json.loads(hub.files[INDEX])
++        self.assertEqual(index['schema'],'earthcraft.generated-tile-index.v2')
++        self.assertEqual(index['shards'][legacy_sha],old['shards'][legacy_sha])
++        self.assertEqual(index['tiles']['-1_0']['quality'],'classified-scan-points')
++        self.assertEqual(len(hub.commits),2)
++
++    def test_incomparable_quality_uploads_preserve_prior_indexed_representation(self):
++        point=self.pack();point_raw=Path(point['archive']).read_bytes()
++        # Synthetic metadata exercises index replacement, not measured roof accuracy.
++        def roof(m):
++            m['schema']=SCHEMA;entry=m['entries'][0];entry.pop('point_evidence')
++            entry.update(quality='scan-roof',roof_source_cells=1,scan={'county':'Cook','year':2022})
++        roof_raw=alter_manifest(point_raw,roof)
++        for first,second in ((roof_raw,point_raw),(point_raw,roof_raw)):
++            hub=FakeHub(self.fixture.root)
++            with self.subTest(first_quality='roof' if first is roof_raw else 'point'):
++                with patch.dict(sys.modules,{'huggingface_hub':hub.module()}):
++                    upload(io.BytesIO(first),hashlib.sha256(first).hexdigest(),point['plan_sha256'],REPO,
++                           self.fixture.root/'first-fixture-proof.json')
++                    old=copy.deepcopy(json.loads(hub.files[INDEX])['tiles']['-1_0'])
++                    upload(io.BytesIO(second),hashlib.sha256(second).hexdigest(),point['plan_sha256'],REPO,
++                           self.fixture.root/'second-fixture-proof.json')
++                self.assertEqual(json.loads(hub.files[INDEX])['tiles']['-1_0'],old)
++
++    def test_mixed_batch_legacy_entry_has_no_borrowed_point_evidence(self):
++        import shutil
++        import sqlite3
++        f=self.fixture; other=f.bulk/'tiles/-2_0/world'; shutil.copytree(f.world,other)
++        meta=copy.deepcopy(f.meta); meta['world_offset_xz']=[-1024,0]
++        (other/'earthcraft.json').write_text(json.dumps(meta))
++        tag=copy.deepcopy(f.tag);tag['xPos']=n.Int(-64)
++        data=io.BytesIO();tag.write(data)
++        import zlib
++        from region_expansion import encode
++        compressed=zlib.compress(data.getvalue())
++        raw=encode({0:((len(compressed)+1).to_bytes(4,'big')+b'\x02'+compressed,b'\0'*4)})
++        region=other/'region/r.-2.0.mca';region.write_bytes(raw)
++        proof=other.parent/'geometry-receipt.json'
++        proof.write_text(json.dumps({'tile':'-2_0','quality':'LQ','result':'pass','world':str(other),
++             'world_manifest_sha256':sha(other/'earthcraft.json'),'regions':{region.name:sha(region)}}))
++        with sqlite3.connect(f.control/'jobs.sqlite') as db:
++            db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?)',('-2_0',1,str(proof),sha(proof),1,'complete'))
++        result=self.pack(); manifest=validate(Path(result['archive']),result['sha256'],result['plan_sha256'])
++        self.assertEqual(manifest['schema'],SCHEMA_V2)
++        legacy=next(entry for entry in manifest['entries'] if entry['quality']=='LQ')
++        self.assertIsNone(legacy['point_evidence'])
++        hub=FakeHub(f.root)
++        with patch.dict(sys.modules,{'huggingface_hub':hub.module()}):
++            upload(Path(result['archive']),result['sha256'],result['plan_sha256'],REPO,f.root/'mixed-proof.json')
++        index=json.loads(hub.files[INDEX])
++        self.assertEqual(set(index['tiles']),{'-1_0','-2_0'})
++        self.assertIsNone(index['tiles']['-2_0']['point_evidence'])
++
++    def test_measured_datum_and_borrowed_point_evidence_are_rejected_before_client(self):
++        point = self.pack(); raw = Path(point['archive']).read_bytes()
++        for mode in ('datum','borrowed'):
++            def mutation(m):
++                if mode == 'datum': m['entries'][0]['point_evidence']['datum_status']='independently_verified'
++                else: m['entries'][0]['quality']='scan-roof'
++            changed = alter_manifest(raw,mutation); api=Mock()
++            with self.subTest(mode=mode), patch.dict(sys.modules, {'huggingface_hub':api}):
++                with self.assertRaises(ValueError):
++                    upload(io.BytesIO(changed),hashlib.sha256(changed).hexdigest(),point['plan_sha256'],REPO,
++                           self.fixture.root/'must-not-exist.json')
++            self.assertEqual(api.mock_calls,[])
++
++
++if __name__ == '__main__': unittest.main()
