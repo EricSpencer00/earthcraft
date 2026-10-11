@@ -22,7 +22,7 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   $('panel-toggle').setAttribute('aria-expanded',String(open));
   for(const id of ['world','cell','about']){
     $(id+'-panel').hidden=id!==section;
-    $('tab-'+id).setAttribute('aria-pressed',String(id===section));
+    if(id!=='about')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
   if(changed)document.querySelector('.panel-content').scrollTop=0;
 }
@@ -67,7 +67,7 @@ function fitGeography(){
   if(!geoMap||!geoBounds)return;
   const desktop=innerWidth>=1024,panel=desktop&&document.body.dataset.panel==='open';
   geoMap.fitBounds([[geoBounds[0],geoBounds[1]],[geoBounds[2],geoBounds[3]]],{
-    padding:{top:innerWidth>1200?150:230,bottom:140,left:panel?$('details-panel').getBoundingClientRect().right+24:24,right:72},duration:0,maxZoom:14
+    padding:{top:document.querySelector('.map-tools').getBoundingClientRect().height+24,bottom:110,left:panel?$('details-panel').getBoundingClientRect().right+24:24,right:72},duration:0,maxZoom:14
   });
   for(const id of Object.keys(places))$('place-'+id).setAttribute('aria-pressed','false');
   updateZoomButtons();scheduleDraw();
@@ -263,13 +263,14 @@ function renderSnapshot(){
   $('geometry-label').textContent=world?'Saved-world cells':'Terrain & buildings';
   $('sources-label').textContent=world?'Tiles with scan upgrades':'Source data ready';
   $('appearance-label').textContent=world?'Photo-colored cells':'Surface detail';
-  $('record-note').textContent=world?'Save records include preserved chunks; current block fill is unverified. Scan upgrades may cover part of a tile. Street-photo coloring is still pending.':'Generated cells still need a Minecraft check. Surface detail is recorded separately.';
+  $('record-note').textContent=world?'Includes preserved chunks; current block fill is unverified. Scan upgrades may cover part of a tile.':'Generated cells still need a Minecraft check.';
+  $('auto-control').hidden=snapshot.source==='public';
   $('recovery').textContent=snapshot.source==='local'
     ?'Source files are reused between tiles. Interrupted work resumes from its last checkpoint.'
     :'';
   const stageNames={sources:'Source data',geometry:'Terrain & buildings',appearance:'Surface detail',game_verify:'Minecraft check'};
   $('log').textContent=Object.entries(local.stages||{}).map(([stage,counts])=>(stageNames[stage]||stateLabel(stage))+': '+(Object.entries(counts).map(([state,count])=>stateLabel(state)+' '+number(count)).join(', ')||'No jobs')).join('\n')||'No stage counts recorded';
-  $('footer-state').textContent='Last read '+new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+  $('footer-state').textContent=new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
   $('warning').hidden=true;
 }
 
@@ -671,7 +672,7 @@ $('zoom-reset').onclick=()=>{if(geographic())fitGeography();else{zoom=1;updateZo
 $('panel-toggle').onclick=()=>setPanel(document.body.dataset.panel!=='open');
 $('panel-close').onclick=()=>{setPanel(false);$('panel-toggle').focus();};
 $('about-open').onclick=()=>setPanel(true,'about');
-for(const id of ['world','cell','about'])$('tab-'+id).onclick=()=>setPanel(true,id);
+for(const id of ['world','cell'])$('tab-'+id).onclick=()=>setPanel(true,id);
 for(const id of ['build','appearance'])$('layer-'+id).onclick=()=>setLayer(id);
 for(const id of Object.keys(places))$('place-'+id).onclick=()=>goToPlace(id);
 $('clear-selection').onclick=()=>{clearSelection();$('map').focus();};
@@ -683,8 +684,8 @@ document.fonts.ready.then(()=>{if(atlas)drawAtlas();});
 const localHost=['localhost','127.0.0.1','[::1]'].includes(location.hostname);
 $('area').value=new URLSearchParams(location.search).get('view')==='published'?'published':'world';
 if(!localHost)for(const option of $('area').options)if(!['world','published'].includes(option.value))option.disabled=true;
-setPanel(innerWidth>=1024,'world');
+setPanel(false,'world');
 initializeBasemap();
 refresh();
 let ticks=0;
-setInterval(()=>{ticks+=1;if($('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
+setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);

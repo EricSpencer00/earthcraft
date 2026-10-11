@@ -46,7 +46,7 @@ async function ready(view='published'){
   await expect(page.locator('#connection')).toHaveText('Published snapshot');
   await expect(page.locator('#mapwrap')).toHaveAttribute('aria-busy','false');
   if(await page.locator('#panel-toggle').getAttribute('aria-expanded')==='false')await page.locator('#panel-toggle').click();
-  await page.getByLabel('Auto-refresh').uncheck();
+  await expect(page.locator('#auto-control')).toBeHidden();
   if(page.viewportSize().width<1024)await page.locator('#panel-close').click();
   await page.evaluate(()=>document.fonts.ready);
   await expect(page.locator('body')).toHaveAttribute('data-map','geographic');
