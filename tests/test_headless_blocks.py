@@ -108,8 +108,8 @@ class HeadlessTests(unittest.TestCase):
             self.assertEqual(page['actual_non_air_blocks'],512*512*16)
             html=(root/'site/index.html').read_text()
             self.assertIn('4,194,304',html);self.assertIn('clipped 32-metre',html)
-            self.assertIn('checks 1 existing archived tile;',html)
-            self.assertIn('not a new generation or installation',html)
+            self.assertIn('1 archived 512 m tile · 1,024 chunks',html)
+            self.assertIn('archive generation and installation dates are not established',html)
             self.assertEqual({p.name for p in (root/'site').iterdir()},
                              {'index.html','style.css','report.json','blocks.png','topdown.png','fonts'})
             fonts=root/'site/fonts'

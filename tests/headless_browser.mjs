@@ -23,10 +23,15 @@ try{
   const context=await browser.newContext();const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   for(const [width,height] of [[1440,1000],[390,844],[320,720]]){
     await page.setViewportSize({width,height});await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    await expect(page.getByRole('heading',{level:1})).toHaveText('Built from stored blocks.');
+    await expect(page.getByRole('heading',{level:1})).toHaveText('Block evidence');
     await expect(page.locator('.metrics')).toContainText(report.source.actual_chunks.toLocaleString('en-US'));
     await expect(page.locator('body')).toContainText('Absolute vertical datum');
     await expect(page.locator('body')).toContainText('illustrative');
+    const audit=page.locator('details.audit');
+    await expect(audit).not.toHaveAttribute('open','');
+    await audit.getByText('Audit details',{exact:true}).focus();
+    await audit.getByText('Audit details',{exact:true}).press('Enter');
+    await expect(audit).toHaveAttribute('open','');
     await page.waitForFunction(()=>[...document.images].every(image=>image.complete&&image.naturalWidth>0));
     await page.evaluate(()=>document.fonts.ready);
     const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
