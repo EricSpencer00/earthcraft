@@ -1,13 +1,14 @@
 {
-  "retrieved": "2026-10-02",
+  "retrieved": "2026-10-11",
   "fonts": [
     {
-      "family": "Space Grotesk",
-      "file": "space-grotesk-latin.woff2",
-      "source_url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4C_k3HqU.woff2",
-      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/spacegrotesk/OFL.txt",
-      "sha256": "a0d054c4af557de20afd6ca59f47ab353bcaec49c63ff04b6c9d39d0f8910557",
-      "bytes": 22320
+      "family": "Source Serif 4",
+      "file": "source-serif-4-latin.woff2",
+      "source_url": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kDXr4Y3qwzQ.woff2",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/sourceserif4/OFL.txt",
+      "sha256": "8e38e3fbd74dea20aabe0831ffef04c9f30bf6fc5b99b7a2649be0dd8c6d859c",
+      "bytes": 50952,
+      "retrieved": "2026-10-11"
     },
     {
       "family": "Libre Franklin",
@@ -15,7 +16,8 @@
       "source_url": "https://fonts.gstatic.com/s/librefranklin/v20/jizDREVItHgc8qDIbSTKq4XkRiUf2zcZiVbJ.woff2",
       "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/librefranklin/OFL.txt",
       "sha256": "d21d1545591ddfa2ce9c208879298e9086b1a8dba7c81d50b686c70a259e91e8",
-      "bytes": 29336
+      "bytes": 29336,
+      "retrieved": "2026-10-02"
     }
   ]
 }

@@ -63,7 +63,8 @@ try{
     for(const [name,width,height] of [['world-desktop',1440,1000],['world-phone',390,844]]){
       await page.setViewportSize({width,height});
       await ready('world');
-      await expect(page.locator('#map-title')).toHaveText('Generated world');
+      await expect(page.locator('#map-title')).toHaveText('Saved world');
+      await expect(page.locator('#record-note')).toContainText('current block fill is unverified');
       await expect(page.locator('#grid-size')).toHaveText(snapshot.generated_world.unique_cells.toLocaleString()+' cells');
       await page.locator('#place-elmhurst').click();
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
@@ -98,6 +99,17 @@ try{
     assert(layout.buttons.every(height=>height>=44),`${name}: small touch targets`);
     assert(layout.canvasWidth>0&&layout.canvasHeight>0,`${name}: empty canvas size`);
     assert(layout.attributionVisible,`${name}: missing basemap credits`);
+    await expect(page.locator('.evidence-link')).toBeVisible();
+    await expect(page.locator('.evidence-link')).toHaveAttribute('href','./headless/');
+    await expect(page.locator('#about-open')).toBeVisible();
+    await expect(page.locator('.source-link')).toBeVisible();
+    const coveredControls=await page.evaluate(()=>[...document.querySelectorAll('.site-header a,.site-header button,.place-switch button,.layer-switch button,.toolbar select,.map-controls button')].filter(element=>{
+      const rect=element.getBoundingClientRect();
+      if(!rect.width||!rect.height)return false;
+      const target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);
+      return !target||!element.contains(target);
+    }).map(element=>element.id||element.textContent.trim()));
+    assert.deepEqual(coveredControls,[],`${name}: controls covered by another element`);
     const accessibility=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
     assert.deepEqual(accessibility.violations,[],`${name}: accessibility violations`);
     await capture(name);
@@ -121,6 +133,10 @@ try{
 
   await page.setViewportSize({width:1440,height:1000});
   await ready();
+  await page.locator('.skip-link').focus();
+  await expect(page.locator('.skip-link')).toBeInViewport();
+  await page.locator('.skip-link').press('Enter');
+  await expect(page.locator('#map')).toBeFocused();
   const fitScale=await page.locator('#map-scale').textContent();
   await page.locator('#map').press('ArrowRight');
   await expect(page.locator('#selection-title')).toHaveText(/^Cell /);
