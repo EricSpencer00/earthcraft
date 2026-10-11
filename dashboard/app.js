@@ -67,7 +67,7 @@ function fitGeography(){
   if(!geoMap||!geoBounds)return;
   const desktop=innerWidth>=1024,panel=desktop&&document.body.dataset.panel==='open';
   geoMap.fitBounds([[geoBounds[0],geoBounds[1]],[geoBounds[2],geoBounds[3]]],{
-    padding:{top:innerWidth>1200?150:210,bottom:140,left:panel?340:40,right:80},duration:0,maxZoom:14
+    padding:{top:innerWidth>1200?150:230,bottom:140,left:panel?$('details-panel').getBoundingClientRect().right+24:24,right:72},duration:0,maxZoom:14
   });
   for(const id of Object.keys(places))$('place-'+id).setAttribute('aria-pressed','false');
   updateZoomButtons();scheduleDraw();
@@ -77,7 +77,7 @@ async function initializeBasemap(){
   try{
     maplibre.setWorkerUrl(new URL('./assets/vendor/maplibre/maplibre-gl-worker.mjs',import.meta.url).href);
     maplibre.setWorkerCount(1);
-    geoMap=new maplibre.Map({container:'basemap',style:{version:8,sources:{},layers:[{id:'background',type:'background',paint:{'background-color':'#141c1d'}}]},center:places.chicago.coordinates,zoom:10.5,minZoom:7,maxZoom:18,attributionControl:false,dragRotate:false,pitchWithRotate:false,touchPitch:false,renderWorldCopies:false});
+    geoMap=new maplibre.Map({container:'basemap',style:{version:8,sources:{},layers:[{id:'background',type:'background',paint:{'background-color':'#ecebe3'}}]},center:places.chicago.coordinates,zoom:10.5,minZoom:7,maxZoom:18,attributionControl:false,dragRotate:false,pitchWithRotate:false,touchPitch:false,renderWorldCopies:false});
     geoMap.keyboard.disable();geoMap.touchZoomRotate.disableRotation();
     geoMap.getCanvas().tabIndex=-1;geoMap.getCanvas().setAttribute('aria-hidden','true');
     geoMap.on('move',()=>{scheduleDraw();updateZoomButtons();});
@@ -100,15 +100,15 @@ async function initializeBasemap(){
       $('basemap-state').hidden=false;
       $('basemap-state').textContent='Street map unavailable. Build cells are still shown.';
     });
-    const response=await fetch('https://tiles.openfreemap.org/styles/dark',{signal:AbortSignal.timeout(10000)});
+    const response=await fetch('https://tiles.openfreemap.org/styles/positron',{signal:AbortSignal.timeout(10000)});
     if(!response.ok)throw Error('Basemap unavailable');
     const style=await response.json();
-    // Raise geographic-label contrast underneath the translucent build layer.
+    // MapLibre's style API takes RGB colors; keep geography quiet under build cells.
     for(const layer of style.layers){
-      if(layer.type==='background')layer.paint['background-color']='#141d1d';
-      if(layer.id==='water')layer.paint['fill-color']='#1d2e31';
+      if(layer.type==='background')layer.paint['background-color']='#ecebe3';
+      if(layer.id==='water')layer.paint['fill-color']='#c9dce1';
       if(layer.type==='symbol'&&layer.layout?.['text-field']){
-        layer.paint={...layer.paint,'text-color':layer.id.startsWith('place_')?'#b1c3ba':'#91aaa1','text-halo-color':'#141d1d','text-halo-width':1};
+        layer.paint={...layer.paint,'text-color':layer.id.startsWith('place_')?'#414d47':'#617069','text-halo-color':'#f6f3eb','text-halo-width':1};
       }
     }
     geoMap.setStyle(style);
@@ -260,10 +260,10 @@ function renderSnapshot(){
     $('appearance').textContent=number(world.photo_colored_cells);
     $('rollup').textContent='Saved footprint';
   }
-  $('geometry-label').textContent=world?'Generated cells':'Terrain & buildings';
+  $('geometry-label').textContent=world?'Saved-world cells':'Terrain & buildings';
   $('sources-label').textContent=world?'Tiles with scan upgrades':'Source data ready';
   $('appearance-label').textContent=world?'Photo-colored cells':'Surface detail';
-  $('record-note').textContent=world?'Save records include preserved chunks. Scan upgrades may cover part of a tile. Street-photo coloring is still pending.':'Generated cells still need a Minecraft check. Surface detail is recorded separately.';
+  $('record-note').textContent=world?'Save records include preserved chunks; current block fill is unverified. Scan upgrades may cover part of a tile. Street-photo coloring is still pending.':'Generated cells still need a Minecraft check. Surface detail is recorded separately.';
   $('recovery').textContent=snapshot.source==='local'
     ?'Source files are reused between tiles. Interrupted work resumes from its last checkpoint.'
     :'';
@@ -392,7 +392,7 @@ function renderLegend(isPublished,counts,live){
   $('legend-outside-label').textContent=isPublished?'Unlisted':live?'Not imported':'Outside plan';
   $('legend-queued-label').textContent='Queued';
   $('legend-source-label').textContent='Source ready';
-  $('legend-finished-label').textContent=live?'In Minecraft':'Terrain & buildings';
+  $('legend-finished-label').textContent=live?'In Minecraft':atlas?.area.id==='world'?'Save record':'Terrain & buildings';
   $('legend-queued').hidden=live||!counts.white;
   $('legend-source').hidden=live||!counts.gray;
   $('legend-finished').hidden=false;
@@ -443,8 +443,8 @@ function renderAtlas(){
     $('chunk-count').textContent=number(mapped)+' published generation cells';
     $('border').textContent='Published grid';
     $('leases').textContent='Snapshot';
-    $('map-unit').textContent=number(area.cell_size_blocks)+' m generation cells';
-    $('map-title').textContent=world?'Generated world':'Published progress';
+    $('map-unit').textContent=number(area.cell_size_blocks)+(world?' m saved-world cells':' m generation cells');
+    $('map-title').textContent=world?'Saved world':'Published progress';
     $('map-caption').textContent='Each square covers '+number(area.cell_size_blocks)+' × '+number(area.cell_size_blocks)+' metres. Green means terrain and buildings have been generated.';
     if(world){
       $('map-caption').textContent=Number(world.unique_area_km2).toLocaleString(undefined,{maximumFractionDigits:1})+' km² across Chicago, Elmhurst, and the surrounding area. Select a cell to inspect its record.';
@@ -452,7 +452,7 @@ function renderAtlas(){
       $('chunk-count').textContent=number(world.native_tiles)+' saved tile records';
     }
     const detailed=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
-    setMapMessage(mapLayer==='appearance'?number(detailed)+' cells with surface detail · '+number(area.tiles)+' recorded':built===area.tiles?number(built)+' generated cells':number(area.tiles)+' cells · '+number(built)+' generated');
+    setMapMessage(mapLayer==='appearance'?number(detailed)+' cells with surface detail · '+number(area.tiles)+' recorded':world?number(area.tiles)+' saved-world cells':built===area.tiles?number(built)+' generated cells':number(area.tiles)+' cells · '+number(built)+' generated');
   }else{
     $('grid-size').textContent=distanceLabel(widthBlocks)+' × '+distanceLabel(heightBlocks);
     $('grid-count').textContent=queue
@@ -488,6 +488,7 @@ function renderAtlas(){
   }
   $('map-updated').textContent=atlas.updated_utc?'Snapshot '+new Date(atlas.updated_utc).toLocaleDateString(undefined,{day:'numeric',month:'short'}):'';
   $('map-summary').textContent=number(counts.white)+' queued, '+number(counts.gray)+' source-ready, '+number(counts.green)+(live?' imported':' generated')+' cells, '+number(counts.active)+' in progress, '+number(counts.failed)+' needing review.';
+  if(area.id==='world')$('map-summary').textContent=number(area.tiles)+' saved-world manifest cells. Current block fill is unverified.';
   $('map').setAttribute('aria-label',`${$('map-title').textContent}. ${$('map-summary').textContent} Use arrow keys to inspect cells.`);
   $('mapwrap').setAttribute('aria-busy','false');
   renderSelection();
@@ -627,7 +628,7 @@ function selectIndex(index){
       if(innerWidth<1024){
         const available=$('details-panel').getBoundingClientRect().top-$('map').getBoundingClientRect().top;
         geoMap.panBy([point.x-innerWidth/2,point.y-(available/2+28)],{duration:0});
-      }else if(point.x<340||point.y<0||point.x>innerWidth||point.y>$('map').clientHeight)geoMap.panTo([record.longitude,record.latitude],{duration:0});
+      }else if(point.x<$('details-panel').getBoundingClientRect().right+24||point.y<0||point.x>innerWidth||point.y>$('map').clientHeight)geoMap.panTo([record.longitude,record.latitude],{duration:0});
     }
   }
   drawAtlas();
@@ -673,20 +674,16 @@ $('about-open').onclick=()=>setPanel(true,'about');
 for(const id of ['world','cell','about'])$('tab-'+id).onclick=()=>setPanel(true,id);
 for(const id of ['build','appearance'])$('layer-'+id).onclick=()=>setLayer(id);
 for(const id of Object.keys(places))$('place-'+id).onclick=()=>goToPlace(id);
-$('clear-selection').onclick=clearSelection;
+$('clear-selection').onclick=()=>{clearSelection();$('map').focus();};
 $('refresh').onclick=refresh;
 $('area').onchange=refresh;
 $('auto').onchange=()=>{if($('auto').checked)refresh();};
-function responsiveLabels(){
-  $('area').querySelector('[value="published"]').textContent=innerWidth<=540?'Snapshot':'Published build';
-}
-window.addEventListener('resize',()=>{responsiveLabels();resizeCanvas();});
+window.addEventListener('resize',resizeCanvas);
 document.fonts.ready.then(()=>{if(atlas)drawAtlas();});
 const localHost=['localhost','127.0.0.1','[::1]'].includes(location.hostname);
 $('area').value=new URLSearchParams(location.search).get('view')==='published'?'published':'world';
 if(!localHost)for(const option of $('area').options)if(!['world','published'].includes(option.value))option.disabled=true;
 setPanel(innerWidth>=1024,'world');
-responsiveLabels();
 initializeBasemap();
 refresh();
 let ticks=0;
