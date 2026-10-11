@@ -41,20 +41,33 @@ const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
 page.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
 
-async function ready(view='published'){
-  await page.goto(view==='world'?url.replace('?view=published',''):url);
-  await expect(page.locator('#connection')).toHaveText('Published snapshot');
-  await expect(page.locator('#mapwrap')).toHaveAttribute('aria-busy','false');
-  if(await page.locator('#panel-toggle').getAttribute('aria-expanded')==='false')await page.locator('#panel-toggle').click();
-  await expect(page.locator('#auto-control')).toBeHidden();
-  if(page.viewportSize().width<1024)await page.locator('#panel-close').click();
-  await page.evaluate(()=>document.fonts.ready);
-  await expect(page.locator('body')).toHaveAttribute('data-map','geographic');
-  await expect(page.locator('body')).toHaveAttribute('data-basemap','ready',{timeout:45000});
+async function ready(view='published',target=page){
+  await target.goto(view==='world'?url.replace('?view=published',''):url);
+  await expect(target.locator('#connection')).toHaveText('Published snapshot');
+  await expect(target.locator('#mapwrap')).toHaveAttribute('aria-busy','false');
+  if(await target.locator('#panel-toggle').getAttribute('aria-expanded')==='false')await target.locator('#panel-toggle').click();
+  await expect(target.locator('#auto-control')).toBeHidden();
+  if(target.viewportSize().width<1024)await target.locator('#panel-close').click();
+  await target.evaluate(()=>document.fonts.ready);
+  await expect(target.locator('body')).toHaveAttribute('data-map','geographic');
+  await expect(target.locator('body')).toHaveAttribute('data-basemap','ready',{timeout:45000});
 }
-async function capture(name){
-  await page.locator('#page-title').click();
-  await page.screenshot({path:resolve(root,`test-results/${name}.png`),fullPage:true});
+async function capture(name,target=page){
+  await target.locator('#page-title').click();
+  await target.screenshot({path:resolve(root,`test-results/${name}.png`),fullPage:true});
+}
+async function mapPixels(clip,target=page,png=null){
+  png??=await target.screenshot({fullPage:true});
+  return target.evaluate(async({base64,clip})=>{
+    const image=new Image();image.src='data:image/png;base64,'+base64;await image.decode();
+    const canvas=document.createElement('canvas');canvas.width=clip.width;canvas.height=clip.height;
+    const ctx=canvas.getContext('2d');ctx.drawImage(image,clip.x,clip.y,clip.width,clip.height,0,0,clip.width,clip.height);
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data,samples=[];
+    for(let y=0;y<canvas.height;y+=4)for(let x=0;x<canvas.width;x+=4){
+      const i=(y*canvas.width+x)*4;samples.push(pixels[i],pixels[i+1],pixels[i+2]);
+    }
+    return samples;
+  },{base64:png.toString('base64'),clip});
 }
 
 try{
@@ -129,6 +142,44 @@ try{
       console.log('Touch inspection and bottom sheet passed');
     }
     console.log(`${name}: geographic map, layout, assets, and accessibility passed`);
+  }
+
+  // Loaded map metadata can survive a lost composited canvas. Compare the
+  // uncovered geography pixels while the opaque About sheet opens and reopens.
+  for(const [name,width,height] of [['phone',390,844],['small-phone',320,720],['tablet',768,1024]]){
+    const reviewContext=await browser.newContext({viewport:{width,height},hasTouch:true});
+    const review=await reviewContext.newPage();
+    review.on('pageerror',error=>problems.push(error.message));
+    review.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
+    await review.goto(url.replace('?view=published',''));
+    await expect(review.locator('#connection')).toHaveText('Published snapshot');
+    await expect(review.locator('#details-panel')).toBeHidden();
+    await expect(review.locator('body')).toHaveAttribute('data-basemap','ready',{timeout:45000});
+    await review.evaluate(()=>document.fonts.ready);
+    await expect(review.locator('body')).toHaveAttribute('data-camera','idle',{timeout:15000});
+    const baseline=await review.screenshot({fullPage:true});
+    await review.locator('#about-open').click();
+    await review.waitForFunction(()=>document.querySelector('.world-photo img').naturalWidth>0);
+    const clip=await review.evaluate(()=>{
+      const top=Math.ceil(document.querySelector('.map-tools').getBoundingClientRect().bottom)+42;
+      return {x:16,y:top,width:innerWidth-32,height:Math.floor(document.querySelector('#details-panel').getBoundingClientRect().top)-top-8};
+    });
+    assert(clip.height>=32,`${name}: no uncovered map above the sheet`);
+    const before=await mapPixels(clip,review,baseline);
+    const colors=new Set();for(let i=0;i<before.length;i+=3)colors.add(before.slice(i,i+3).join(','));
+    assert(colors.size>8,`${name}: map did not paint varied geography before About`);
+    for(let cycle=0;cycle<2;cycle++){
+      if(cycle)await review.locator('#about-open').click();
+      const after=await mapPixels(clip,review);assert.equal(after.length,before.length);
+      const difference=after.reduce((sum,value,i)=>sum+Math.abs(value-before[i]),0)/after.length;
+      assert(difference<2,`${name}: About erased or changed uncovered geography (mean RGB difference ${difference.toFixed(2)})`);
+      const accessibility=await new AxeBuilder({page:review}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
+      assert.deepEqual(accessibility.violations,[],`${name}: About accessibility violations`);
+      if(cycle===0)await capture(`${name}-about`,review);
+      await review.locator('#panel-close').click();
+    }
+    await reviewContext.close();
+    console.log(`${name}: About preserves painted geography on open and reopen`);
   }
 
   await page.setViewportSize({width:1440,height:1000});
