@@ -111,7 +111,14 @@ class HeadlessTests(unittest.TestCase):
             self.assertIn('checks 1 existing archived tile;',html)
             self.assertIn('not a new generation or installation',html)
             self.assertEqual({p.name for p in (root/'site').iterdir()},
-                             {'index.html','style.css','report.json','blocks.png','topdown.png'})
+                             {'index.html','style.css','report.json','blocks.png','topdown.png','fonts'})
+            fonts=root/'site/fonts'
+            self.assertEqual({p.name for p in fonts.iterdir()},
+                             {'source-serif-4-latin.woff2','libre-franklin-latin.woff2',
+                              'sourceserif4-OFL.txt','librefranklin-OFL.txt'})
+            sources=json.loads((Path(__file__).resolve().parents[1]/'dashboard/assets/fonts/sources.json').read_text())
+            for font in sources['fonts']:
+                self.assertEqual(digest((fonts/font['file']).read_bytes()),font['sha256'])
             unsafe=copy.deepcopy(second);unsafe['source']['attribution'][0]['url']='javascript:alert(1)'
             (root/'second/report.json').write_text(json.dumps(unsafe))
             with self.assertRaisesRegex(ValueError,'Unsafe attribution'):build_site(root/'second',root/'unsafe-site')

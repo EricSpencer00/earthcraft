@@ -8,7 +8,7 @@ import AxeBuilder from '@axe-core/playwright';
 
 const root=resolve(process.argv[2]||'site/headless');
 const report=JSON.parse(await readFile(resolve(root,'report.json'),'utf8'));
-const mime={'.html':'text/html','.css':'text/css','.png':'image/png','.json':'application/json'};
+const mime={'.html':'text/html','.css':'text/css','.png':'image/png','.json':'application/json','.woff2':'font/woff2'};
 const server=createServer(async(req,res)=>{
   try{
     const path=new URL(req.url,'http://localhost').pathname;
@@ -28,10 +28,13 @@ try{
     await expect(page.locator('body')).toContainText('Absolute vertical datum');
     await expect(page.locator('body')).toContainText('illustrative');
     await page.waitForFunction(()=>[...document.images].every(image=>image.complete&&image.naturalWidth>0));
+    await page.evaluate(()=>document.fonts.ready);
     const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
-      images:[...document.images].map(image=>[image.naturalWidth,image.naturalHeight])}));
+      images:[...document.images].map(image=>[image.naturalWidth,image.naturalHeight]),
+      fonts:[...document.fonts].filter(font=>font.status==='loaded').map(font=>font.family)}));
     assert(layout.scroll<=layout.width,'Page overflows the viewport');
     assert.deepEqual(layout.images,[[1280,960],[512,512]]);
+    assert.deepEqual(layout.fonts.sort(),['Libre Franklin','Source Serif 4']);
     const table=page.getByRole('region',{name:'Sample coverage'});
     if(await table.evaluate(element=>element.scrollWidth>element.clientWidth)){
       await table.focus();await expect(table).toBeFocused();await table.press('ArrowRight');
