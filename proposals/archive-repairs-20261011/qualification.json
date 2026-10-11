@@ -1,0 +1,81 @@
+{
+  "status": "unfinished public proposal checkpoint; neither patch integrated or installed by this checkpoint",
+  "public_base_commit": "92e21255d2281aa521d36ca8aa485226e118ab3a",
+  "recorded_utc": "2026-10-11T05:30:32.042210+00:00",
+  "transport": {
+    "patch": "archive-transport-repair.patch",
+    "patch_sha256": "035bb4132dd9d666f0e9cba6d1629624b3d2479bb7dc914f423abbb3e5c8a682",
+    "prior_files_sha256": {
+      "scripts/hf_tile_archive.mjs": "008ad46f735a46acadc8600723fbc20f1de38c8a460c36bdbcecd44011bd1e84",
+      "scripts/archive_transport_retry.mjs": "1f051909d860e68fc816d89f5202740b41a8355cc950963ba535c59dc01c597e",
+      "tests/archive_transport_retry.test.mjs": "2055c138de504d6f84901470461d8ea5cd1261569125f9c2d540bb6c313f9997",
+      "tests/archive_hf_retry.test.mjs": "8fb898187355198d3a15ac492ee5bdb8ec83bbff1da314fbb62231648e1cabd0"
+    },
+    "candidate_files_sha256": {
+      "scripts/archive_command.mjs": "a3b858d9b9959fb1e4ad27a70987aff61704e579804c30b30a7ad798f656756b",
+      "scripts/archive_transport_retry.mjs": "a0f47cbb939e8ed4fa591d8c1c31ea6ae58fd4a5a92fd2243e41cbf62786bfa2",
+      "tests/archive_command.test.mjs": "ef62998c6379a6fd637f996e1065a8c130410fc96ec91a85979946d5e6736603",
+      "tests/archive_transport_retry.test.mjs": "a904f08152b6ccc9d856b6681b02e85f50aa1ab053e786c054dd103b8146c161",
+      "tests/archive_hf_retry.test.mjs": "1738c8b2a967338fc214fb8b842f7e5ed280b96c2b45e81d89a8dd44afa4578b",
+      "scripts/hf_tile_archive.mjs": "f3bbbdc137085b8119647d6127e1bac59de11d2f94ca45a2122ea0f0dc3d69f4"
+    },
+    "offline_validation": {
+      "recorded_date": "2026-10-08",
+      "tests_passed": 22,
+      "tests_failed": 0,
+      "duration_ms": 2107.047291,
+      "scope": "Synthetic local subprocess/retry fixtures; no remote service calls. Does not establish production source access or controller ownership."
+    },
+    "historical_installation": {
+      "recorded_date": "2026-10-08",
+      "scope": "Task-owned local installation recorded in the preserved repair receipt; not a new installation by this GitHub checkpoint",
+      "fresh_runtime_or_source_access_qualified": false
+    }
+  },
+  "contract": {
+    "patch": "generated-tile-contract-v2.patch",
+    "patch_sha256": "d4e4fdc9c4193b55a6f2b8ebcfca4bdde3219986d1e904d98dca4669870fc9ab",
+    "prior_files_sha256": {
+      "tests/test_hf_archive_batching.py": "cc97c831229619a5799d97552461368b97426c63a48746662005bfb4ddc60e6b",
+      "tests/test_regional_hf_tiles.py": "9961d974b1b4b9e2b8a31da1c9729a1548f90cd710b6195de02f5c5bd56a927b",
+      "scripts/regional_hf_tiles.py": "7b5ddfdacda56b28b7754f1d66f6060a272488f2c2029b153808c240ce50886e",
+      "scripts/upload_generated_tiles.py": "9ac21349e702546f0d5f12985ec55dfa22942690c1820129d20f059ee8348e11"
+    },
+    "candidate_files_sha256": {
+      "scripts/regional_hf_tiles.py": "40aca796a1435ec4ecbd49da73874327288423ea99f5aa87da066db4be707a3e",
+      "scripts/upload_generated_tiles.py": "cacaafd8bffb60ea275812891b2e06362d57f0a0363b945fb1ed788f58695415",
+      "scripts/generated_tile_schema.py": "4d82dc403b8db489fa7ed00903bb855f5feda8fb3acdaec2fb752bf270efd8c1",
+      "scripts/point_archive_evidence.py": "46026119529e7f3aec964f2ce67586de49122a43704d85a021d7073acb4dcfa4",
+      "tests/test_hf_archive_batching.py": "fd7e7689ac5cc86a80472cb203bc249663716719c131478eee01f30e6680bf79",
+      "tests/test_generated_tile_contract.py": "864d5d5a269138aa21c0ff2e324b6b9cbb00ed3a697b44444dcc4627b4803e12"
+    },
+    "offline_validation": {
+      "recorded_date": "2026-10-08",
+      "tests_run": 47,
+      "failures": 0,
+      "errors": 0,
+      "scope": "Synthetic point-only metadata, frozen-NBT and fake-Hub fixtures. Positive production point-only data not independently audited."
+    },
+    "legacy_v1_archive_validation": "Existing v1 sample validated offline and legacy exports remained byte-identical.",
+    "historical_installation": {
+      "recorded_date": "2026-10-08",
+      "state": "isolated candidate; not installed at that review"
+    }
+  },
+  "remaining_requirements": [
+    "Establish authorized exporter/uploader/controller baseline absent from public main before integrating patch hunks",
+    "Rebase and rerun focused and complete offline suites against the integrated baseline",
+    "Relocate and pin the legacy comparison test's frozen-prior fixture; its current sibling prior directory is specific to the isolated historical layout",
+    "Obtain reliable source receipt access and separately permitted process/lock ownership checks before any controller resume",
+    "Audit a frozen production point-only tile, validate datum/provenance and benchmark bounded maximum-density memory/I/O",
+    "No measured facade color, independent survey accuracy, global completeness or game acceptance claim is established"
+  ],
+  "excluded_artifacts": [
+    "Private worlds and source archives",
+    "Credentials and machine-local configuration",
+    "Runtime logs, process/lock state and private host paths",
+    "Third-party game assets",
+    "Unrelated owner worktrees and unrelated paid-run reviews"
+  ],
+  "production_execution_authorized_by_this_checkpoint": false
+}
