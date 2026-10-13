@@ -13,7 +13,7 @@ const preview=new PreviewController(state=>{
   $('preview-status').textContent=state.status==='unavailable'
     ? 'No public block preview or tile download is available for this cell. The published map records build status; it does not verify current blocks.'
     : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
-    ? `${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Generation ${state.crop.generation.revision}.`
+    ? `${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
     : state.message||'Preview request stopped.';
   $('preview-attribution').textContent=state.crop?.attribution.map(a=>a.source+' ('+a.license+')').join('; ')||'';
   drawCrop($('preview-canvas'),previewCrop);
