@@ -1,3 +1,4 @@
+import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
@@ -186,6 +187,20 @@ function goToPlace(id){
   else{clearSelection();setMapMessage(place.name+' has no cell in this published snapshot.');}
 }
 
+$('location-search').onsubmit=event=>{
+  event.preventDefault();
+  const status=$('search-status');
+  try{
+    const location=parseLocation($('location-query').value,places);
+    if(!geographic())throw new Error('The geographic atlas is still loading. Try again when the map is ready.');
+    const [lng,lat]=location.coordinates;
+    const cell=cellAtLocation({lng,lat});
+    if(!cell){clearSelection();status.textContent=location.name+' has no recorded coverage in this atlas.';return;}
+    geoMap.easeTo({center:location.coordinates,zoom:13,duration:0});
+    selectIndex(cell.index);
+    status.textContent='Selected '+location.name+'. Build records do not verify current block fill.';
+  }catch(error){status.textContent=error.message;}
+};
 function setMapMessage(message){$('mapnote').textContent=message;}
 function countCells(counts={}){return Object.values(counts).reduce((total,value)=>total+Number(value||0),0);}
 

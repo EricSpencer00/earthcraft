@@ -130,3 +130,10 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
   .record-note, #cell, .selection-details > div, .totals dt { font-size: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+.location-search { display:flex; flex-wrap:wrap; align-items:center; gap:6px; max-width:300px; }
+.location-search input { width:190px; min-width:0; font:inherit; padding:6px; border:1px solid var(--line); background:var(--surface); color:var(--ink); }
+.location-search button { padding:6px; }
+#search-status { flex-basis:100%; margin:0; font-size:12px; max-width:300px; }
+#search-status:empty { display:none; }
+@media(max-width:700px) { .location-search { width:100%; max-width:none; padding:4px 0; } .location-search input { flex:1; } #search-status { max-width:none; } }
