@@ -1,7 +1,26 @@
+import {PreviewController,drawCrop} from './block-preview.mjs';
 import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
+let previewCrop=null,previewRotation=0;
+const preview=new PreviewController(state=>{
+  previewCrop=state.crop||null;previewRotation=0;
+  $('block-preview').hidden=selectedIndex===null;
+  $('preview-canvas').hidden=state.status!=='ready';
+  $('preview-turn').hidden=state.status!=='ready';
+  $('preview-cancel').hidden=state.status!=='loading';
+  $('preview-status').textContent=state.status==='unavailable'
+    ? 'No public block preview or tile download is available for this cell. The published map records build status; it does not verify current blocks.'
+    : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
+    ? `${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Generation ${state.crop.generation.revision}.`
+    : state.message||'Preview request stopped.';
+  $('preview-attribution').textContent=state.crop?.attribution.map(a=>a.source+' ('+a.license+')').join('; ')||'';
+  drawCrop($('preview-canvas'),previewCrop);
+});
+$('preview-turn').onclick=()=>{previewRotation=(previewRotation+1)%4;drawCrop($('preview-canvas'),previewCrop,previewRotation);};
+$('preview-cancel').onclick=()=>{preview.cancel();$('preview-cancel').hidden=true;$('preview-status').textContent='Preview request stopped.';};
+
 const number=value=>Number(value||0).toLocaleString();
 const stateLabel=value=>({
   'regional-foundation':'Regional build',pending:'Queued',running:'Building',leased:'Building',
@@ -547,7 +566,7 @@ async function refresh(){
   try{
     await readSnapshot();
     if(previousView!==atlasSignature()){
-      selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
+      preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
     }
     renderSnapshot();
     renderAtlas();
@@ -630,12 +649,14 @@ function renderSelection(){
 }
 
 function clearSelection(){
-  selectedIndex=null;hoverIndex=null;renderSelection();
+  preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;renderSelection();
   if(document.body.dataset.section==='cell')setPanel(innerWidth>=1024,'world');
   if(atlas)drawAtlas();
 }
 function selectIndex(index){
   selectedIndex=index;renderSelection();setPanel(true,'cell');
+  // No public rights-reviewed feed is verified. Enable only after the pinned contract is approved.
+  preview.select(null);
   document.querySelector('.panel-content').scrollTop=0;
   if(geographic()){
     const record=atlas.records?.[index];

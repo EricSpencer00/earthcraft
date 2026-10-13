@@ -137,3 +137,9 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #search-status { flex-basis:100%; margin:0; font-size:12px; max-width:300px; }
 #search-status:empty { display:none; }
 @media(max-width:700px) { .location-search { width:100%; max-width:none; padding:4px 0; } .location-search input { flex:1; } #search-status { max-width:none; } }
+
+.block-preview { margin:18px 0; padding-top:12px; border-top:1px solid var(--line); }
+.block-preview h3 { margin:0; font-size:16px; font-weight:600; }
+#preview-canvas { width:100%; height:auto; background:var(--surface); }
+#preview-attribution { font-size:12px; overflow-wrap:anywhere; }
+#preview-status { overflow-wrap:anywhere; }
