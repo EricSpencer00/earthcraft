@@ -1,9 +1,11 @@
-import {PreviewController,drawCrop} from './block-preview.mjs';
+import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
 import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
-let previewCrop=null,previewRotation=0;
+new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
+let previewCrop=null,previewRotation=0,previewResolver=null,previewDecoder=decodeCrop;
+export function configurePreviewSource(resolve,decode=decodeCrop){previewResolver=resolve;previewDecoder=decode;}
 const preview=new PreviewController(state=>{
   previewCrop=state.crop||null;previewRotation=0;
   $('block-preview').hidden=selectedIndex===null;
@@ -13,11 +15,22 @@ const preview=new PreviewController(state=>{
   $('preview-status').textContent=state.status==='unavailable'
     ? 'No public block preview or tile download is available for this cell. The published map records build status; it does not verify current blocks.'
     : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
-    ? `${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
+    ? `${state.crop.publication_allowed===false?'Private review only — not approved for public distribution. ':''}${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
     : state.message||'Preview request stopped.';
   $('preview-attribution').textContent=state.crop?.attribution.map(a=>a.source+' ('+a.license+')').join('; ')||'';
+  $('preview-source').hidden=true;$('preview-hf').removeAttribute('href');
+  if(state.status==='ready'&&state.descriptor?.download){
+    const download=state.descriptor.download;
+    try{
+      const url=new URL(download.url);
+      if(url.origin==='https://huggingface.co'&&!url.username&&!url.password&&url.pathname===`/datasets/${state.crop.generation.repo}/resolve/${state.crop.generation.revision}/generated-tiles/v1/shards/${state.crop.generation.shard_sha256.slice(0,2)}/${state.crop.generation.shard_sha256}.tar`&&Number.isSafeInteger(download.bytes)&&download.bytes>0&&download.bytes<=64*1024*1024){
+        $('preview-hf').href=url.href;$('preview-source').hidden=false;
+        $('preview-download-note').textContent=` (${(download.bytes/1024/1024).toFixed(2)} MiB; ${download.access==='private'?'authorized private access required':'access as stated by the dataset'}). Shard SHA-256: ${state.crop.generation.shard_sha256}.`;
+      }
+    }catch{/* Invalid source references remain unavailable. */}
+  }
   drawCrop($('preview-canvas'),previewCrop);
-});
+},{decode:crop=>previewDecoder(crop),allowLoopback:location.hostname==='127.0.0.1'});
 $('preview-turn').onclick=()=>{previewRotation=(previewRotation+1)%4;drawCrop($('preview-canvas'),previewCrop,previewRotation);};
 $('preview-cancel').onclick=()=>{preview.cancel();$('preview-cancel').hidden=true;$('preview-status').textContent='Preview request stopped.';};
 
@@ -656,7 +669,7 @@ function clearSelection(){
 function selectIndex(index){
   selectedIndex=index;renderSelection();setPanel(true,'cell');
   // No public rights-reviewed feed is verified. Enable only after the pinned contract is approved.
-  preview.select(null);
+  preview.select(previewResolver?.(atlas,index)||null);
   document.querySelector('.panel-content').scrollTop=0;
   if(geographic()){
     const record=atlas.records?.[index];

@@ -1,7 +1,12 @@
 // Proposed public crop adapter. No private dataset URL or live feed is configured.
 export const MAX_BYTES=512*1024, MAX_BLOCKS=32768;
-export function decodeCrop(value){
-  if(value?.schema!=='earthcraft.public-block-crop.v1')throw Error('Unsupported block preview format.');
+export function decodeCrop(value,{audience='public',dimensionMinY=-64,dimensionHeight=384}={}){
+  if(!['public','private-review'].includes(audience))throw Error('Unsupported preview audience.');
+  if(!Number.isInteger(dimensionMinY)||!Number.isInteger(dimensionHeight)||dimensionHeight<1||dimensionHeight>1024)throw Error('Invalid dimension limits.');
+  if(audience==='public'&&value?.publication_allowed!==true)throw Error('Public preview requires an explicit publication approval.');
+  const expected=audience==='private-review'?'earthcraft.private-review-block-crop.v1':'earthcraft.public-block-crop.v1';
+  if(audience==='private-review'&&value?.publication_allowed!==false)throw Error('Private review requires an explicit nonpublication restriction.');
+  if(value?.schema!==expected)throw Error('Unsupported block preview format.');
   const {origin,size,palette,blocks,generation,attribution}=value;
   if(!Array.isArray(origin)||origin.length!==3||!origin.every(Number.isSafeInteger))throw Error('Invalid world origin.');
   if(!Array.isArray(size)||size.length!==3||![16,32].includes(size[0])||![16,32].includes(size[2])||!Number.isInteger(size[1])||size[1]<1||size[1]>384)throw Error('Invalid crop dimensions.');
@@ -14,7 +19,7 @@ export function decodeCrop(value){
   }
   if(!generation||typeof generation.repo!=='string'||!/^[-\w]+\/[-\w.]+$/.test(generation.repo)||!/^-?\d+_-?\d+$/.test(generation.tile)||!['revision','shard_sha256','region_sha256','receipt_sha256'].every(k=>typeof generation[k]==='string'&&new RegExp(k==='revision'?'^[a-f0-9]{40}$':'^[a-f0-9]{64}$').test(generation[k])))throw Error('Missing immutable generation provenance.');
   const tile=generation.tile.split('_').map(Number);
-  if([0,2].some((axis,i)=>Math.floor(origin[axis]/512)!==tile[i]||Math.floor((origin[axis]+size[axis]-1)/512)!==tile[i])||origin[1]<-64||origin[1]+size[1]>320)throw Error('Crop crosses its tile or Minecraft height bounds.');
+  if([0,2].some((axis,i)=>Math.floor(origin[axis]/512)!==tile[i]||Math.floor((origin[axis]+size[axis]-1)/512)!==tile[i])||origin[1]<dimensionMinY||origin[1]+size[1]>dimensionMinY+dimensionHeight)throw Error('Crop crosses its tile or Minecraft height bounds.');
   if(!Array.isArray(attribution)||!attribution.length||!attribution.every(a=>typeof a.source==='string'&&a.source.length<=256&&typeof a.license==='string'&&a.license.length<=256))throw Error('Missing source attribution.');
   if(!['complete-crop','sampled-blocks'].includes(value.coverage))throw Error('Missing crop coverage label.');
   return value;
@@ -46,21 +51,22 @@ export function drawCrop(canvas,crop,rotation=0){
   }
 }
 export class PreviewController{
-  constructor(onState){this.onState=onState;this.sequence=0;this.active=null;}
+  constructor(onState,{decode=decodeCrop,allowLoopback=false}={}){this.decode=decode;this.allowLoopback=allowLoopback;this.onState=onState;this.sequence=0;this.active=null;}
   cancel(){this.sequence++;this.active?.abort();this.active=null;}
   async select(descriptor){
     this.cancel();const sequence=this.sequence;
     if(!descriptor){this.onState({status:'unavailable'});return;}
     const {url,sha256}=descriptor;
-    if(!/^https:\/\//.test(url)||!/^[a-f0-9]{64}$/.test(sha256)){this.onState({status:'error',message:'Invalid preview reference.'});return;}
+    const local=this.allowLoopback&&/^http:\/\/127\.0\.0\.1:\d+\//.test(url);
+    if((!/^https:\/\//.test(url)&&!local)||!/^[a-f0-9]{64}$/.test(sha256)){this.onState({status:'error',message:'Invalid preview reference.'});return;}
     const controller=new AbortController();this.active=controller;const timer=setTimeout(()=>controller.abort(),10000);
     this.onState({status:'loading'});
     try{
       const bytes=await readBounded(await fetch(url,{signal:controller.signal,credentials:'omit',referrerPolicy:'no-referrer'}),controller.signal);
       const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
       if(digest!==sha256)throw Error('Preview checksum did not match.');
-      const crop=decodeCrop(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
-      if(sequence===this.sequence)this.onState({status:'ready',crop});
+      const crop=this.decode(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+      if(sequence===this.sequence)this.onState({status:'ready',crop,descriptor});
     }catch(error){if(sequence===this.sequence)this.onState({status:controller.signal.aborted?'cancelled':'error',message:controller.signal.aborted?'Preview request stopped.':error.message});}
     finally{clearTimeout(timer);if(sequence===this.sequence)this.active=null;}
   }

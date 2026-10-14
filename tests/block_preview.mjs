@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {decodeCrop,readBounded,PreviewController,MAX_BYTES} from '../dashboard/block-preview.mjs';
 // Synthetic decoder fixture only. No real tile or published-generation claim.
-const fixture={schema:'earthcraft.public-block-crop.v1',origin:[-16,0,0],size:[16,16,16],palette:['minecraft:stone','minecraft:grass_block'],blocks:[[0,0,0,0],[0,1,0,1]],coverage:'sampled-blocks',generation:{repo:'example/synthetic-fixture',tile:'-1_0',revision:'a'.repeat(40),shard_sha256:'b'.repeat(64),region_sha256:'c'.repeat(64),receipt_sha256:'d'.repeat(64)},attribution:[{source:'Synthetic test fixture',license:'Test-only authored fixture'}]};
+const fixture={schema:'earthcraft.public-block-crop.v1',publication_allowed:true,origin:[-16,0,0],size:[16,16,16],palette:['minecraft:stone','minecraft:grass_block'],blocks:[[0,0,0,0],[0,1,0,1]],coverage:'sampled-blocks',generation:{repo:'example/synthetic-fixture',tile:'-1_0',revision:'a'.repeat(40),shard_sha256:'b'.repeat(64),region_sha256:'c'.repeat(64),receipt_sha256:'d'.repeat(64)},attribution:[{source:'Synthetic test fixture',license:'Test-only authored fixture'}]};
 assert.equal(decodeCrop(fixture),fixture);
 for(const mutate of [v=>v.size=[512,1,512],v=>v.blocks.push([16,0,0,0]),v=>v.blocks.push([0,0,0,1]),v=>v.generation.revision='main',v=>v.attribution=[],v=>v.coverage='complete-world',v=>v.palette=['<script>']]){
  const value=structuredClone(fixture);mutate(value);assert.throws(()=>decodeCrop(value));
@@ -24,3 +24,13 @@ try{
  const cancelled=controller.select({url:'https://example.test/crop.json',sha256:sha});controller.cancel();await cancelled;assert.notEqual(states.at(-1).status,'ready');
 }finally{globalThis.fetch=originalFetch;controller.cancel();}
 console.log('Synthetic block-crop bounds, provenance, checksum, errors, stale responses and cancellation passed.');
+
+const privateFixture=structuredClone(fixture);privateFixture.schema='earthcraft.private-review-block-crop.v1';privateFixture.publication_allowed=false;
+assert.throws(()=>decodeCrop(privateFixture),/publication approval/);
+assert.equal(decodeCrop(privateFixture,{audience:'private-review'}),privateFixture);
+const high=structuredClone(fixture);high.origin[1]=800;
+assert.throws(()=>decodeCrop(high),/height bounds/);
+assert.equal(decodeCrop(high,{dimensionMinY:-64,dimensionHeight:1024}),high);
+high.origin[1]=959;assert.throws(()=>decodeCrop(high,{dimensionMinY:-64,dimensionHeight:1024}),/height bounds/);
+
+assert.throws(()=>decodeCrop(privateFixture,{audience:'other'}),/audience/);

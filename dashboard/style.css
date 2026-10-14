@@ -143,3 +143,8 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #preview-canvas { width:100%; height:auto; background:var(--surface); }
 #preview-attribution { font-size:12px; overflow-wrap:anywhere; }
 #preview-status { overflow-wrap:anywhere; }
+
+#preview-source { overflow-wrap:anywhere; }
+
+@media(max-width:1023px) { body[data-panel='open'] .map-attribution { top:calc(var(--tools-height,108px) + 4px); } }
+.warning { top:calc(var(--tools-height,60px) + 8px); }
