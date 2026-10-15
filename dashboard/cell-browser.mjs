@@ -13,9 +13,8 @@ export function queryCells(atlas,snapshot,{query='',filter='all',bounds=null,off
   if(filter==='scan'&&!record.scan_upgrade_recorded_in_parent_tile)continue;
   if(filter==='unverified'&&['verified','complete'].includes(record.game_verify_state))continue;
   if(bounds&&(!Number.isFinite(record.latitude)||!Number.isFinite(record.longitude)||record.longitude<bounds.west||record.longitude>bounds.east||record.latitude<bounds.south||record.latitude>bounds.north))continue;
-  const row=cellRecord(atlas,i,snapshot);
-  if(needle&&!`${row.cell_id} ${row.world_bounds_xz[0]}, ${row.world_bounds_xz[1]} ${record.latitude} ${record.longitude}`.toLowerCase().includes(needle))continue;
-  if(total>=offset&&rows.length<Math.min(limit,40))rows.push({index:i,value:row});total++;
+  if(needle){const size=atlas.area.cell_size_blocks,x=atlas.area.left_block+(i%atlas.area.width_cells)*size,z=atlas.area.top_block+Math.floor(i/atlas.area.width_cells)*size,id=atlas.cell_ids?.[i]||Math.floor(x/size)+'_'+Math.floor(z/size);if(!`${id} ${x}, ${z} ${record.latitude} ${record.longitude}`.toLowerCase().includes(needle))continue;}
+  if(total>=offset&&rows.length<Math.min(limit,40))rows.push({index:i,value:cellRecord(atlas,i,snapshot)});total++;
  }
  return {total,rows};
 }
