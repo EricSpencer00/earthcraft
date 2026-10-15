@@ -79,6 +79,7 @@ try{
       await expect(page.locator('#map-title')).toHaveText('Saved world');
       await expect(page.locator('#record-note')).toContainText('current block fill is unverified');
       await expect(page.locator('#grid-size')).toHaveText(snapshot.generated_world.unique_cells.toLocaleString()+' cells');
+      await page.locator('#places-menu').evaluate(el=>el.open=true);
       await page.locator('#place-elmhurst').click();
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
       await expect(page.locator('#selection-details')).toContainText('Street-photo colorPending');
@@ -101,7 +102,7 @@ try{
       width:innerWidth,scroll:document.documentElement.scrollWidth,
       headingOverflow:document.querySelector('h1').scrollWidth>document.querySelector('h1').clientWidth,
       fonts:[...document.fonts].map(font=>({family:font.family,status:font.status})),
-      buttons:[...document.querySelectorAll('.map-controls button,#refresh,.place-switch button,.layer-switch button')].map(button=>button.getBoundingClientRect().height),
+      buttons:[...document.querySelectorAll('.map-controls button,#refresh,.place-switch button,.layer-switch button,#browse-open,#places-menu summary,.location-search button')].filter(button=>button.getClientRects().length>0).map(button=>button.getBoundingClientRect().height),
       canvasWidth:document.querySelector('#map').width,
       canvasHeight:document.querySelector('#map').height,
       attributionVisible:!document.querySelector('#map-attribution').hidden
@@ -127,6 +128,7 @@ try{
     assert.deepEqual(accessibility.violations,[],`${name}: accessibility violations`);
     await capture(name);
     if(name==='phone'){
+      await page.locator('#places-menu').evaluate(el=>el.open=true);
       await page.locator('#place-chicago').tap();
       await expect(page.locator('#selection-title')).toHaveText(/^Cell /);
       await expect(page.locator('#selection-details')).toBeVisible();
@@ -205,9 +207,12 @@ try{
   await expect(page.locator('#selection-title')).toHaveText('Choose a cell');
   console.log('Keyboard inspection, zoom, fit, and refresh persistence passed');
 
+  await page.locator('#places-menu').evaluate(el=>el.open=true);
+
   await page.locator('#place-elmhurst').click();
   await expect(page.locator('#mapnote')).toContainText('Elmhurst has no cell in this published snapshot');
   await expect(page.locator('#clear-selection')).toBeHidden();
+  await page.locator('#places-menu').evaluate(el=>el.open=true);
   await page.locator('#place-chicago').click();
   await expect(page.locator('#selection-details')).toContainText('41.');
   await expect(page.locator('body')).toHaveAttribute('data-camera','idle',{timeout:15000});
