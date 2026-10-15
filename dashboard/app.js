@@ -1,6 +1,40 @@
+import {installLocalFiles} from './local-files.mjs';
+import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
+import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
+new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
+let previewCrop=null,previewRotation=0,previewResolver=null,previewDecoder=decodeCrop;
+export function configurePreviewSource(resolve,decode=decodeCrop){previewResolver=resolve;previewDecoder=decode;}
+const preview=new PreviewController(state=>{
+  previewCrop=state.crop||null;previewRotation=0;
+  $('block-preview').hidden=selectedIndex===null;
+  $('preview-canvas').hidden=state.status!=='ready';
+  $('preview-turn').hidden=state.status!=='ready';
+  $('preview-cancel').hidden=state.status!=='loading';
+  $('preview-status').textContent=state.status==='unavailable'
+    ? 'No public block preview or tile download is available for this cell. The published map records build status; it does not verify current blocks.'
+    : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
+    ? `${state.crop.publication_allowed===false?'Private review only — not approved for public distribution. ':''}${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
+    : state.message||'Preview request stopped.';
+  $('preview-attribution').textContent=state.crop?.attribution.map(a=>a.source+' ('+a.license+')').join('; ')||'';
+  $('preview-source').hidden=true;$('preview-hf').removeAttribute('href');
+  if(state.status==='ready'&&state.descriptor?.download){
+    const download=state.descriptor.download;
+    try{
+      const url=new URL(download.url);
+      if(url.origin==='https://huggingface.co'&&!url.username&&!url.password&&url.pathname===`/datasets/${state.crop.generation.repo}/resolve/${state.crop.generation.revision}/generated-tiles/v1/shards/${state.crop.generation.shard_sha256.slice(0,2)}/${state.crop.generation.shard_sha256}.tar`&&Number.isSafeInteger(download.bytes)&&download.bytes>0&&download.bytes<=64*1024*1024){
+        $('preview-hf').href=url.href;$('preview-source').hidden=false;
+        $('preview-download-note').textContent=` (${(download.bytes/1024/1024).toFixed(2)} MiB; ${download.access==='private'?'authorized private access required':'access as stated by the dataset'}). Shard SHA-256: ${state.crop.generation.shard_sha256}.`;
+      }
+    }catch{/* Invalid source references remain unavailable. */}
+  }
+  drawCrop($('preview-canvas'),previewCrop);
+},{decode:crop=>previewDecoder(crop),allowLoopback:location.hostname==='127.0.0.1'});
+$('preview-turn').onclick=()=>{previewRotation=(previewRotation+1)%4;drawCrop($('preview-canvas'),previewCrop,previewRotation);};
+$('preview-cancel').onclick=()=>{preview.cancel();$('preview-cancel').hidden=true;$('preview-status').textContent='Preview request stopped.';};
+
 const number=value=>Number(value||0).toLocaleString();
 const stateLabel=value=>({
   'regional-foundation':'Regional build',pending:'Queued',running:'Building',leased:'Building',
@@ -20,9 +54,9 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   document.body.dataset.panel=open?'open':'closed';
   document.body.dataset.section=section;
   $('panel-toggle').setAttribute('aria-expanded',String(open));
-  for(const id of ['world','cell','about']){
+  for(const id of ['world','cell','about','local']){
     $(id+'-panel').hidden=id!==section;
-    if(id!=='about')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
+    if(id==='world'||id==='cell')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
   if(changed)document.querySelector('.panel-content').scrollTop=0;
 }
@@ -186,6 +220,20 @@ function goToPlace(id){
   else{clearSelection();setMapMessage(place.name+' has no cell in this published snapshot.');}
 }
 
+$('location-search').onsubmit=event=>{
+  event.preventDefault();
+  const status=$('search-status');
+  try{
+    const location=parseLocation($('location-query').value,places);
+    if(!geographic())throw new Error('The geographic atlas is still loading. Try again when the map is ready.');
+    const [lng,lat]=location.coordinates;
+    const cell=cellAtLocation({lng,lat});
+    if(!cell){clearSelection();status.textContent=location.name+' has no recorded coverage in this atlas.';return;}
+    geoMap.easeTo({center:location.coordinates,zoom:13,duration:0});
+    selectIndex(cell.index);
+    status.textContent='Selected '+location.name+'. Build records do not verify current block fill.';
+  }catch(error){status.textContent=error.message;}
+};
 function setMapMessage(message){$('mapnote').textContent=message;}
 function countCells(counts={}){return Object.values(counts).reduce((total,value)=>total+Number(value||0),0);}
 
@@ -532,7 +580,7 @@ async function refresh(){
   try{
     await readSnapshot();
     if(previousView!==atlasSignature()){
-      selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
+      preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
     }
     renderSnapshot();
     renderAtlas();
@@ -615,12 +663,14 @@ function renderSelection(){
 }
 
 function clearSelection(){
-  selectedIndex=null;hoverIndex=null;renderSelection();
+  preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;renderSelection();
   if(document.body.dataset.section==='cell')setPanel(innerWidth>=1024,'world');
   if(atlas)drawAtlas();
 }
 function selectIndex(index){
   selectedIndex=index;renderSelection();setPanel(true,'cell');
+  // No public rights-reviewed feed is verified. Enable only after the pinned contract is approved.
+  preview.select(previewResolver?.(atlas,index)||null);
   document.querySelector('.panel-content').scrollTop=0;
   if(geographic()){
     const record=atlas.records?.[index];
@@ -689,3 +739,6 @@ initializeBasemap();
 refresh();
 let ticks=0;
 setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
+
+installLocalFiles($('local-panel'));
+$('local-open').onclick=()=>setPanel(true,'local');

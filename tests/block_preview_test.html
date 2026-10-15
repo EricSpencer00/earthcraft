@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic block-crop test only</title><link rel="stylesheet" href="/style.css"><body style="overflow:auto"><main style="max-width:640px;margin:16px auto;padding:16px"><h1>Synthetic decoder test only</h1><p>Authored block positions for renderer QA. This is not Earthcraft geography or a live dataset.</p><canvas id="test-canvas" style="width:100%;height:auto" aria-label="Synthetic stepped block fixture"></canvas><button id="test-turn">Rotate test crop</button><p id="test-state" role="status"></p></main><script type="module">
+import {decodeCrop,drawCrop} from '/block-preview.mjs';
+const blocks=[];
+for(let x=0;x<16;x++)for(let z=0;z<16;z++)for(let y=0;y<1+Math.floor((x+z)/6);y++)blocks.push([x,y,z,y===Math.floor((x+z)/6)?1:0]);
+const crop=decodeCrop({schema:'earthcraft.public-block-crop.v1',publication_allowed:true,origin:[0,0,0],size:[16,16,16],palette:['minecraft:stone','minecraft:grass_block'],blocks,coverage:'complete-crop',generation:{repo:'example/synthetic-fixture',tile:'0_0',revision:'a'.repeat(40),shard_sha256:'b'.repeat(64),region_sha256:'c'.repeat(64),receipt_sha256:'d'.repeat(64)},attribution:[{source:'Synthetic authored test fixture',license:'Test only'}]});
+let turn=0;const canvas=document.getElementById('test-canvas');drawCrop(canvas,crop);
+document.getElementById('test-state').textContent=blocks.length+' synthetic blocks';
+document.getElementById('test-turn').onclick=()=>{turn=(turn+1)%4;drawCrop(canvas,crop,turn);document.getElementById('test-state').textContent='Rotation '+turn;};
+</script></body></html>

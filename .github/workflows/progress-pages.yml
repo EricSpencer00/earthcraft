@@ -54,7 +54,7 @@ jobs:
       - name: Assemble the static observatory
         run: |
           mkdir -p site/progress
-          cp dashboard/index.html dashboard/app.js dashboard/style.css site/
+          cp dashboard/index.html dashboard/app.js dashboard/location-search.mjs dashboard/block-preview.mjs dashboard/local-files.mjs dashboard/style.css site/
           cp -R dashboard/assets site/assets
           cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
@@ -70,6 +70,9 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Verify the assembled atlas and evidence page before publication
         run: |
+          node tests/location_search.mjs
+          node tests/block_preview.mjs
+          node tests/local_files.mjs
           node tests/mini_transport.mjs
           node tests/dashboard_browser.mjs site
           node tests/headless_browser.mjs site/headless
