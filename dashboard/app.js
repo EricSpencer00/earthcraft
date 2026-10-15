@@ -1,7 +1,7 @@
-import {installPublicBlocks} from './public-blocks.mjs';
+import {installPublicBlocks} from './public-blocks.mjs?v=hf-v2-1';
 import {cellRecord,installCellBrowser} from './cell-browser.mjs';
-import {installLocalFiles} from './local-files.mjs';
-import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
+import {installLocalFiles} from './local-files.mjs?v=hf-v2-1';
+import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs?v=hf-v2-1';
 import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 

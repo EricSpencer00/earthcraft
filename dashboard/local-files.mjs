@@ -1,5 +1,5 @@
 import {decodeSourceBoundV2} from './source-bound-v2.mjs';
-import {decodeCrop,drawCrop,MAX_BYTES} from './block-preview.mjs';
+import {decodeCrop,drawCrop,MAX_BYTES} from './block-preview.mjs?v=hf-v2-1';
 const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
 const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 export async function readLocalCrop(cropFile,manifestFile){
