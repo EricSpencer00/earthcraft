@@ -34,21 +34,26 @@ export async function readBounded(response,signal){
   }catch(error){await reader.cancel().catch(()=>{});throw error;}finally{reader.releaseLock();}
   const bytes=new Uint8Array(count);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return bytes;
 }
-export function drawCrop(canvas,crop,rotation=0){
+export function drawCrop(canvas,crop,rotation=0,{supportColors=false}={}){
   const ctx=canvas.getContext('2d');canvas.width=640;canvas.height=400;ctx.clearRect(0,0,640,400);
   if(!crop)return;
   const colors={stone:'#8b9890',grass_block:'#4e7951',dirt:'#896747',water:'#6495b7',sand:'#cab980'};
   const turn=([x,y,z,p])=>{for(let i=0;i<rotation%4;i++)[x,z]=[crop.size[2]-1-z,x];return [x,y,z,p];};
-  const blocks=crop.blocks.map(turn).sort((a,b)=>(a[0]+a[2])-(b[0]+b[2])||a[1]-b[1]);
+  const blocks=crop.blocks.map((b,i)=>[...turn(b),i]).sort((a,b)=>(a[0]+a[2])-(b[0]+b[2])||a[1]-b[1]);
   const minY=Math.min(...blocks.map(b=>b[1]),0),maxY=Math.max(...blocks.map(b=>b[1]),1);
   const scale=Math.min(16,544/(crop.size[0]+crop.size[2]),260/(maxY-minY+crop.size[0]/2));
-  for(const [x,y,z,p] of blocks){
+  const roofColors=new Map(supportColors?(crop.roof_support_columns||[]).map(c=>[[c.local_xz[0],c.roof_y-crop.origin[1],c.local_xz[1]].join(','),({direct:[47,110,79],interpolated:[173,111,27],fitted:[124,74,148],unknown:[100,100,100]})[c.roof_support]]):[]);
+  for(const [x,y,z,p,sourceIndex] of blocks){
+    const original=crop.blocks[sourceIndex],rgb=roofColors.get(original.slice(0,3).join(','))||crop.block_rgb?.[sourceIndex];
+    const shade=f=>rgb?'rgb('+rgb.map(v=>Math.round(v*f)).join(',')+')':null;
+    ctx.globalAlpha=(crop.block_source_flags?.[sourceIndex]&16 )?0.5:1;
     const sx=320+(x-z)*scale,sy=300-(y-minY)*scale+(x+z-crop.size[0])*scale/2;
-    ctx.fillStyle=colors[crop.palette[p].replace('minecraft:','').split('[')[0]]||'#a7a39a';
+    ctx.fillStyle=shade(1)||colors[crop.palette[p].replace('minecraft:','').split('[')[0]]||'#a7a39a';
     ctx.beginPath();ctx.moveTo(sx,sy-scale);ctx.lineTo(sx+scale,sy-scale/2);ctx.lineTo(sx,sy);ctx.lineTo(sx-scale,sy-scale/2);ctx.closePath();ctx.fill();
-    ctx.fillStyle='#566159';ctx.beginPath();ctx.moveTo(sx-scale,sy-scale/2);ctx.lineTo(sx,sy);ctx.lineTo(sx,sy+scale);ctx.lineTo(sx-scale,sy+scale/2);ctx.closePath();ctx.fill();
-    ctx.fillStyle='#89948c';ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+scale,sy-scale/2);ctx.lineTo(sx+scale,sy+scale/2);ctx.lineTo(sx,sy+scale);ctx.closePath();ctx.fill();
+    ctx.fillStyle=shade(.65)||'#566159';ctx.beginPath();ctx.moveTo(sx-scale,sy-scale/2);ctx.lineTo(sx,sy);ctx.lineTo(sx,sy+scale);ctx.lineTo(sx-scale,sy+scale/2);ctx.closePath();ctx.fill();
+    ctx.fillStyle=shade(.85)||'#89948c';ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+scale,sy-scale/2);ctx.lineTo(sx+scale,sy+scale/2);ctx.lineTo(sx,sy+scale);ctx.closePath();ctx.fill();
   }
+  ctx.globalAlpha=1;
 }
 export class PreviewController{
   constructor(onState,{decode=decodeCrop,allowLoopback=false}={}){this.decode=decode;this.allowLoopback=allowLoopback;this.onState=onState;this.sequence=0;this.active=null;}
@@ -58,16 +63,20 @@ export class PreviewController{
     if(!descriptor){this.onState({status:'unavailable'});return;}
     const {url,sha256}=descriptor;
     const local=this.allowLoopback&&/^http:\/\/127\.0\.0\.1:\d+\//.test(url);
-    if((!/^https:\/\//.test(url)&&!local)||!/^[a-f0-9]{64}$/.test(sha256)){this.onState({status:'error',message:'Invalid preview reference.'});return;}
+    if(typeof descriptor.load!=='function'&&((!/^https:\/\//.test(url)&&!local)||!/^[a-f0-9]{64}$/.test(sha256))){this.onState({status:'error',message:'Invalid preview reference.'});return;}
     const controller=new AbortController();this.active=controller;const timer=setTimeout(()=>controller.abort(),10000);
     this.onState({status:'loading'});
     try{
+      let crop;
+      if(typeof descriptor.load==='function')crop=await this.decode(await descriptor.load(controller.signal));
+      else{
       const bytes=await readBounded(await fetch(url,{signal:controller.signal,credentials:'omit',referrerPolicy:'no-referrer'}),controller.signal);
       const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
       if(digest!==sha256)throw Error('Preview checksum did not match.');
-      const crop=this.decode(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+      crop=await this.decode(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+      }
       if(sequence===this.sequence)this.onState({status:'ready',crop,descriptor});
-    }catch(error){if(sequence===this.sequence)this.onState({status:controller.signal.aborted?'cancelled':'error',message:controller.signal.aborted?'Preview request stopped.':error.message});}
+    }catch(error){if(sequence===this.sequence)this.onState({status:controller.signal.aborted?'cancelled':'error',message:controller.signal.aborted?'Preview request stopped.':error.message,descriptor});}
     finally{clearTimeout(timer);if(sequence===this.sequence)this.active=null;}
   }
 }

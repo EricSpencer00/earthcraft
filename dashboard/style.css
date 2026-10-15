@@ -175,3 +175,5 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 
 .places-menu summary { border:1px solid var(--control-line); border-radius:2px; }
 .places-menu:not([open]) .place-switch { display:none; }
+
+#hf-panel p{overflow-wrap:anywhere}#hf-tiles{display:grid;gap:4px;margin:16px 0}#hf-tiles button{font-size:11px;padding:6px 2px;min-width:0;min-height:44px}#hf-tiles button[aria-pressed="true"]{background:#315f83;color:#fff}#hf-canvas{width:100%;height:auto;background:#edf0eb;border:1px solid var(--line);margin:12px 0}#hf-columns{width:100%;min-height:44px}#hf-column-detail,#hf-integrity{font-size:12px;line-height:1.6}.hf-legend{font-size:12px}
