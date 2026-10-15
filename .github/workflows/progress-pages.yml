@@ -54,7 +54,7 @@ jobs:
       - name: Assemble the static observatory
         run: |
           mkdir -p site/progress
-          cp dashboard/index.html dashboard/app.js dashboard/location-search.mjs dashboard/block-preview.mjs dashboard/local-files.mjs dashboard/cell-browser.mjs dashboard/style.css site/
+          cp dashboard/index.html dashboard/app.js dashboard/location-search.mjs dashboard/block-preview.mjs dashboard/local-files.mjs dashboard/cell-browser.mjs dashboard/hf-index.mjs dashboard/hf-release.mjs dashboard/source-bound-v2.mjs dashboard/public-blocks.mjs dashboard/style.css site/
           cp -R dashboard/assets site/assets
           cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
@@ -74,6 +74,7 @@ jobs:
           node tests/block_preview.mjs
           node tests/local_files.mjs
           node tests/cell_browser.mjs
+          node tests/source_bound_v2.mjs
           node tests/mini_transport.mjs
           node tests/dashboard_browser.mjs site
           node tests/headless_browser.mjs site/headless

@@ -1,3 +1,4 @@
+import {decodeSourceBoundV2} from './source-bound-v2.mjs';
 import {decodeCrop,drawCrop,MAX_BYTES} from './block-preview.mjs';
 const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
 const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -22,8 +23,8 @@ export function installLocalFiles(root){
   try{
    const result=await readLocalCrop(find('local-crop').files[0],find('local-manifest').files[0]);if(current!==sequence)return;
    crop=result.crop;rotation=0;drawCrop(find('local-canvas'),crop);find('local-canvas').hidden=false;find('local-turn').hidden=false;
-   status.textContent=`Local tile ${crop.generation.tile}: ${crop.blocks.length.toLocaleString()} recorded blocks. Files stayed in this browser. ${crop.publication_allowed===false?'Private data; public distribution is not approved.':''}`;
-   find('local-detail').textContent=`World origin: ${crop.origin.join(', ')}. Crop size: ${crop.size.join(' × ')}. Coverage: ${crop.coverage}. Generation: ${crop.generation.repo}@${crop.generation.revision}. Crop SHA-256: ${result.digest}. Manifest SHA-256: ${result.manifestDigest}. Material colors are illustrative. Source records: ${crop.attribution.map(a=>a.source+' ('+a.license+')').join('; ')}. File hashes verify the selected pair; source authenticity requires your trusted manifest.`;
+   status.textContent=`Local ${crop.source_bound?'source-bound crop':'tile '+crop.generation.tile}: ${crop.blocks.length.toLocaleString()} recorded blocks. Files stayed in this browser. ${crop.publication_allowed===false?'Private data; public distribution is not approved.':''}`;
+   find('local-detail').textContent=`World origin: ${crop.origin.join(', ')}. Crop size: ${crop.size.join(' × ')}. Coverage: ${crop.source_bound?crop.quality_disclosure:crop.coverage}. Generation: ${crop.source_bound?crop.generation.id_sha256:crop.generation.repo+'@'+crop.generation.revision}. Crop SHA-256: ${result.digest}. Manifest SHA-256: ${result.manifestDigest}. Material colors are illustrative. Source records: ${crop.attribution.map(a=>a.source+' ('+a.license+')').join('; ')}. File hashes verify the selected pair; source authenticity requires your trusted manifest.`;
   }catch(error){if(current===sequence)status.textContent='Could not open local data: '+error.message;}
  };
  find('local-turn').onclick=()=>{if(crop)drawCrop(find('local-canvas'),crop,rotation=(rotation+1)%4);};

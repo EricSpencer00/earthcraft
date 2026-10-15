@@ -1,3 +1,4 @@
+import {installPublicBlocks} from './public-blocks.mjs';
 import {cellRecord,installCellBrowser} from './cell-browser.mjs';
 import {installLocalFiles} from './local-files.mjs';
 import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
@@ -46,7 +47,7 @@ const stateLabel=value=>({
 const color=name=>getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
-let cellBrowser=null;
+let cellBrowser=null,publicBlocks=null;
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
@@ -57,7 +58,7 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   document.body.dataset.panel=open?'open':'closed';
   document.body.dataset.section=section;
   $('panel-toggle').setAttribute('aria-expanded',String(open));
-  for(const id of ['world','cell','about','local','browse']){
+  for(const id of ['world','cell','about','local','browse','hf']){
     $(id+'-panel').hidden=id!==section;
     if(id==='world'||id==='cell')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
@@ -122,6 +123,7 @@ async function initializeBasemap(){
     geoMap.on('idle',()=>{document.body.dataset.camera='idle';});
     geoMap.on('click',event=>{
       if(!geographic())return;
+      if(publicBlocks?.selectAt(event.lngLat)){setPanel(true,'hf');return;}
       const cell=cellAtLocation(event.lngLat);
       if(cell)selectIndex(cell.index);else clearSelection();
     });
@@ -200,6 +202,7 @@ function drawGeography(ctx,cssWidth,cssHeight){
     ctx.strokeStyle=color(strong?'ink':'green');ctx.lineWidth=strong?2.5:1.5;
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
+  publicBlocks?.draw(ctx,geoMap);
   const a=geoMap.unproject([cssWidth/2,cssHeight/2]),b=geoMap.unproject([cssWidth/2+68,cssHeight/2]);
   $('map-scale').textContent=distanceLabel(Math.round(a.distanceTo(b)));
 }
@@ -231,6 +234,7 @@ $('location-search').onsubmit=event=>{
     const location=parseLocation($('location-query').value,places);
     if(!geographic())throw new Error('The geographic atlas is still loading. Try again when the map is ready.');
     const [lng,lat]=location.coordinates;
+    if(publicBlocks?.selectAt({lng,lat})){setPanel(true,'hf');status.textContent='Selected published HF preview.';return;}
     const cell=cellAtLocation({lng,lat});
     if(!cell){clearSelection();status.textContent=location.name+' has no recorded coverage in this atlas.';return;}
     geoMap.easeTo({center:location.coordinates,zoom:13,duration:0});
@@ -759,3 +763,11 @@ $('record-download').onclick=()=>{
  if(selectedIndex===null||!atlas)return;const record=cellRecord(atlas,selectedIndex,snapshot),url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
  const anchor=document.createElement('a');anchor.href=url;anchor.download='earthcraft-cell-'+record.cell_id.replace(/[^a-zA-Z0-9_.-]/g,'_')+'.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
+
+publicBlocks=installPublicBlocks($('hf-panel'),{onCoverage(rows){
+ const points=rows.flatMap(t=>t.corners),west=Math.min(...points.map(p=>p[0])),east=Math.max(...points.map(p=>p[0])),south=Math.min(...points.map(p=>p[1])),north=Math.max(...points.map(p=>p[1]));
+ places.oakbrook={name:'Oakbrook public preview',coordinates:[(west+east)/2,(south+north)/2]};
+ if(geoMap)geoMap.fitBounds([[west,south],[east,north]],{padding:{top:document.querySelector('.map-tools').getBoundingClientRect().height+30,bottom:innerWidth<1024?innerHeight*.64+30:100,left:innerWidth>=1024?450:20,right:70},maxZoom:18,duration:0});
+ scheduleDraw();
+},onSelect(tile){setPanel(true,'hf');const points=tile.corners,center=[points.reduce((n,p)=>n+p[0],0)/4,points.reduce((n,p)=>n+p[1],0)/4];if(geoMap){geoMap.easeTo({center,zoom:18,duration:0});if(innerWidth<1024){const point=geoMap.project(center),available=$('details-panel').getBoundingClientRect().top-$('map').getBoundingClientRect().top,tools=document.querySelector('.map-tools').getBoundingClientRect().height;geoMap.panBy([0,point.y-(tools+Math.max(20,available-tools)/2)],{duration:0});}}scheduleDraw();}});
+$('hf-open').onclick=()=>{setPanel(true,'hf');publicBlocks.open();};
