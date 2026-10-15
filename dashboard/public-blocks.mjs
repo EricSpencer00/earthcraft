@@ -1,6 +1,6 @@
 import {SourceBoundV2Client,polygonContains} from './source-bound-v2.mjs';
 import {HF_RELEASE} from './hf-release.mjs';
-import {PreviewController,drawCrop} from './block-preview.mjs';
+import {PreviewController,drawCrop} from './block-preview.mjs?v=hf-v2-1';
 export function installPublicBlocks(root,{onCoverage,onSelect}){
  const $=id=>root.querySelector('#'+id),client=new SourceBoundV2Client(HF_RELEASE);let connection=null,connected=false,rows=[],selected=null,crop=null,rotation=0;
  const base=`https://huggingface.co/datasets/${HF_RELEASE.repo}`,revision=base+'/tree/'+HF_RELEASE.revision;
