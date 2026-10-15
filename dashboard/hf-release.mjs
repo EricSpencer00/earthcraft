@@ -18,5 +18,5 @@ export const HF_RELEASE={
   "geometry_qa_passed": true,
   "publication_allowed": true,
   "public_readback_verified": true,
-  "coverage_note": "15 bounded Oakbrook previews around the tower footprint; not whole-world coverage. Roof supports include direct, interpolated and fitted cells. Blue shell and materials are illustrative; 61 low-confidence roof cells have 10 m uncertainty. Absolute game Y lineage and public-client adapter acceptance remain open."
+  "coverage_note": "15 bounded Oakbrook previews around the tower footprint; not whole-world coverage. Roof supports include direct, interpolated and fitted cells. Blue shell and materials are illustrative; 61 low-confidence roof cells have 10 m uncertainty. Absolute game Y datum lineage remains unresolved."
 };

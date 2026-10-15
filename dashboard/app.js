@@ -17,7 +17,7 @@ const preview=new PreviewController(state=>{
   $('preview-turn').hidden=state.status!=='ready';
   $('preview-cancel').hidden=state.status!=='loading';
   $('preview-status').textContent=state.status==='unavailable'
-    ? 'No public block payload is published for this cell. You can inspect or download its build record below, open your own block files, or view the separate public block samples.'
+    ? 'No block payload is loaded for this build-record cell. Open Published blocks to inspect verified HF coverage, download this build record, or open your own block files.'
     : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
     ? `${state.crop.publication_allowed===false?'Private review only — not approved for public distribution. ':''}${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
     : state.message||'Preview request stopped.';
@@ -227,10 +227,11 @@ function goToPlace(id){
   else{clearSelection();setMapMessage(place.name+' has no cell in this published snapshot.');}
 }
 
-$('location-search').onsubmit=event=>{
+$('location-search').onsubmit=async event=>{
   event.preventDefault();
   const status=$('search-status');
   try{
+    if($('location-query').value.trim().toLowerCase()==='oakbrook'){setPanel(true,'hf');await publicBlocks.open();status.textContent='Published Oakbrook coverage: choose a 16 m tile to load its block preview.';return;}
     const location=parseLocation($('location-query').value,places);
     if(!geographic())throw new Error('The geographic atlas is still loading. Try again when the map is ready.');
     const [lng,lat]=location.coordinates;
@@ -770,4 +771,4 @@ publicBlocks=installPublicBlocks($('hf-panel'),{onCoverage(rows){
  if(geoMap)geoMap.fitBounds([[west,south],[east,north]],{padding:{top:document.querySelector('.map-tools').getBoundingClientRect().height+30,bottom:innerWidth<1024?innerHeight*.64+30:100,left:innerWidth>=1024?450:20,right:70},maxZoom:18,duration:0});
  scheduleDraw();
 },onSelect(tile){setPanel(true,'hf');const points=tile.corners,center=[points.reduce((n,p)=>n+p[0],0)/4,points.reduce((n,p)=>n+p[1],0)/4];if(geoMap){geoMap.easeTo({center,zoom:18,duration:0});if(innerWidth<1024){const point=geoMap.project(center),available=$('details-panel').getBoundingClientRect().top-$('map').getBoundingClientRect().top,tools=document.querySelector('.map-tools').getBoundingClientRect().height;geoMap.panBy([0,point.y-(tools+Math.max(20,available-tools)/2)],{duration:0});}}scheduleDraw();}});
-$('hf-open').onclick=()=>{setPanel(true,'hf');publicBlocks.open();};
+$('selection-hf').onclick=$('hf-open').onclick=()=>{setPanel(true,'hf');publicBlocks.open();};
