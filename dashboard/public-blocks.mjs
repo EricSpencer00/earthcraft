@@ -4,7 +4,7 @@ import {PreviewController,drawCrop} from './block-preview.mjs?v=hf-v2-1';
 export function installPublicBlocks(root,{onCoverage,onSelect}){
  const $=id=>root.querySelector('#'+id),client=new SourceBoundV2Client(HF_RELEASE);let connection=null,connected=false,rows=[],selected=null,crop=null,rotation=0;
  const base=`https://huggingface.co/datasets/${HF_RELEASE.repo}`,revision=base+'/tree/'+HF_RELEASE.revision;
- $('hf-repository').href=revision;$('hf-provenance').href=client.url('provenance.json');$('hf-license').href=base+'/blob/'+HF_RELEASE.revision+'/LICENSE';$('hf-source-offer').href=client.url('sources/source-bundle.json');
+ $('hf-repository').href=revision;$('hf-provenance').href=client.url('provenance.json');$('hf-license').href=base+'/blob/'+HF_RELEASE.revision+'/DATA_LICENSE.md';$('hf-source-offer').href=client.url('sources/source-bundle.json');
  $('hf-release-note').textContent=HF_RELEASE.coverage_note+' Pinned revision '+HF_RELEASE.revision+'.';
  const controller=new PreviewController(state=>{
   crop=state.crop||null;rotation=0;$('hf-canvas').hidden=state.status!=='ready';$('hf-turn').hidden=state.status!=='ready';$('hf-cancel').hidden=state.status!=='loading';$('hf-column-wrap').hidden=state.status!=='ready';$('hf-downloads').hidden=state.status!=='ready';

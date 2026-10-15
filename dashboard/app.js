@@ -1,4 +1,4 @@
-import {installPublicBlocks} from './public-blocks.mjs?v=hf-v2-1';
+import {installPublicBlocks} from './public-blocks.mjs?v=hf-v2-2';
 import {cellRecord,installCellBrowser} from './cell-browser.mjs';
 import {installLocalFiles} from './local-files.mjs?v=hf-v2-1';
 import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs?v=hf-v2-1';
