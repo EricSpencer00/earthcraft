@@ -33,7 +33,7 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const url=`http://127.0.0.1:${server.address().port}/?view=published`;
-const browser=await chromium.launch({args:['--enable-unsafe-swiftshader']});
+const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||undefined,args:['--enable-unsafe-swiftshader']});
 await mkdir(resolve(root,'test-results'),{recursive:true});
 const problems=[];
 const context=await browser.newContext({viewport:{width:1440,height:1000},hasTouch:true});

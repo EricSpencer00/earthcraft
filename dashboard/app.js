@@ -1,3 +1,4 @@
+import {installLocalFiles} from './local-files.mjs';
 import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
 import {parseLocation} from './location-search.mjs';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
@@ -53,9 +54,9 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   document.body.dataset.panel=open?'open':'closed';
   document.body.dataset.section=section;
   $('panel-toggle').setAttribute('aria-expanded',String(open));
-  for(const id of ['world','cell','about']){
+  for(const id of ['world','cell','about','local']){
     $(id+'-panel').hidden=id!==section;
-    if(id!=='about')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
+    if(id==='world'||id==='cell')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
   if(changed)document.querySelector('.panel-content').scrollTop=0;
 }
@@ -738,3 +739,6 @@ initializeBasemap();
 refresh();
 let ticks=0;
 setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
+
+installLocalFiles($('local-panel'));
+$('local-open').onclick=()=>setPanel(true,'local');

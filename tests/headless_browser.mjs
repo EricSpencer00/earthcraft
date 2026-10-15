@@ -18,7 +18,7 @@ const server=createServer(async(req,res)=>{
   }catch{res.writeHead(404);res.end('Not found');}
 });
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
-const browser=await chromium.launch();
+const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||undefined});
 try{
   const context=await browser.newContext();const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   for(const [width,height] of [[1440,1000],[390,844],[320,720]]){

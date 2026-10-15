@@ -148,3 +148,8 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 
 @media(max-width:1023px) { body[data-panel='open'] .map-attribution { top:calc(var(--tools-height,108px) + 4px); } }
 .warning { top:calc(var(--tools-height,60px) + 8px); }
+
+#local-panel input[type=file] { display:block; max-width:100%; font-size:12px; }
+#local-canvas { width:100%; height:auto; background:var(--surface); }
+#local-detail,#local-status { overflow-wrap:anywhere; }
+@media(max-width:540px) { nav { gap:8px; } nav a,nav button { font-size:12px; } }
