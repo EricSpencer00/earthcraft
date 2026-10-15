@@ -1,3 +1,4 @@
+import {cellRecord,installCellBrowser} from './cell-browser.mjs';
 import {installLocalFiles} from './local-files.mjs';
 import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs';
 import {parseLocation} from './location-search.mjs';
@@ -10,11 +11,12 @@ export function configurePreviewSource(resolve,decode=decodeCrop){previewResolve
 const preview=new PreviewController(state=>{
   previewCrop=state.crop||null;previewRotation=0;
   $('block-preview').hidden=selectedIndex===null;
+  $('preview-help').hidden=state.status!=='unavailable';
   $('preview-canvas').hidden=state.status!=='ready';
   $('preview-turn').hidden=state.status!=='ready';
   $('preview-cancel').hidden=state.status!=='loading';
   $('preview-status').textContent=state.status==='unavailable'
-    ? 'No public block preview or tile download is available for this cell. The published map records build status; it does not verify current blocks.'
+    ? 'No public block payload is published for this cell. You can inspect or download its build record below, open your own block files, or view the separate public block samples.'
     : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
     ? `${state.crop.publication_allowed===false?'Private review only — not approved for public distribution. ':''}${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
     : state.message||'Preview request stopped.';
@@ -44,6 +46,7 @@ const stateLabel=value=>({
 const color=name=>getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
+let cellBrowser=null;
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
@@ -54,7 +57,7 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   document.body.dataset.panel=open?'open':'closed';
   document.body.dataset.section=section;
   $('panel-toggle').setAttribute('aria-expanded',String(open));
-  for(const id of ['world','cell','about','local']){
+  for(const id of ['world','cell','about','local','browse']){
     $(id+'-panel').hidden=id!==section;
     if(id==='world'||id==='cell')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
@@ -128,6 +131,7 @@ async function initializeBasemap(){
       geoMap.getCanvas().style.cursor=cell?'pointer':'';
       if(index!==hoverIndex){hoverIndex=index;scheduleDraw();}
     });
+    geoMap.on('moveend',()=>{if(document.body.dataset.section==='browse')cellBrowser?.refresh();});
     geoMap.on('mouseout',()=>{hoverIndex=null;scheduleDraw();});
     geoMap.on('error',()=>{
       document.body.dataset.basemap='unavailable';
@@ -212,7 +216,7 @@ function setLayer(layer){
 
 function goToPlace(id){
   if(!geographic())return;
-  const place=places[id];
+  const place=places[id];$('places-menu').open=false;
   for(const name of Object.keys(places))$('place-'+name).setAttribute('aria-pressed',String(name===id));
   geoMap.easeTo({center:place.coordinates,zoom:13,duration:0});
   const cell=cellAtLocation({lng:place.coordinates[0],lat:place.coordinates[1]});
@@ -451,6 +455,9 @@ function renderLegend(isPublished,counts,live){
 }
 
 function renderAtlas(){
+  cellBrowser?.setData(atlas,snapshot);
+  $('browse-open').disabled=!atlas;
+  $('coverage-note').textContent=!atlas?'Coverage unavailable':atlas.area.id==='world'?'Saved manifest footprint · blocks unverified':'Published build records · not live progress';
   if(!atlas){
     geoSignature='';geoCells=[];document.body.dataset.map='grid';$('map-attribution').hidden=true;
     for(const id of ['place-chicago','place-elmhurst','layer-appearance'])$(id).disabled=true;
@@ -631,6 +638,8 @@ function indexAtPointer(event){
 
 function renderSelection(){
   const details=$('selection-details');details.replaceChildren();
+  $('cell-actions').hidden=selectedIndex===null;
+  $('cell-provenance').textContent=selectedIndex===null?'':`Public record as of ${snapshot?.updated_utc||'unknown date'}; ${atlas?.area.id==='world'?'saved manifest footprint':'published progress snapshot'}. Not live generator progress.`;
   details.hidden=true;$('clear-selection').hidden=selectedIndex===null;
   if(selectedIndex===null||!atlas){
     $('selection-title').textContent='Choose a cell';
@@ -644,7 +653,7 @@ function renderSelection(){
   const unit=atlas.area.cell_size_blocks===16?'Chunk':'Cell';
   const id=atlas.cell_ids?.[selectedIndex]||Math.floor(blockX/atlas.area.cell_size_blocks)+'_'+Math.floor(blockZ/atlas.area.cell_size_blocks);
   $('selection-title').textContent=unit+' '+id.replace('_',', ');
-  $('cell').textContent=code<0?'No build record for this square.':atlas.area.id==='live'?'Imported into Minecraft.':stateLabel(atlas.palette[code])+'.';
+  $('cell').textContent=code<0?'No build record for this square.':atlas.area.id==='live'?'Imported into Minecraft.':atlas.area.id==='world'?'Saved manifest record. Current block fill is unverified.':stateLabel(atlas.palette[code])+'.';
   const rows=[['Size',number(atlas.area.cell_size_blocks)+' × '+number(atlas.area.cell_size_blocks)+' m']];
   if(record){
     if(Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
@@ -742,3 +751,11 @@ setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!do
 
 installLocalFiles($('local-panel'));
 $('local-open').onclick=()=>setPanel(true,'local');
+
+cellBrowser=installCellBrowser($('browse-panel'),{select:index=>{selectIndex(index);$('selection-title').tabIndex=-1;$('selection-title').focus({preventScroll:true});},visibleBounds:()=>{if(!geographic())return null;const bounds=geoMap.getBounds();return {west:bounds.getWest(),east:bounds.getEast(),south:bounds.getSouth(),north:bounds.getNorth()};}});
+$('browse-open').onclick=$('cell-browse').onclick=()=>{setPanel(true,'browse');cellBrowser.setData(atlas,snapshot);};
+$('selection-local').onclick=()=>setPanel(true,'local');
+$('record-download').onclick=()=>{
+ if(selectedIndex===null||!atlas)return;const record=cellRecord(atlas,selectedIndex,snapshot),url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
+ const anchor=document.createElement('a');anchor.href=url;anchor.download='earthcraft-cell-'+record.cell_id.replace(/[^a-zA-Z0-9_.-]/g,'_')+'.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
