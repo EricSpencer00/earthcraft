@@ -597,6 +597,8 @@ class Worker:
         if templates.exists():
             os.environ['EARTHCRAFT_WORLD_TEMPLATES'] = str(templates.resolve())
         chunk_template(ROOT), height_template(ROOT)  # fail fast: every world build needs both
+        from material_router import texture_colors
+        texture_colors()  # and the Minecraft 1.21.10 client JAR (EARTHCRAFT_CLIENT_JAR) for block colours
         self.frame = json.loads(a.frame.read_text())
         plan_path = self.control / 'plan.json'
         if plan_path.exists():

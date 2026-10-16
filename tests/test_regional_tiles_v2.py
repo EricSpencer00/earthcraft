@@ -104,6 +104,9 @@ class LifecycleTests(unittest.TestCase):
         self.ctx = make_ctx(self.root / 'hf', self.hub)
         self.store = hs.StoreClient(ctx=self.ctx)
         write_templates(self.control / 'templates')
+        jar = patch('material_router.texture_colors', return_value={})  # no Minecraft client JAR in CI
+        jar.start()
+        self.addCleanup(jar.stop)
 
     def tearDown(self):
         regional_cache.activate(None)
