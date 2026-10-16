@@ -5,6 +5,10 @@ on:
     paths:
       - dashboard/**
       - tests/dashboard_browser.mjs
+      - tests/blocks_browser.mjs
+      - tests/anvil.mjs
+      - tests/range_server.mjs
+      - tests/fixtures/anvil/**
       - .github/workflows/dashboard.yml
       - progress/earth.json
       - docs/photos/watertower-sep-10-26.png
@@ -12,6 +16,10 @@ on:
     paths:
       - dashboard/**
       - tests/dashboard_browser.mjs
+      - tests/blocks_browser.mjs
+      - tests/anvil.mjs
+      - tests/range_server.mjs
+      - tests/fixtures/anvil/**
       - .github/workflows/dashboard.yml
       - progress/earth.json
   workflow_dispatch:
@@ -39,9 +47,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Check the atlas and capture each layout
         run: |
-          node tests/source_bound_v2.mjs
           node tests/mini_transport.mjs
+          node tests/anvil.mjs
           node tests/dashboard_browser.mjs
+          node tests/blocks_browser.mjs
       - name: Save screenshots
         if: always()
         uses: actions/upload-artifact@v5
