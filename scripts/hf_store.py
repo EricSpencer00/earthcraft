@@ -2019,8 +2019,8 @@ generated; it is not empty terrain.
 ## Start here
 
 Fetch [`catalog.json`](catalog.json) **at a pinned commit** and resolve every
-other path at that same commit. Descriptors carry `path`, `bytes` and `sha256`
-(or `git_blob_id` for small text files); check them before use.
+other path at that same commit. Every descriptor carries `path`, `bytes` and
+`sha256`; check them before use.
 
 ```sh
 REV=$(curl -s https://huggingface.co/api/datasets/EricSpencer00/earthcraft | python3 -c 'import json,sys;print(json.load(sys.stdin)["sha"])')
