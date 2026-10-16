@@ -1,0 +1,99 @@
+{
+  "schema": "earthcraft.test-fixture.v1",
+  "description": "Nine stored chunks (1..3, 1..3) around the Chicago Water Tower from the Earthcraft save, Minecraft Java 1.21.10 (DataVersion 4556). Chunk records are byte-identical to the save; only the region header was rebuilt for the smaller file. Stored with a .region suffix because the repository ignores *.mca; tests serve it as region/0/r.0.0.mca.",
+  "source": {
+    "region": "region/r.0.0.mca",
+    "bytes": 4952064,
+    "sha256": "b9d768ee6e91cc0eccb90490d13b028ec75d7c4b364b6b9631aed8c0c3239f22",
+    "captured": "2026-10-16 (read-only APFS clone of the save; region last written 2026-10-01)"
+  },
+  "file": {
+    "path": "water-tower-r.0.0.region",
+    "bytes": 45056,
+    "sha256": "ac2d4af7dc20a569ce2cfd237b106ef45ef7f967a4d9800599b849fd0d16cb96"
+  },
+  "chunks": [
+    {
+      "chunk": [
+        1,
+        1
+      ],
+      "compression": 2,
+      "stored_bytes": 1141,
+      "record_sha256": "95753584086aa322dbe89cc89b8179f5c59757f9409823f43bff74c56e5ed142"
+    },
+    {
+      "chunk": [
+        2,
+        1
+      ],
+      "compression": 2,
+      "stored_bytes": 1232,
+      "record_sha256": "0c8b15eb96b8d21bafedcaa18180a9b668866ad178b187e116094ca4d430fc04"
+    },
+    {
+      "chunk": [
+        3,
+        1
+      ],
+      "compression": 2,
+      "stored_bytes": 880,
+      "record_sha256": "c4ac1e7dc3412d904dce5cacc652237e7acc261f98d1818ccdfff937e9293854"
+    },
+    {
+      "chunk": [
+        1,
+        2
+      ],
+      "compression": 2,
+      "stored_bytes": 2240,
+      "record_sha256": "44ee404bd3b486e719d424501b2b68007c48145b3acff0e7d564833fdaa7c173"
+    },
+    {
+      "chunk": [
+        2,
+        2
+      ],
+      "compression": 2,
+      "stored_bytes": 2685,
+      "record_sha256": "e803eb33c7b5f88af42ac405528cb9b6c1cc089e3cf7c6a17a681686da9234c2"
+    },
+    {
+      "chunk": [
+        3,
+        2
+      ],
+      "compression": 2,
+      "stored_bytes": 856,
+      "record_sha256": "2f9095dfa63a732ae724f2f31bb0f5fc159f80b370e0d1e004d6b1b5fd08e912"
+    },
+    {
+      "chunk": [
+        1,
+        3
+      ],
+      "compression": 2,
+      "stored_bytes": 946,
+      "record_sha256": "549e798d60e8049ae748c23544e906d614dd61a33bd0e44877e6ccff8c3fde10"
+    },
+    {
+      "chunk": [
+        2,
+        3
+      ],
+      "compression": 2,
+      "stored_bytes": 1059,
+      "record_sha256": "81a0a88aeef29098cdd3c1e464f9a9b8bf2dd1d240ae5dc06971dff16d706036"
+    },
+    {
+      "chunk": [
+        3,
+        3
+      ],
+      "compression": 2,
+      "stored_bytes": 857,
+      "record_sha256": "708fcdd9fc591021451507d6d496fd1b8ae1f59067bc66f69517a0cad25501c3"
+    }
+  ],
+  "player_data": "none (region chunk NBT only; no playerdata, stats, advancements or level.dat)"
+}

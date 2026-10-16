@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Walk through Earthcraft in 3D: the real Minecraft blocks of the Earth at one block per metre, starting with the Chicago area.">
+  <meta name="theme-color" content="#ffffff">
+  <title>Earthcraft · Block viewer</title>
+  <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+  <link rel="preload" href="./assets/fonts/source-serif-4-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./style.css?v=simple-1">
+  <link rel="stylesheet" href="./blocks.css?v=blocks-1">
+  <script src="./blocks-boot.js?v=blocks-1"></script>
+  <script src="./chunk-viewer.mjs?v=simple-1" type="module"></script>
+</head>
+<body data-panel="closed" data-view="orbit">
+  <a class="skip-link" href="#viewer">Skip to the block view</a>
+  <header class="site-header">
+    <a href="./" class="brand" aria-label="Earthcraft home">Earthcraft</a>
+    <h1 id="page-title">Block viewer</h1>
+    <nav aria-label="Main navigation"><a href="./">World map</a><button id="panel-toggle" aria-expanded="false" aria-controls="viewer-panel" type="button">Coverage</button><a class="source-link" href="https://github.com/EricSpencer00/earthcraft">GitHub <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main id="blocks" class="explorer" aria-labelledby="page-title">
+    <div class="viewer-wrap" id="viewer-wrap" aria-busy="true"><canvas id="viewer" tabindex="0" role="img" aria-label="3D view of Minecraft blocks. Drag to turn, scroll to zoom." aria-describedby="viewer-help"></canvas></div>
+    <div class="map-tools viewer-tools">
+      <form id="goto" class="goto" aria-label="Choose chunks"><label for="goto-x">Chunk X</label><input id="goto-x" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-z">Chunk Z</label><input id="goto-z" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-radius">Radius</label><select id="goto-radius"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option></select><button type="submit">Load</button><button id="goto-tower" type="button">Water Tower</button></form>
+      <div class="layer-switch view-switch" role="group" aria-label="Camera"><button type="button" data-view="orbit" aria-pressed="true">Orbit</button><button type="button" data-view="iso" aria-pressed="false">Iso</button><button type="button" data-view="top" aria-pressed="false">Top</button><button type="button" data-view="street" aria-pressed="false">Street</button></div>
+    </div>
+    <div class="map-bottom viewer-readout"><p id="viewer-status" role="status">Reading region headers…</p><p class="readout"><span id="readout-camera">—</span><span id="readout-block">Point at a block to name it</span></p></div>
+    <p id="viewer-help" class="sr-only">Orbit: drag to turn, right-drag or Shift-drag to pan, scroll to zoom. Street: drag to look, W A S D or arrow keys to walk, Q and E to change height. Keys 1 to 4 switch camera; R resets.</p>
+    <aside class="details-panel" id="viewer-panel" aria-label="Chunk coverage">
+      <div class="panel-tabs"><span class="panel-label">Chunks and source</span><button id="panel-close" type="button" aria-label="Close coverage">×</button></div>
+      <div class="panel-content">
+        <h2 id="coverage-title">Chunk coverage</h2>
+        <p id="coverage-summary" class="record-note">No chunks requested yet.</p>
+        <canvas id="coverage" width="204" height="204" role="img" aria-label="Chunk coverage grid"></canvas>
+        <p class="coverage-legend" aria-label="Coverage legend"><span><i class="c-loaded"></i>Loaded</span><span><i class="c-absent"></i>Not stored</span><span><i class="c-noregion"></i>No region file</span><span><i class="c-error"></i>Unreadable</span><span><i class="c-pending"></i>Reading</span></p>
+        <p class="record-note">North is up. Select a square to centre on that chunk.</p>
+        <dl class="selection-details viewer-stats"><div><dt>Centre chunk</dt><dd id="stat-center">—</dd></div><div><dt>Region files</dt><dd id="stat-regions">—</dd></div><div><dt>Blocks drawn</dt><dd id="stat-blocks">—</dd></div><div><dt>Faces</dt><dd id="stat-faces">—</dd></div><div><dt>Range requests</dt><dd id="stat-requests">—</dd></div><div><dt>Transferred</dt><dd id="stat-bytes">—</dd></div></dl>
+        <form id="floor-form" class="floor-form"><label for="floor-y">Cut away below Y</label><input id="floor-y" inputmode="numeric" pattern="-?[0-9]+" maxlength="5"><button type="submit">Apply</button></form>
+        <h2>Source</h2>
+        <p id="source-note" class="record-note"></p>
+        <p id="unknown-blocks" class="record-note" hidden></p>
+        <p class="record-note">Colors approximate vanilla blocks; no Minecraft textures are used. Shapes other than full blocks, slabs, stairs and posts are simplified.</p>
+        <details><summary>Controls</summary><p class="record-note">Orbit: drag to turn, right-drag or Shift-drag to pan, scroll or pinch to zoom. Iso and Top: drag to pan, scroll to zoom, Q and E to turn. Street: drag to look, W A S D or arrows to walk, Q and E to change height. Keys 1–4 switch camera; R resets the view.</p></details>
+      </div>
+      <div class="panel-footer"><a href="https://github.com/EricSpencer00/earthcraft/blob/main/NOTICE">Credits &amp; licenses</a></div>
+    </aside>
+  </main>
+</body>
+</html>

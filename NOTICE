@@ -14,6 +14,10 @@ Sources and checksums: dashboard/assets/fonts/sources.json.
 MapLibre GL JS 6.11.2: BSD 3-Clause.
 Copyright, license and file sources: dashboard/assets/vendor/maplibre.
 
+three.js 0.185.1: MIT License.
+Copyright, license and file sources: dashboard/assets/vendor/three.
+Block viewer colors are authored approximations; no Minecraft textures are bundled.
+
 Street map: OpenFreeMap, © OpenMapTiles and © OpenStreetMap contributors.
 OpenStreetMap data: ODbL (https://www.openstreetmap.org/copyright).
 Archived-sample data credits and licenses: progress/headless/report.json.
