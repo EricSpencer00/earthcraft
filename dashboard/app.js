@@ -641,7 +641,7 @@ function renderSelection(){
     $('cell-view-status').textContent=result.status==='empty'?'Not built yet.':'Drag to turn · scroll or pinch to zoom.';
   }).catch(error=>{
     if(token!==cellToken)return;console.warn(error);
-    $('cell-view').dataset.state='error';$('cell-view-status').textContent='The 3D view could not be drawn here. Use Open full screen.';
+    $('cell-view').dataset.state='error';$('cell-view-status').textContent='The 3D view could not be drawn here. Use Explore in Minecraft viewer.';
   });
 }
 
