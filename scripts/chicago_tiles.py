@@ -26,6 +26,11 @@ BOUNDARY='https://gisapps.cityofchicago.org/arcgis/rest/services/CachedMaps/Aeri
 STAGES=('sources','geometry','appearance','game_verify')
 
 
+def is_local_evidence(evidence):
+    """Local receipts are absolute paths; dataset evidence is a repository path (tiles/v2/...)."""
+    return Path(str(evidence)).is_absolute()
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
@@ -153,6 +158,10 @@ class Journal:
             self.db.execute('ALTER TABLE jobs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0')
         if 'defer_reason' not in columns:
             self.db.execute('ALTER TABLE jobs ADD COLUMN defer_reason TEXT')
+        # One-pass regional tiles record dataset evidence (tiles/v2/... path,
+        # SHA-256 and the verified Hub commit) instead of a local receipt path.
+        if 'evidence_commit' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN evidence_commit TEXT')
         fingerprint=digest(plan)
         self._begin_immediate()
         try:
@@ -215,10 +224,7 @@ class Journal:
               '''+ordering+''' LIMIT 1''',params).fetchone()
             result=None
             if row:
-                for prior in self.db.execute("SELECT evidence,evidence_sha256 FROM jobs WHERE tile=? AND stage<?",(row['tile'],index)):
-                    path=Path(prior['evidence'])
-                    if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
-                        raise ValueError('Prior stage evidence changed; do not advance tile')
+                self._check_prior(row['tile'],index)
                 token=uuid.uuid4().hex
                 self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?",
                     (token,owner,now+lease_seconds,row['tile'],index))
@@ -245,16 +251,96 @@ class Journal:
                 (tile,index,now,now)).fetchone()
             result=None
             if row:
-                for prior in self.db.execute('SELECT evidence,evidence_sha256 FROM jobs WHERE tile=? AND stage<?',(tile,index)):
-                    path=Path(prior['evidence'])
-                    if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
-                        raise ValueError('Prior stage evidence changed; do not advance tile')
+                self._check_prior(tile,index)
                 token=uuid.uuid4().hex
                 self.db.execute('UPDATE jobs SET state=\'running\',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?',
                     (token,owner,now+lease_seconds,tile,index))
                 result={'tile':tile,'stage':stage,'token':token}
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
+
+    def _check_prior(self,tile,index,legacy_ok=False):
+        """Re-hash earlier local receipts; dataset evidence carries its verified SHA-256.
+
+        Returns {stage: kind} with kind 'local', 'dataset' or 'legacy' (a local
+        receipt whose file no longer exists, accepted only when legacy_ok).
+        """
+        kinds={}
+        for prior in self.db.execute('SELECT stage,evidence,evidence_sha256 FROM jobs WHERE tile=? AND stage<?',(tile,index)):
+            evidence=prior['evidence'];name=STAGES[prior['stage']]
+            if evidence is None or not is_local_evidence(evidence):
+                kinds[name]='dataset';continue
+            path=Path(evidence)
+            if legacy_ok and not path.exists():
+                kinds[name]='legacy';continue
+            if path.stat().st_size>2**20 or hashlib.sha256(path.read_bytes()).hexdigest()!=prior['evidence_sha256']:
+                raise ValueError('Prior stage evidence changed; do not advance tile')
+            kinds[name]='local'
+        return kinds
+
+    def claim_tile(self,owner,lane='base',now=None,lease_seconds=3600,tiles=None):
+        """Lease every unfinished generation stage of one tile under one token.
+
+        One tile is one unit of work. Lane 'base' takes a tile whose sources are
+        unfinished and leases sources, geometry and appearance together. Lane
+        'scans' takes a tile whose sources and geometry are complete and leases
+        appearance alone. Failed or complete stages are never re-leased here;
+        game_verify is never claimed. Earlier receipts are checked as in claim();
+        a lost legacy receipt (written on the retired external drive) is accepted
+        because the pass regenerates every input it needs.
+        """
+        now=time.time() if now is None else now
+        if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:raise ValueError('Invalid worker lease')
+        if lane not in ('base','scans'):raise ValueError('Unsupported tile lane')
+        anchor=0 if lane=='base' else 2
+        claimable="(state='pending' OR (state='running' AND expires<=?)) AND COALESCE(not_before,0)<=?"
+        query=("SELECT * FROM jobs j WHERE j.stage=? AND (j.state='pending' OR (j.state='running' AND j.expires<=?)) "
+               "AND COALESCE(j.not_before,0)<=? "
+               "AND NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')")
+        params=[anchor,now,now]
+        if tiles is not None:
+            tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
+            if not tiles:return None
+            query+=' AND j.tile IN ('+','.join('?' for _ in tiles)+')';params+=list(tiles)
+        query+=' ORDER BY CASE WHEN j.route_rank IS NULL THEN 1 ELSE 0 END, j.route_rank, j.priority, j.tile LIMIT 1'
+        self._begin_immediate()
+        try:
+            row=self.db.execute(query,params).fetchone();result=None
+            if row:
+                prior=self._check_prior(row['tile'],anchor,legacy_ok=True)
+                later=[] if lane=='scans' else [r['stage'] for r in self.db.execute(
+                    'SELECT stage FROM jobs WHERE tile=? AND stage IN (1,2) AND '+claimable+' ORDER BY stage',
+                    (row['tile'],now,now))]
+                stages=[anchor,*later];token=uuid.uuid4().hex
+                for index in stages:
+                    self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?",
+                        (token,owner,now+lease_seconds,row['tile'],index))
+                result={'tile':row['tile'],'lane':lane,'token':token,'stages':[STAGES[i] for i in stages],'prior':prior}
+            self.db.execute('COMMIT');return result
+        except Exception:self.db.execute('ROLLBACK');raise
+
+    def finish_remote(self,job,stage,path_in_repo,raw,commit,now=None):
+        """Complete one leased stage with a receipt that is verified on the Hub.
+
+        The journal keeps the dataset path, the receipt's SHA-256 and the commit
+        that carries it, never a local scratch path.
+        """
+        now=time.time() if now is None else now
+        if is_local_evidence(path_in_repo) or not str(path_in_repo).startswith('tiles/'):
+            raise ValueError('Dataset evidence path required')
+        if len(raw)>2**20:raise ValueError('Receipt exceeds journal budget')
+        evidence=json.loads(raw)
+        if evidence.get('tile')!=job['tile'] or evidence.get('stage')!=stage or evidence.get('result')!='pass':
+            raise ValueError('Matching successful stage receipt required')
+        changed=self.db.execute("""UPDATE jobs SET state='complete',evidence=?,evidence_sha256=?,evidence_commit=?,
+            token=NULL,expires=NULL WHERE tile=? AND stage=? AND token=? AND state='running' AND expires>?""",
+            (path_in_repo,hashlib.sha256(raw).hexdigest(),commit,job['tile'],STAGES.index(stage),job['token'],now)).rowcount
+        if changed!=1:raise ValueError('Stale or expired worker cannot publish completion')
+
+    def release_tile(self,job,delay_seconds,reason,stages=None):
+        """Return a tile's leased stages to the queue after a capacity pause (not a failure)."""
+        for stage in stages or job['stages']:
+            self.defer({'tile':job['tile'],'stage':stage,'token':job['token']},delay_seconds,reason)
 
     def finish(self,job,receipt,now=None):
         now=time.time() if now is None else now;receipt=Path(receipt)
@@ -270,6 +356,14 @@ class Journal:
     def summary(self):
         return [{**dict(row),'stage':STAGES[row['stage']]} for row in self.db.execute(
             'SELECT stage,state,count(*) AS count FROM jobs GROUP BY stage,state ORDER BY stage,state')]
+
+    def has_claimable_sources(self,now=None):
+        """Read whether source work is eligible without creating a lease or attempt."""
+        now=time.time() if now is None else now
+        if not math.isfinite(now):raise ValueError('Invalid source eligibility time')
+        return self.db.execute("""SELECT 1 FROM jobs WHERE stage=0 AND
+            (state='pending' OR (state='running' AND expires<=?)) AND
+            COALESCE(not_before,0)<=? LIMIT 1""",(now,now)).fetchone() is not None
 
     def fail(self,job,receipt):
         """Retain a concrete failure and let other tiles advance; no fake success."""

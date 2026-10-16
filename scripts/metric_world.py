@@ -27,7 +27,7 @@ from material_router import APPEARANCE_BLOCKS, route
 from geographic_quality import vertical_layout
 from point_geometry import load_tower_points
 from batch_point_geometry import load_batch_points
-from world_templates import height_template
+from world_templates import chunk_template, height_template
 from point_ground_materials import load as load_ground_materials
 from metric_frame import tile_layout
 from world_border import bounds_for_tiles, update_world_border
@@ -415,7 +415,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     min_y = -64
     destination.mkdir(parents=True)
     (destination/'region').mkdir()
-    template = ROOT/'worlds/chicago-water-tower-64/Arnis World 1'
+    template = chunk_template(ROOT)
     _, sample, _ = next(chunks(template/'region/r.0.0.mca'))
     # The sample tag is immutable after this point.  A shallow per-chunk copy
     # is sufficient because every mutable field we change below is replaced by

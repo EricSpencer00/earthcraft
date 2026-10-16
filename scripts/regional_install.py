@@ -1,8 +1,10 @@
 """Install verified regional chunks into the closed existing Earthcraft save.
 
 Existing chunks win by default. A scan upgrade needs the exact immutable LQ
-record (including its timestamp); any mismatch keeps the entire player chunk.
-Each touched region has a verified private backup and an atomic replacement.
+record (or an identical block volume); any mismatch keeps the entire player
+chunk. Each touched file is handed to a backup writer before it changes and
+replaced atomically. install_tile() is the core used by hf_install.py, which
+holds the session lock for the whole install; install() is the file-based form.
 """
 import argparse
 import fcntl
@@ -98,7 +100,100 @@ def quality_merge(current, incoming, expected=None, compare_geometry=False):
                     'existing_or_edited_chunks_preserved': conflicts}
 
 
+UPGRADE_QUALITIES = ('scan-roof', 'scan-points-and-roof', 'classified-scan-points')
+
+
+def write_backup(directory):
+    """Default backup writer: verified raw copies in a private directory."""
+    directory = Path(directory)
+
+    def write(name, raw):
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic(target, raw)
+        if target.read_bytes() != raw:
+            raise ValueError('Pre-update backup differs')
+        return target
+    return write
+
+
+def write_region(target, raw):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic(target, raw)
+
+
+def install_tile(world, *, tile, quality, frame, offset_xz, size, incoming, receipt_sha256, baselines=(),
+                 backup=None, region_writer=write_region):
+    """Merge one verified tile into a closed save. The caller holds the session lock.
+
+    incoming: {region file name: raw verified Anvil bytes}. baselines: a list of
+    {region file name: raw bytes}, each an immutable LQ extrusion of this tile;
+    a chunk is upgraded only when the save still holds one of them (exactly or
+    with an identical block volume). Every other existing chunk is kept, so
+    player edits always win. backup(name, raw) receives each touched file's
+    original bytes before it changes.
+    """
+    world = Path(world)
+    installed = json.loads((world/'city-coverage.json').read_text())
+    if frame != installed['frame']:
+        raise ValueError('Tile uses another coordinate frame')
+    if baselines and quality not in UPGRADE_QUALITIES:
+        raise ValueError('An LQ candidate cannot overwrite existing geometry')
+    expected_regions = {}
+    for baseline in baselines:
+        for name, raw in baseline.items():
+            merged = expected_regions.setdefault(name, {})
+            for slot, value in records(raw).items():
+                choices = merged.setdefault(slot, [])
+                if value not in choices:
+                    choices.append(value)
+    backup = backup or (lambda name, raw: None)
+    report = {'tile': tile, 'quality': quality, 'source_receipt_sha256': receipt_sha256,
+              'added_chunks': 0, 'upgraded_chunks': 0, 'existing_or_edited_chunks_preserved': 0,
+              'regions': {}, 'installed': False}
+    for name, incoming_bytes in sorted(incoming.items()):
+        target = world/'region'/name
+        original_bytes = target.read_bytes() if target.exists() else b''
+        merged, counts = quality_merge(records(original_bytes), records(incoming_bytes), expected_regions.get(name),
+                                       compare_geometry=True)
+        if counts['added_chunks'] or counts['upgraded_chunks']:
+            if original_bytes:
+                backup('region/'+name, original_bytes)
+            if (target.read_bytes() if target.exists() else b'') != original_bytes:
+                raise ValueError('Player region changed inside the session fence')
+            region_writer(target, encode(merged))
+            if records(target.read_bytes()) != merged:
+                raise ValueError('Installed region differs from merged records')
+        report['regions'][name] = counts
+        for key in counts:
+            report[key] += counts[key]
+    report['installed'] = True
+    # Record actual delivered quality separately from the frozen generator
+    # plan. A partly protected tile never claims all its chunks were upgraded.
+    quality_path = world/'regional-quality.json'
+    if quality_path.exists():
+        backup('regional-quality.json', quality_path.read_bytes())
+    state = json.loads(quality_path.read_text()) if quality_path.exists() else {'frame': frame, 'tiles': {}}
+    identity = str(size)+':'+tile
+    state['tiles'][identity] = {key: report[key] for key in ('tile', 'quality', 'added_chunks', 'upgraded_chunks',
+                                                            'existing_or_edited_chunks_preserved',
+                                                            'source_receipt_sha256')}
+    atomic(quality_path, json.dumps(state, indent=2).encode())
+    if report['added_chunks']:
+        backup('city-coverage.json', (world/'city-coverage.json').read_bytes())
+        installed['tiles']['regional-'+identity] = {'id': tile, 'world_offset_xz': offset_xz, 'size_m': size,
+                                                    'status': 'geometry_verified_existing_chunks_preserved'}
+        atomic(world/'city-coverage.json', json.dumps(installed, indent=2).encode())
+        from world_border import update_world_border, bounds_for_tiles
+        for path in (world/'level.dat', world/'data/world_border.dat'):
+            if path.exists():
+                backup(path.relative_to(world).as_posix(), path.read_bytes())
+        update_world_border(world, bounds_for_tiles(installed['tiles'].values()))
+    return report
+
+
 def install(world, candidate, receipt_path, backups, expected=None):
+    """Install one candidate world directory (file-based form, takes the session lock itself)."""
     world, candidate, backups = map(Path, (world, candidate, backups))
     receipt_path = Path(receipt_path)
     receipt = json.loads(receipt_path.read_text())
@@ -107,79 +202,39 @@ def install(world, candidate, receipt_path, backups, expected=None):
     if sha(candidate/'earthcraft.json') != receipt['world_manifest_sha256']:
         raise ValueError('Verified tile manifest changed')
     actual = json.loads((candidate/'earthcraft.json').read_text())
-    installed = json.loads((world/'city-coverage.json').read_text())
-    if actual['world_frame'] != installed['frame']:
-        raise ValueError('Tile uses another coordinate frame')
-    baselines=[] if expected is None else [Path(expected)] if isinstance(expected,(str,Path)) else list(map(Path,expected))
-    expected_regions={}
-    if baselines:
-        for baseline in baselines:
-            baseline_receipt = json.loads((baseline.parent/'geometry-receipt.json').read_text())
-            if sha(baseline/'earthcraft.json') != baseline_receipt['world_manifest_sha256']:
-                raise ValueError('Immutable LQ baseline differs from its verified generation receipt')
-            prior = json.loads((baseline/'earthcraft.json').read_text())
-            if prior['world_frame'] != actual['world_frame']:
-                raise ValueError('Upgrade baseline uses another frame')
-            if not baseline_is_extrusion(prior):
-                raise ValueError('Only immutable mapped height extrusions may be upgraded')
-            for name,checksum in baseline_receipt['regions'].items():
-                raw=region_bytes(baseline/'region'/name)
-                if hashlib.sha256(raw).hexdigest()!=checksum:raise ValueError('Immutable baseline region changed')
-                merged=expected_regions.setdefault(name,{})
-                for slot,value in records(raw).items():
-                    choices=merged.setdefault(slot,[])
-                    if value not in choices:choices.append(value)
-        if receipt.get('quality') not in ('scan-roof', 'scan-points-and-roof', 'classified-scan-points'):
-            raise ValueError('An LQ candidate cannot overwrite existing geometry')
+    baselines = []
+    for baseline in [] if expected is None else [Path(expected)] if isinstance(expected, (str, Path)) else list(map(Path, expected)):
+        baseline_receipt = json.loads((baseline.parent/'geometry-receipt.json').read_text())
+        if sha(baseline/'earthcraft.json') != baseline_receipt['world_manifest_sha256']:
+            raise ValueError('Immutable LQ baseline differs from its verified generation receipt')
+        prior = json.loads((baseline/'earthcraft.json').read_text())
+        if prior['world_frame'] != actual['world_frame']:
+            raise ValueError('Upgrade baseline uses another frame')
+        if not baseline_is_extrusion(prior):
+            raise ValueError('Only immutable mapped height extrusions may be upgraded')
+        regions = {}
+        for name, checksum in baseline_receipt['regions'].items():
+            raw = region_bytes(baseline/'region'/name)
+            if hashlib.sha256(raw).hexdigest() != checksum:
+                raise ValueError('Immutable baseline region changed')
+            regions[name] = raw
+        baselines.append(regions)
+    incoming = {}
+    for name, checksum in receipt['regions'].items():
+        raw = region_bytes(candidate/'region'/name)
+        if hashlib.sha256(raw).hexdigest() != checksum:
+            raise ValueError('Verified source region changed')
+        incoming[name] = raw
     backup = backups/(str(time.time_ns())+'-'+receipt['tile'])
     backup.mkdir(parents=True)
-    report = {'tile': receipt['tile'], 'quality': receipt['quality'], 'source_receipt_sha256': sha(receipt_path),
-              'added_chunks': 0, 'upgraded_chunks': 0, 'existing_or_edited_chunks_preserved': 0,
-              'regions': {}, 'backup': str(backup.resolve()), 'installed': False}
+    writer = write_backup(backup)
     with (world/'session.lock').open('r+b') as lock:
         fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for name, checksum in receipt['regions'].items():
-            source = candidate/'region'/name
-            incoming_bytes=region_bytes(source)
-            if hashlib.sha256(incoming_bytes).hexdigest() != checksum:
-                raise ValueError('Verified source region changed')
-            target = world/'region'/name
-            original_bytes = target.read_bytes() if target.exists() else b''
-            original = records(original_bytes)
-            expected_records = expected_regions.get(name)
-            merged, counts = quality_merge(original, records(incoming_bytes), expected_records, compare_geometry=True)
-            if counts['added_chunks'] or counts['upgraded_chunks']:
-                if original_bytes:
-                    atomic(backup/name, original_bytes)
-                    if (backup/name).read_bytes() != original_bytes:
-                        raise ValueError('Pre-update region backup differs')
-                if (target.read_bytes() if target.exists() else b'') != original_bytes:
-                    raise ValueError('Player region changed inside the session fence')
-                target.parent.mkdir(parents=True,exist_ok=True)
-                atomic(target, encode(merged))
-                if records(target.read_bytes()) != merged:
-                    raise ValueError('Installed region differs from merged records')
-            report['regions'][name] = counts
-            for key in counts: report[key] += counts[key]
-        report['installed'] = True
-        # Record actual delivered quality separately from the frozen generator
-        # plan. A partly protected tile never claims all its chunks were upgraded.
-        quality_path=world/'regional-quality.json'
-        quality=json.loads(quality_path.read_text()) if quality_path.exists() else {'frame':actual['world_frame'],'tiles':{}}
-        identity=str(actual['source']['size'])+':'+receipt['tile']
-        quality['tiles'][identity]={key:report[key] for key in ('tile','quality','added_chunks','upgraded_chunks','existing_or_edited_chunks_preserved','source_receipt_sha256')}
-        atomic(quality_path,json.dumps(quality,indent=2).encode())
-        if report['added_chunks']:
-            installed=json.loads((world/'city-coverage.json').read_text())
-            installed['tiles']['regional-'+identity]={'id':receipt['tile'],
-                'world_offset_xz':actual['world_offset_xz'],'size_m':actual['source']['size'],
-                'status':'geometry_verified_existing_chunks_preserved'}
-            atomic(world/'city-coverage.json',json.dumps(installed,indent=2).encode())
-            from world_border import update_world_border,bounds_for_tiles
-            for path in (world/'level.dat',world/'data/world_border.dat'):
-                if path.exists():atomic(backup/path.name,path.read_bytes())
-            update_world_border(world,bounds_for_tiles(installed['tiles'].values()))
-        atomic(backup/'installation.json', json.dumps(report, indent=2).encode())
+        report = install_tile(world, tile=receipt['tile'], quality=receipt['quality'], frame=actual['world_frame'],
+                              offset_xz=actual['world_offset_xz'], size=actual['source']['size'], incoming=incoming,
+                              receipt_sha256=sha(receipt_path), baselines=baselines, backup=writer)
+        report['backup'] = str(backup.resolve())
+        writer('installation.json', json.dumps(report, indent=2).encode())
     return report
 
 

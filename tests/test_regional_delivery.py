@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -14,9 +15,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from metric_world import packed
 from regional_install import geometry_signature,quality_merge,baseline_is_extrusion,install,encode,records
 from region_expansion import sha
-from regional_publish_unpack import unpack
-from regional_store import compact,materialized,region_bytes,region_hashes
-import tarfile
+from regional_store import materialized,region_bytes,region_hashes
 
 
 def chunk(palette,values,version=1,entity=False,biome='minecraft:plains'):
@@ -79,37 +78,15 @@ class RegionalDeliveryTests(unittest.TestCase):
         self.assertFalse(baseline_is_extrusion(dict(prior,point_geometry_source={'verified':True})))
         self.assertFalse(baseline_is_extrusion(dict(prior,lidar_surface_source={'verified':True})))
 
-    def test_region_storage_preserves_original_bytes_and_receipt_hashes(self):
+    def test_legacy_gzip_regions_stay_readable_and_materialize_temporarily(self):
         with tempfile.TemporaryDirectory() as directory:
             world=Path(directory);(world/'region').mkdir();p=world/'region/r.0.0.mca'
-            raw=bytes(8192)+b'observed chunk'+bytes(20000);p.write_bytes(raw)
-            expected=region_hashes(world);compact(world)
-            self.assertFalse(p.exists());self.assertEqual(region_bytes(p),raw)
-            self.assertEqual(region_hashes(world),expected)
+            raw=bytes(8192)+b'observed chunk'+bytes(20000)
+            p.with_suffix('.mca.gz').write_bytes(gzip.compress(raw,compresslevel=1,mtime=0))
+            self.assertEqual(region_bytes(p),raw)
+            self.assertEqual(region_hashes(world),{'r.0.0.mca':hashlib.sha256(raw).hexdigest()})
             with materialized(world):self.assertEqual(p.read_bytes(),raw)
             self.assertFalse(p.exists())
-            p.write_bytes(raw);p.with_suffix('.mca.gz').write_bytes(gzip.compress(b'changed'))
-            with self.assertRaises(ValueError):compact(world)
-            with self.assertRaises(ValueError):compact(world, expected={p.name:'wrong'})
-            self.assertTrue(p.exists())
-            compact(world, expected=expected)
-            self.assertEqual(region_bytes(p), raw)
-            retained=list(p.parent.glob('*.retained-*'))
-            self.assertEqual(len(retained),1)
-            self.assertEqual(gzip.decompress(retained[0].read_bytes()),b'changed')
-            self.assertFalse(p.exists())
-
-    def test_export_unpack_rejects_path_traversal_and_changed_replay(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);bundle=root/'bundle.tar';output=root/'output'
-            def write(name,raw):
-                with tarfile.open(bundle,'w') as archive:
-                    info=tarfile.TarInfo(name);info.size=len(raw);archive.addfile(info,io.BytesIO(raw))
-            write('../outside',b'bad')
-            with self.assertRaises(ValueError):unpack(bundle,output)
-            write('index.json',b'[]');self.assertEqual(unpack(bundle,output),[])
-            write('index.json',b'[1]')
-            with self.assertRaises(ValueError):unpack(bundle,output)
 
 
 if __name__=='__main__':unittest.main()

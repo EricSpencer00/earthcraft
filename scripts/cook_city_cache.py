@@ -19,6 +19,7 @@ import fcntl
 
 from http_zip_range import RangeReader
 from local_paths import bulk_root
+import regional_cache
 
 BASE='https://clearinghouse.isgs.illinois.edu/distribute/district1/cook/2022/'
 HEADER=b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff'
@@ -154,9 +155,12 @@ def acquire(asset,publisher,root,reserve_bytes=100*2**30):
 def acquire_validated_deflate(asset,publisher,root,reserve_bytes=100*2**30,reader_factory=None):
     """Cache exact DEFLATE bytes after the caller validates its survey identity."""
     root=Path(root)
-    base=bulk_root().resolve()
-    if not base.exists() or not root.resolve().is_relative_to(base):
-        raise ValueError('Use the mounted Earthcraft bulk volume; no internal fallback')
+    # The regional generator keeps originals in its capped LRU source cache;
+    # other pipelines keep their configured bulk workspace.
+    if not regional_cache.owns(root):
+        base=bulk_root().resolve()
+        if not base.exists() or not root.resolve().is_relative_to(base):
+            raise ValueError('Use the configured Earthcraft bulk workspace; no internal fallback')
     root.mkdir(parents=True,exist_ok=True)
     # Multiple tile workers can discover the same indexed LAS member at once.
     # Serialize only that asset's cache transition, not the whole tile queue.
@@ -169,9 +173,13 @@ def acquire_validated_deflate(asset,publisher,root,reserve_bytes=100*2**30,reade
                 manifest=root/(asset['id']+('.json' if suffix=='.las' else '.las.gz.json'))
                 if existing.exists() or manifest.exists():
                     if not existing.is_file() or not manifest.is_file():raise ValueError('Unpaired original cache; preserve for recovery')
-                    return verify(existing,json.loads(manifest.read_text()),asset)
-            if shutil.disk_usage(root).free<reserve_bytes+2*asset['compressed_bytes']+2**30:
-                raise ValueError('Insufficient bulk space with 100 GiB reserve and working allowance')
+                    result=verify(existing,json.loads(manifest.read_text()),asset)
+                    regional_cache.touch(existing)
+                    return result
+            # The verified gzip is staged beside its resumable partial, so admit twice the payload.
+            regional_cache.admit(root/(asset['id']+'.las.gz'),2*asset['compressed_bytes']+4*2**20,
+                what='original LAS '+asset['id'],legacy_reserve=reserve_bytes+2*asset['compressed_bytes']+2**30,
+                legacy_message='Insufficient bulk space with 100 GiB reserve and working allowance')
             path=root/(asset['id']+'.las.gz');partial=path.with_suffix('.gz.part');checkpoint=partial.with_name(partial.name+'.json')
             remote=(reader_factory or RangeReader)(asset['url'],budget=asset['compressed_bytes']+4*2**20)
             if remote.etag!=asset['archive_etag']:raise ValueError('Remote archive version changed; re-index before fetching')

@@ -3,55 +3,54 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from regional_supervisor import bulk_storage_ready, ensure
+import regional_supervisor as rs
 
 
 class SupervisorTests(unittest.TestCase):
-    def arguments(self,root):
-        return SimpleNamespace(control=root,bulk=root/'bulk',frame=root/'frame.json',
-                               illinois=root/'source.osm.pbf',reserve_gib=150,scan_workers=3)
+    def arguments(self,root,*extra):
+        return rs.build_parser().parse_args(['--control',str(root/'control'),'--frame',str(root/'frame.json'),
+                                             '--scratch',str(root/'scratch'),'--min-free','0',*extra])
 
-    @patch('regional_supervisor.bulk_storage_ready',return_value=True)
-    def test_existing_lock_deadline_and_failure_never_spawn_another_supervisor(self,_storage):
+    def test_existing_lock_deadline_and_failure_never_spawn_another_supervisor(self):
         with tempfile.TemporaryDirectory() as directory,patch('regional_supervisor.subprocess.Popen') as spawn:
-            root=Path(directory);args=self.arguments(root)
-            with (root/'supervisor.lock').open('a+') as lock:
+            root=Path(directory);args=self.arguments(root);control=root/'control';control.mkdir()
+            with (control/'supervisor.lock').open('a+') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                self.assertEqual(ensure(args)['state'],'running')
-            (root/'supervisor-deadline.json').write_text('0')
-            self.assertEqual(ensure(args)['state'],'generation_deadline')
-            (root/'supervisor-deadline.json').unlink()
-            (root/'supervisor-status.json').write_text(json.dumps({'failed_restarts':{'scans-1':10}}))
-            self.assertEqual(ensure(args)['state'],'worker_failure_boundary')
-            (root/'supervisor-status.json').write_text(json.dumps({'completed_workers':['base-1','base-2','scans-1','scans-2','scans-3']}))
-            self.assertEqual(ensure(args)['state'],'complete');spawn.assert_not_called()
+                self.assertEqual(rs.ensure(args)['state'],'running')
+            (control/'supervisor-deadline.json').write_text('0')
+            self.assertEqual(rs.ensure(args)['state'],'generation_deadline')
+            (control/'supervisor-deadline.json').unlink()
+            (control/'supervisor-status.json').write_text(json.dumps({'failed_restarts':{'base-1':10}}))
+            self.assertEqual(rs.ensure(args)['state'],'worker_failure_boundary')
+            (control/'supervisor-status.json').write_text(json.dumps({'completed_workers':['base-1']}))
+            self.assertEqual(rs.ensure(args)['state'],'complete');spawn.assert_not_called()
 
-    @patch('regional_supervisor.bulk_storage_ready',return_value=True)
-    def test_start_is_detached_and_retains_original_task_paths(self,_storage):
+    def test_start_is_detached_low_priority_and_keeps_the_guard_settings(self):
         with tempfile.TemporaryDirectory() as directory,patch('regional_supervisor.subprocess.Popen') as spawn:
-            root=Path(directory);spawn.return_value.pid=1234;args=self.arguments(root)
-            result=ensure(args)
+            root=Path(directory);spawn.return_value.pid=1234
+            args=self.arguments(root,'--workers','2','--hf-python','/opt/hf/python','--footprints')
+            result=rs.ensure(args)
             self.assertEqual(result['supervisor_pid'],1234)
             command=spawn.call_args.args[0];self.assertNotIn('--ensure',command)
-            self.assertEqual(command[command.index('--scan-workers')+1],'3')
-            self.assertIn(str(args.control.resolve()),command)
-            for path in (args.bulk,args.frame,args.illinois):self.assertIn(str(path),command)
+            self.assertEqual(command[command.index('--workers')+1],'2')
+            self.assertIn('--footprints',command);self.assertIn('/opt/hf/python',command)
+            self.assertTrue(command[0].endswith('taskpolicy') or command[0]=='nice')
             self.assertTrue(spawn.call_args.kwargs['start_new_session'])
-            self.assertEqual(json.loads((root/'supervisor-start.json').read_text()),result)
+            self.assertEqual(json.loads((root/'control/supervisor-start.json').read_text()),result)
 
-    def test_missing_lacie_waits_without_spawning_or_creating_a_bulk_directory(self):
-        with tempfile.TemporaryDirectory() as directory,patch('regional_supervisor.subprocess.Popen') as spawn:
-            root=Path(directory);args=self.arguments(root)
-            with patch('regional_supervisor.Path.is_mount',return_value=False):
-                self.assertFalse(bulk_storage_ready(args))
-                self.assertEqual(ensure(args),{'state':'waiting_for_storage'})
-            spawn.assert_not_called()
-            self.assertFalse(args.bulk.exists())
+    def test_worker_command_runs_the_one_pass_generator_in_the_background_band(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);args=self.arguments(root,'--lane','scans')
+            command=rs.worker_command(args,'scans-1')
+            self.assertIn('regional_generate.py',' '.join(command))
+            self.assertEqual(command[command.index('--lane')+1],'scans')
+            self.assertEqual(command[command.index('--worker-id')+1],'scans-1')
+            if sys.platform=='darwin':self.assertEqual(command[:2],['/usr/sbin/taskpolicy','-b'])
+            self.assertFalse(any('LaCie' in part or 'bulk' in part for part in command))
 
 
 if __name__=='__main__':unittest.main()
