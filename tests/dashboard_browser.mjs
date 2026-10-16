@@ -76,13 +76,14 @@ try{
     for(const [name,width,height] of [['world-desktop',1440,1000],['world-phone',390,844]]){
       await page.setViewportSize({width,height});
       await ready('world');
-      await expect(page.locator('#map-title')).toHaveText('Saved world');
-      await expect(page.locator('#record-note')).toContainText('current block fill is unverified');
+      await expect(page.locator('#map-title')).toHaveText('What’s built');
+      await expect(page.locator('#coverage-note')).toHaveText('Built so far · the Chicago area');
+      await expect(page.locator('#record-note')).toContainText('256 m square');
       await expect(page.locator('#grid-size')).toHaveText(snapshot.generated_world.unique_cells.toLocaleString()+' cells');
       await page.locator('#places-menu').evaluate(el=>el.open=true);
       await page.locator('#place-elmhurst').click();
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
-      await expect(page.locator('#selection-details')).toContainText('Street-photo colorPending');
+      await expect(page.locator('#selection-details')).toContainText('Street-photo colorComing later');
       await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
       await expect(page.locator('#cell-blocks')).toHaveAttribute('href','./blocks.html?block=-26240,-384&radius=8');
       await expect(page.locator('#mapnote')).toContainText('Elmhurst · cell');
@@ -94,7 +95,7 @@ try{
       await page.getByRole('button',{name:'Fit the map'}).click();
       await capture(name);
     }
-    console.log('Complete saved footprint, Elmhurst coordinates, and photo-detail honesty passed');
+    console.log('Complete saved footprint, Elmhurst coordinates, and 3D link passed');
   }
   for(const [name,width,height] of [['desktop',1440,1000],['tablet',768,1024],['phone',390,844],['small-phone',320,720]]){
     await page.setViewportSize({width,height});
@@ -114,8 +115,8 @@ try{
     assert(layout.buttons.every(height=>height>=44),`${name}: small touch targets`);
     assert(layout.canvasWidth>0&&layout.canvasHeight>0,`${name}: empty canvas size`);
     assert(layout.attributionVisible,`${name}: missing basemap credits`);
-    await expect(page.locator('.evidence-link')).toBeVisible();
-    await expect(page.locator('.evidence-link')).toHaveAttribute('href','./headless/');
+    await expect(page.locator('.viewer-link')).toBeVisible();
+    await expect(page.locator('.viewer-link')).toHaveAttribute('href','./blocks.html');
     await expect(page.locator('#about-open')).toBeVisible();
     await expect(page.locator('.source-link')).toBeVisible();
     const coveredControls=await page.evaluate(()=>[...document.querySelectorAll('.site-header a,.site-header button,.place-switch button,.layer-switch button,.toolbar select,.map-controls button')].filter(element=>{
@@ -211,7 +212,7 @@ try{
   await page.locator('#places-menu').evaluate(el=>el.open=true);
 
   await page.locator('#place-elmhurst').click();
-  await expect(page.locator('#mapnote')).toContainText('Elmhurst has no cell in this published snapshot');
+  await expect(page.locator('#mapnote')).toContainText('Elmhurst is not on this map yet');
   await expect(page.locator('#clear-selection')).toBeHidden();
   await page.locator('#places-menu').evaluate(el=>el.open=true);
   await page.locator('#place-chicago').click();
@@ -233,9 +234,14 @@ try{
   await page.locator('#layer-build').click();
   await page.locator('#about-open').click();
   await page.waitForFunction(()=>document.querySelector('.world-photo img').naturalWidth>0);
+  await expect(page.locator('#about-panel')).toContainText('one block is one metre');
+  await expect(page.locator('#about-panel a[href="https://huggingface.co/datasets/EricSpencer00/earthcraft"]')).toBeVisible();
+  // One dataset only: the retired preview and backup repositories must not reappear.
+  const html=await page.content();
+  for(const retired of ['earthcraft-oakbrook','earthcraft-minecraft-world','Oakbrook'])assert(!html.includes(retired),`page still mentions ${retired}`);
   await capture('about');
   await page.locator('#tab-world').click();
-  console.log('Geographic shortcuts, honest appearance coverage, and project photo passed');
+  console.log('Geographic shortcuts, appearance coverage, About copy and single dataset link passed');
 
   await page.route('**/progress/earth.json',route=>route.fulfill({status:503,body:'Unavailable'}));
   await page.getByRole('button',{name:'Refresh snapshot'}).click();
@@ -243,7 +249,7 @@ try{
   await capture('disconnected');
   await page.reload();
   await expect(page.locator('#warning')).toContainText('Check your connection');
-  await expect(page.locator('#phase')).toHaveText('Record unavailable');
+  await expect(page.locator('#phase')).toHaveText('Map unavailable');
   await expect(page.getByRole('button',{name:'Zoom in',exact:true})).toBeDisabled();
   await expect(page.locator('#mapwrap')).toHaveAttribute('aria-busy','false');
   await expect(page.getByRole('button',{name:'Refresh snapshot'})).toBeEnabled();

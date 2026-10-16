@@ -47,7 +47,6 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Check the atlas and capture each layout
         run: |
-          node tests/source_bound_v2.mjs
           node tests/mini_transport.mjs
           node tests/anvil.mjs
           node tests/dashboard_browser.mjs

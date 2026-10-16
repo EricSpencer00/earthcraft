@@ -54,7 +54,7 @@ jobs:
       - name: Assemble the static observatory
         run: |
           mkdir -p site/progress
-          cp dashboard/index.html dashboard/app.js dashboard/location-search.mjs dashboard/block-preview.mjs dashboard/local-files.mjs dashboard/cell-browser.mjs dashboard/hf-index.mjs dashboard/hf-release.mjs dashboard/source-bound-v2.mjs dashboard/public-blocks.mjs dashboard/style.css dashboard/blocks.html dashboard/blocks.css dashboard/blocks-boot.js dashboard/chunk-viewer.mjs dashboard/anvil.mjs dashboard/chunk-mesh.mjs dashboard/block-colors.mjs site/
+          cp dashboard/index.html dashboard/app.js dashboard/location-search.mjs dashboard/cell-browser.mjs dashboard/style.css dashboard/blocks.html dashboard/blocks.css dashboard/blocks-boot.js dashboard/chunk-viewer.mjs dashboard/anvil.mjs dashboard/chunk-mesh.mjs dashboard/block-colors.mjs site/
           cp -R dashboard/assets site/assets
           cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
@@ -71,10 +71,7 @@ jobs:
       - name: Verify the assembled atlas and evidence page before publication
         run: |
           node tests/location_search.mjs
-          node tests/block_preview.mjs
-          node tests/local_files.mjs
           node tests/cell_browser.mjs
-          node tests/source_bound_v2.mjs
           node tests/mini_transport.mjs
           node tests/anvil.mjs
           node tests/dashboard_browser.mjs site

@@ -1,53 +1,20 @@
-import {installPublicBlocks} from './public-blocks.mjs?v=hf-v2-2';
-import {cellRecord,installCellBrowser} from './cell-browser.mjs';
-import {installLocalFiles} from './local-files.mjs?v=hf-v2-1';
-import {PreviewController,drawCrop,decodeCrop} from './block-preview.mjs?v=hf-v2-1';
-import {parseLocation} from './location-search.mjs';
+import {cellRecord,installCellBrowser} from './cell-browser.mjs?v=simple-1';
+import {parseLocation} from './location-search.mjs?v=simple-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
 new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
-let previewCrop=null,previewRotation=0,previewResolver=null,previewDecoder=decodeCrop;
-export function configurePreviewSource(resolve,decode=decodeCrop){previewResolver=resolve;previewDecoder=decode;}
-const preview=new PreviewController(state=>{
-  previewCrop=state.crop||null;previewRotation=0;
-  $('block-preview').hidden=selectedIndex===null;
-  $('preview-help').hidden=state.status!=='unavailable';
-  $('preview-canvas').hidden=state.status!=='ready';
-  $('preview-turn').hidden=state.status!=='ready';
-  $('preview-cancel').hidden=state.status!=='loading';
-  $('preview-status').textContent=state.status==='unavailable'
-    ? 'No block payload is loaded for this build-record cell. Open Published blocks to inspect verified HF coverage, download this build record, or open your own block files.'
-    : state.status==='loading'?'Reading verified block crop…':state.status==='ready'
-    ? `${state.crop.publication_allowed===false?'Private review only — not approved for public distribution. ':''}${state.crop.coverage==='complete-crop'?'Complete crop':'Sampled blocks'}: ${state.crop.size[0]} × ${state.crop.size[2]} blocks. Tile ${state.crop.generation.tile}. World origin ${state.crop.origin.join(', ')}. Generation ${state.crop.generation.repo}@${state.crop.generation.revision}. Material colors are illustrative; geometry uses recorded block positions.`
-    : state.message||'Preview request stopped.';
-  $('preview-attribution').textContent=state.crop?.attribution.map(a=>a.source+' ('+a.license+')').join('; ')||'';
-  $('preview-source').hidden=true;$('preview-hf').removeAttribute('href');
-  if(state.status==='ready'&&state.descriptor?.download){
-    const download=state.descriptor.download;
-    try{
-      const url=new URL(download.url);
-      if(url.origin==='https://huggingface.co'&&!url.username&&!url.password&&url.pathname===`/datasets/${state.crop.generation.repo}/resolve/${state.crop.generation.revision}/generated-tiles/v1/shards/${state.crop.generation.shard_sha256.slice(0,2)}/${state.crop.generation.shard_sha256}.tar`&&Number.isSafeInteger(download.bytes)&&download.bytes>0&&download.bytes<=64*1024*1024){
-        $('preview-hf').href=url.href;$('preview-source').hidden=false;
-        $('preview-download-note').textContent=` (${(download.bytes/1024/1024).toFixed(2)} MiB; ${download.access==='private'?'authorized private access required':'access as stated by the dataset'}). Shard SHA-256: ${state.crop.generation.shard_sha256}.`;
-      }
-    }catch{/* Invalid source references remain unavailable. */}
-  }
-  drawCrop($('preview-canvas'),previewCrop);
-},{decode:crop=>previewDecoder(crop),allowLoopback:location.hostname==='127.0.0.1'});
-$('preview-turn').onclick=()=>{previewRotation=(previewRotation+1)%4;drawCrop($('preview-canvas'),previewCrop,previewRotation);};
-$('preview-cancel').onclick=()=>{preview.cancel();$('preview-cancel').hidden=true;$('preview-status').textContent='Preview request stopped.';};
 
 const number=value=>Number(value||0).toLocaleString();
 const stateLabel=value=>({
-  'regional-foundation':'Regional build',pending:'Queued',running:'Building',leased:'Building',
-  complete:'Ready',generated:'Terrain & buildings ready',styled:'Surface detail added',
-  verified:'Game checked',failed:'Needs review',unknown:'Not recorded'
+  'regional-foundation':'Regional build',pending:'Not yet',running:'Building',leased:'Building',
+  complete:'Done',generated:'Terrain & buildings built',styled:'Surface detail added',
+  verified:'Checked in Minecraft',failed:'Needs review',unknown:'Not recorded'
 }[value]||String(value||'Not recorded').replaceAll('_',' ').replaceAll('-',' '));
 const color=name=>getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
-let cellBrowser=null,publicBlocks=null;
+let cellBrowser=null;
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
@@ -58,7 +25,7 @@ function setPanel(open,section=document.body.dataset.section||'world'){
   document.body.dataset.panel=open?'open':'closed';
   document.body.dataset.section=section;
   $('panel-toggle').setAttribute('aria-expanded',String(open));
-  for(const id of ['world','cell','about','local','browse','hf']){
+  for(const id of ['world','cell','about','browse']){
     $(id+'-panel').hidden=id!==section;
     if(id==='world'||id==='cell')$('tab-'+id).setAttribute('aria-pressed',String(id===section));
   }
@@ -123,7 +90,6 @@ async function initializeBasemap(){
     geoMap.on('idle',()=>{document.body.dataset.camera='idle';});
     geoMap.on('click',event=>{
       if(!geographic())return;
-      if(publicBlocks?.selectAt(event.lngLat)){setPanel(true,'hf');return;}
       const cell=cellAtLocation(event.lngLat);
       if(cell)selectIndex(cell.index);else clearSelection();
     });
@@ -202,7 +168,6 @@ function drawGeography(ctx,cssWidth,cssHeight){
     ctx.strokeStyle=color(strong?'ink':'green');ctx.lineWidth=strong?2.5:1.5;
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
-  publicBlocks?.draw(ctx,geoMap);
   const a=geoMap.unproject([cssWidth/2,cssHeight/2]),b=geoMap.unproject([cssWidth/2+68,cssHeight/2]);
   $('map-scale').textContent=distanceLabel(Math.round(a.distanceTo(b)));
 }
@@ -213,7 +178,7 @@ function setLayer(layer){
   if(atlas){renderLegend(atlas.source==='published',atlas.counts,atlas.area.id==='live');drawAtlas();}
   if(layer==='appearance'&&atlas?.source==='published'){
     const complete=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
-    setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' recorded');
+    setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' in total');
   }else if(atlas)renderAtlas();
 }
 
@@ -224,23 +189,21 @@ function goToPlace(id){
   geoMap.easeTo({center:place.coordinates,zoom:13,duration:0});
   const cell=cellAtLocation({lng:place.coordinates[0],lat:place.coordinates[1]});
   if(cell){selectIndex(cell.index);setMapMessage(place.name+' · cell '+atlas.cell_ids[cell.index]);}
-  else{clearSelection();setMapMessage(place.name+' has no cell in this published snapshot.');}
+  else{clearSelection();setMapMessage(place.name+' is not on this map yet.');}
 }
 
 $('location-search').onsubmit=async event=>{
   event.preventDefault();
   const status=$('search-status');
   try{
-    if($('location-query').value.trim().toLowerCase()==='oakbrook'){setPanel(true,'hf');await publicBlocks.open();status.textContent='Published Oakbrook coverage: choose a 16 m tile to load its block preview.';return;}
     const location=parseLocation($('location-query').value,places);
-    if(!geographic())throw new Error('The geographic atlas is still loading. Try again when the map is ready.');
+    if(!geographic())throw new Error('The map is still loading. Try again in a moment.');
     const [lng,lat]=location.coordinates;
-    if(publicBlocks?.selectAt({lng,lat})){setPanel(true,'hf');status.textContent='Selected published HF preview.';return;}
     const cell=cellAtLocation({lng,lat});
-    if(!cell){clearSelection();status.textContent=location.name+' has no recorded coverage in this atlas.';return;}
+    if(!cell){clearSelection();status.textContent=location.name+' is not built yet.';return;}
     geoMap.easeTo({center:location.coordinates,zoom:13,duration:0});
     selectIndex(cell.index);
-    status.textContent='Selected '+location.name+'. Build records do not verify current block fill.';
+    status.textContent='Showing '+location.name+'.';
   }catch(error){status.textContent=error.message;}
 };
 function setMapMessage(message){$('mapnote').textContent=message;}
@@ -287,11 +250,11 @@ function publishedAtlas(data){
   return {
     source:'published',
     area:{
-      id:world?'world':'published',label:'Chicagoland',left_block:left*cellSize,top_block:top*cellSize,
+      id:world?'world':'published',label:'Chicago area',left_block:left*cellSize,top_block:top*cellSize,
       width_cells:width,height_cells:height,width_chunks:width*cellSize/16,height_chunks:height*cellSize/16,
       cell_size_blocks:cellSize,cell_label:'generation cell',tiles:rows.length
     },
-    palette:['Queued','Source ready','Terrain & buildings ready','Building','Needs review'],
+    palette:['Queued','Data ready','Terrain & buildings built','Building','Needs review'],
     cells,cell_ids:cellIds,records,counts,failed_tiles:counts.failed,
     updated_utc:data.updated_utc,overlays:{}
   };
@@ -301,31 +264,31 @@ function renderSnapshot(){
   if(!snapshot)return;
   const rollup=snapshot.rollup||{},local=snapshot.local||{};
   if(snapshot.source==='public')$('area').value=atlas?.area.id==='world'?'world':'published';
-  $('phase').textContent=snapshot.regions?.[0]?.label||'Chicago build';
+  $('phase').textContent=snapshot.regions?.[0]?.label||'Chicago area';
   $('connection').textContent=snapshot.source==='local'?'Local build connected':'Published snapshot';
   document.body.dataset.feed=snapshot.source;
-  $('updated').textContent=snapshot.updated_utc?'Snapshot · '+new Date(snapshot.updated_utc).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'Date not recorded';
+  $('updated').textContent=snapshot.updated_utc?'Map updated '+dateLabel(snapshot.updated_utc):'';
   $('rollup').textContent=stateLabel(rollup.state);
   $('geometry').textContent=countLabel(rollup.generated_tiles);
   $('sources').textContent=countLabel(local.source_tiles_complete);
   $('appearance').textContent=countLabel(local.stages?.appearance?.complete);
   const world=atlas?.area.id==='world'?snapshot.generated_world:null;
   if(world){
-    $('phase').textContent='Chicagoland save';
+    $('phase').textContent='Chicago area';
     $('geometry').textContent=number(world.unique_cells);
     $('sources').textContent=number(world.scan_upgrade_parent_tiles);
     $('appearance').textContent=number(world.photo_colored_cells);
-    $('rollup').textContent='Saved footprint';
+    $('rollup').textContent='Built';
   }
-  $('geometry-label').textContent=world?'Saved-world cells':'Terrain & buildings';
-  $('sources-label').textContent=world?'Tiles with scan upgrades':'Source data ready';
-  $('appearance-label').textContent=world?'Photo-colored cells':'Surface detail';
-  $('record-note').textContent=world?'Includes preserved chunks; current block fill is unverified. Scan upgrades may cover part of a tile.':'Generated cells still need a Minecraft check.';
+  $('geometry-label').textContent=world?'Cells built':'Terrain & buildings';
+  $('sources-label').textContent=world?'Tiles with extra scan detail':'Data ready';
+  $('appearance-label').textContent=world?'Cells with photo color':'Surface detail';
+  $('record-note').textContent=world?'Each cell is a '+number(world.cell_size_m||256)+' m square. Select one on the map to see it up close or in 3D.':'Green cells have terrain and buildings.';
   $('auto-control').hidden=snapshot.source==='public';
   $('recovery').textContent=snapshot.source==='local'
     ?'Source files are reused between tiles. Interrupted work resumes from its last checkpoint.'
     :'';
-  const stageNames={sources:'Source data',geometry:'Terrain & buildings',appearance:'Surface detail',game_verify:'Minecraft check'};
+  const stageNames={sources:'Map data',geometry:'Terrain & buildings',appearance:'Surface detail',game_verify:'Minecraft check'};
   $('log').textContent=Object.entries(local.stages||{}).map(([stage,counts])=>(stageNames[stage]||stateLabel(stage))+': '+(Object.entries(counts).map(([state,count])=>stateLabel(state)+' '+number(count)).join(', ')||'No jobs')).join('\n')||'No stage counts recorded';
   $('footer-state').textContent=new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
   $('warning').hidden=true;
@@ -340,6 +303,7 @@ function resizeCanvas(){
   drawAtlas();
 }
 
+function dateLabel(value){return new Date(value).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'});}
 function distanceLabel(blocks){return blocks>=1000?(blocks/1000).toFixed(1)+' km':number(blocks)+' m';}
 function canvasPoint(blockX,blockZ){
   const {left,top,cell,cellSize,leftBlock,topBlock}=mapMetrics;
@@ -440,17 +404,17 @@ function drawAtlas(){
 
 function renderLegend(isPublished,counts,live){
   if(isPublished&&mapLayer==='appearance'){
-    $('legend-outside-label').textContent='No record';
+    $('legend-outside-label').textContent='Not built yet';
     $('legend-source-label').textContent='Awaiting detail';
     $('legend-finished-label').textContent='Surface detail added';
     for(const id of ['queued','installed','running','failed'])$('legend-'+id).hidden=true;
     $('legend-source').hidden=false;$('legend-finished').hidden=false;
     return;
   }
-  $('legend-outside-label').textContent=isPublished?'Unlisted':live?'Not imported':'Outside plan';
+  $('legend-outside-label').textContent=isPublished?'Not built yet':live?'Not imported':'Outside plan';
   $('legend-queued-label').textContent='Queued';
-  $('legend-source-label').textContent='Source ready';
-  $('legend-finished-label').textContent=live?'In Minecraft':atlas?.area.id==='world'?'Save record':'Terrain & buildings';
+  $('legend-source-label').textContent='Data ready';
+  $('legend-finished-label').textContent=live?'In Minecraft':'Built';
   $('legend-queued').hidden=live||!counts.white;
   $('legend-source').hidden=live||!counts.gray;
   $('legend-finished').hidden=false;
@@ -462,16 +426,16 @@ function renderLegend(isPublished,counts,live){
 function renderAtlas(){
   cellBrowser?.setData(atlas,snapshot);
   $('browse-open').disabled=!atlas;
-  $('coverage-note').textContent=!atlas?'Coverage unavailable':atlas.area.id==='world'?'Saved manifest footprint · blocks unverified':'Published build records · not live progress';
+  $('coverage-note').textContent=!atlas?'Map unavailable':atlas.area.id==='world'?'Built so far · the Chicago area':'Build progress · the Chicago area';
   if(!atlas){
     geoSignature='';geoCells=[];document.body.dataset.map='grid';$('map-attribution').hidden=true;
     for(const id of ['place-chicago','place-elmhurst','layer-appearance'])$(id).disabled=true;
     $('grid-size').textContent='Unavailable';
-    $('grid-count').textContent='The selected source has not published an atlas.';
+    $('grid-count').textContent='This view has no map yet.';
     $('chunk-count').textContent='Unavailable';
     $('border').textContent='Unavailable';
     $('leases').textContent='Unavailable';
-    setMapMessage('No Chicago atlas is available.');
+    setMapMessage('No map is available right now.');
     $('mapwrap').setAttribute('aria-busy','false');
     $('map').getContext('2d').clearRect(0,0,$('map').width,$('map').height);
     $('map-summary').textContent='No cells are available in this view.';
@@ -501,19 +465,19 @@ function renderAtlas(){
     const world=area.id==='world'?snapshot.generated_world:null;
     $('grid-size').textContent=number(area.tiles)+' cells';
     $('grid-count').textContent=distanceLabel(widthBlocks)+' × '+distanceLabel(heightBlocks)+' · '+number(area.cell_size_blocks)+' m per cell.';
-    $('chunk-count').textContent=number(mapped)+' published generation cells';
+    $('chunk-count').textContent=number(mapped)+' cells';
     $('border').textContent='Published grid';
     $('leases').textContent='Snapshot';
-    $('map-unit').textContent=number(area.cell_size_blocks)+(world?' m saved-world cells':' m generation cells');
-    $('map-title').textContent=world?'Saved world':'Published progress';
-    $('map-caption').textContent='Each square covers '+number(area.cell_size_blocks)+' × '+number(area.cell_size_blocks)+' metres. Green means terrain and buildings have been generated.';
+    $('map-unit').textContent=number(area.cell_size_blocks)+' m cells';
+    $('map-title').textContent=world?'What’s built':'Build progress';
+    $('map-caption').textContent='Each square covers '+number(area.cell_size_blocks)+' × '+number(area.cell_size_blocks)+' metres. Green means terrain and buildings are built.';
     if(world){
-      $('map-caption').textContent=Number(world.unique_area_km2).toLocaleString(undefined,{maximumFractionDigits:1})+' km² across Chicago, Elmhurst, and the surrounding area. Select a cell to inspect its record.';
+      $('map-caption').textContent='Each square covers '+number(area.cell_size_blocks)+' × '+number(area.cell_size_blocks)+' metres of the Chicago area. Select one to see it up close or in 3D.';
       $('border').textContent='Existing world frame';
-      $('chunk-count').textContent=number(world.native_tiles)+' saved tile records';
+      $('chunk-count').textContent=number(world.native_tiles)+' tiles';
     }
     const detailed=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
-    setMapMessage(mapLayer==='appearance'?number(detailed)+' cells with surface detail · '+number(area.tiles)+' recorded':world?number(area.tiles)+' saved-world cells':built===area.tiles?number(built)+' generated cells':number(area.tiles)+' cells · '+number(built)+' generated');
+    setMapMessage(mapLayer==='appearance'?number(detailed)+' cells with surface detail · '+number(area.tiles)+' in total':world?number(area.tiles)+' cells built':built===area.tiles?number(built)+' cells built':number(area.tiles)+' cells · '+number(built)+' built');
   }else{
     $('grid-size').textContent=distanceLabel(widthBlocks)+' × '+distanceLabel(heightBlocks);
     $('grid-count').textContent=queue
@@ -547,9 +511,9 @@ function renderAtlas(){
       $('warning').textContent='Reopen Earthcraft in Minecraft to resume imports.';
     }
   }
-  $('map-updated').textContent=atlas.updated_utc?'Snapshot '+new Date(atlas.updated_utc).toLocaleDateString(undefined,{day:'numeric',month:'short'}):'';
-  $('map-summary').textContent=number(counts.white)+' queued, '+number(counts.gray)+' source-ready, '+number(counts.green)+(live?' imported':' generated')+' cells, '+number(counts.active)+' in progress, '+number(counts.failed)+' needing review.';
-  if(area.id==='world')$('map-summary').textContent=number(area.tiles)+' saved-world manifest cells. Current block fill is unverified.';
+  $('map-updated').textContent=atlas.updated_utc?'Updated '+dateLabel(atlas.updated_utc):'';
+  $('map-summary').textContent=number(counts.white)+' queued, '+number(counts.gray)+' with data ready, '+number(counts.green)+(live?' imported':' built')+' cells, '+number(counts.active)+' in progress, '+number(counts.failed)+' needing review.';
+  if(area.id==='world')$('map-summary').textContent=number(area.tiles)+' cells built, each '+number(area.cell_size_blocks)+' m square.';
   $('map').setAttribute('aria-label',`${$('map-title').textContent}. ${$('map-summary').textContent} Use arrow keys to inspect cells.`);
   $('mapwrap').setAttribute('aria-busy','false');
   renderSelection();
@@ -592,7 +556,7 @@ async function refresh(){
   try{
     await readSnapshot();
     if(previousView!==atlasSignature()){
-      preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
+      selectedIndex=null;hoverIndex=null;zoom=1;updateZoomButtons();
     }
     renderSnapshot();
     renderAtlas();
@@ -600,24 +564,24 @@ async function refresh(){
     document.body.dataset.feed='error';
     $('connection').textContent='Snapshot unavailable';
     $('warning').hidden=false;
-    $('warning').textContent=atlas?'The latest snapshot could not be read. The last loaded map is still shown. Use Refresh to try again.':'The progress snapshot could not be read. Check your connection and use Refresh to try again.';
+    $('warning').textContent=atlas?'The map could not be updated. The last loaded map is still shown. Use Refresh to try again.':'The map could not be loaded. Check your connection and use Refresh to try again.';
     $('mapwrap').setAttribute('aria-busy','false');
     if(!snapshot){
-      $('phase').textContent='Record unavailable';
+      $('phase').textContent='Map unavailable';
       $('grid-size').textContent='Unavailable';
-      $('map-title').textContent='Progress unavailable';
-      $('map-caption').textContent='The atlas will appear when a snapshot can be read.';
-      $('map-summary').textContent='Progress unavailable. Use Refresh to try again.';
-      $('map').setAttribute('aria-label','Progress unavailable. Use Refresh to try again.');
+      $('map-title').textContent='Map unavailable';
+      $('map-caption').textContent='The map will appear once it can be loaded.';
+      $('map-summary').textContent='Map unavailable. Use Refresh to try again.';
+      $('map').setAttribute('aria-label','Map unavailable. Use Refresh to try again.');
       for(const id of ['geometry','sources','appearance','chunk-count','border','leases','rollup'])$(id).textContent='Not recorded';
       for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed'])$(id).hidden=true;
       $('selection-title').textContent='No cell selected';
-      $('cell').textContent='Read a snapshot to begin inspecting cells.';
-      $('log').textContent='No build record loaded';
-      $('footer-state').textContent='No snapshot loaded';
+      $('cell').textContent='Load the map to look at cells.';
+      $('log').textContent='No build details loaded';
+      $('footer-state').textContent='Not loaded';
       updateZoomButtons();
     }
-    if(!atlas)setMapMessage('Progress unavailable. Use Refresh to try again.');
+    if(!atlas)setMapMessage('Map unavailable. Use Refresh to try again.');
   }finally{
     busy=false;
     $('refresh').disabled=false;
@@ -644,11 +608,11 @@ function indexAtPointer(event){
 function renderSelection(){
   const details=$('selection-details');details.replaceChildren();
   $('cell-actions').hidden=selectedIndex===null;
-  $('cell-provenance').textContent=selectedIndex===null?'':`Public record as of ${snapshot?.updated_utc||'unknown date'}; ${atlas?.area.id==='world'?'saved manifest footprint':'published progress snapshot'}. Not live generator progress.`;
+  $('cell-provenance').textContent=selectedIndex===null||!snapshot?.updated_utc?'':'Map updated '+dateLabel(snapshot.updated_utc)+'.';
   details.hidden=true;$('clear-selection').hidden=selectedIndex===null;$('cell-blocks').hidden=true;
   if(selectedIndex===null||!atlas){
     $('selection-title').textContent='Choose a cell';
-    $('cell').textContent='Select a square on the map. You can also use the arrow keys.';
+    $('cell').textContent='Select a square on the map to see it up close. You can also use the arrow keys.';
     return;
   }
   const width=atlas.area.width_cells,column=selectedIndex%width,row=Math.floor(selectedIndex/width);
@@ -663,16 +627,16 @@ function renderSelection(){
     const size=atlas.area.cell_size_blocks,radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
     $('cell-blocks').href=`./blocks.html?block=${Math.floor(blockX+size/2)},${Math.floor(blockZ+size/2)}&radius=${radius}`;$('cell-blocks').hidden=false;
   }
-  $('cell').textContent=code<0?'No build record for this square.':atlas.area.id==='live'?'Imported into Minecraft.':atlas.area.id==='world'?'Saved manifest record. Current block fill is unverified.':stateLabel(atlas.palette[code])+'.';
+  $('cell').textContent=code<0?'Not built yet.':atlas.area.id==='live'?'Imported into Minecraft.':atlas.area.id==='world'?'Built. Open it in 3D to look around.':stateLabel(atlas.palette[code])+'.';
   const rows=[['Size',number(atlas.area.cell_size_blocks)+' × '+number(atlas.area.cell_size_blocks)+' m']];
   if(record){
     if(Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
     if(atlas.area.id==='world'){
       rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
-      rows.push(['Scan upgrade',record.scan_upgrade_recorded_in_parent_tile?'Recorded in parent tile; partial coverage':'Not recorded']);
-      rows.push(['Street-photo color','Pending']);
+      rows.push(['Extra scan detail',record.scan_upgrade_recorded_in_parent_tile?'In part of this area':'No']);
+      rows.push(['Street-photo color','Coming later']);
     }
-    for(const [label,field] of [['Source data','source_state'],['Terrain & buildings','geometry_state'],['Surface detail','appearance_state'],['Minecraft check','game_verify_state']])rows.push([label,stateLabel(record[field])]);
+    for(const [label,field] of [['Map data','source_state'],['Terrain & buildings','geometry_state'],['Surface detail','appearance_state'],['Minecraft check','game_verify_state']])if(record[field])rows.push([label,stateLabel(record[field])]);
   }else if(code>=0)rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
   for(const [label,value] of rows){
     const row=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
@@ -682,14 +646,12 @@ function renderSelection(){
 }
 
 function clearSelection(){
-  preview.cancel();previewCrop=null;$('block-preview').hidden=true;selectedIndex=null;hoverIndex=null;renderSelection();
+  selectedIndex=null;hoverIndex=null;renderSelection();
   if(document.body.dataset.section==='cell')setPanel(innerWidth>=1024,'world');
   if(atlas)drawAtlas();
 }
 function selectIndex(index){
   selectedIndex=index;renderSelection();setPanel(true,'cell');
-  // No public rights-reviewed feed is verified. Enable only after the pinned contract is approved.
-  preview.select(previewResolver?.(atlas,index)||null);
   document.querySelector('.panel-content').scrollTop=0;
   if(geographic()){
     const record=atlas.records?.[index];
@@ -759,21 +721,10 @@ refresh();
 let ticks=0;
 setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
 
-installLocalFiles($('local-panel'));
-$('local-open').onclick=()=>setPanel(true,'local');
 
 cellBrowser=installCellBrowser($('browse-panel'),{select:index=>{selectIndex(index);$('selection-title').tabIndex=-1;$('selection-title').focus({preventScroll:true});},visibleBounds:()=>{if(!geographic())return null;const bounds=geoMap.getBounds();return {west:bounds.getWest(),east:bounds.getEast(),south:bounds.getSouth(),north:bounds.getNorth()};}});
 $('browse-open').onclick=$('cell-browse').onclick=()=>{setPanel(true,'browse');cellBrowser.setData(atlas,snapshot);};
-$('selection-local').onclick=()=>setPanel(true,'local');
 $('record-download').onclick=()=>{
  if(selectedIndex===null||!atlas)return;const record=cellRecord(atlas,selectedIndex,snapshot),url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
  const anchor=document.createElement('a');anchor.href=url;anchor.download='earthcraft-cell-'+record.cell_id.replace(/[^a-zA-Z0-9_.-]/g,'_')+'.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
-
-publicBlocks=installPublicBlocks($('hf-panel'),{onCoverage(rows){
- const points=rows.flatMap(t=>t.corners),west=Math.min(...points.map(p=>p[0])),east=Math.max(...points.map(p=>p[0])),south=Math.min(...points.map(p=>p[1])),north=Math.max(...points.map(p=>p[1]));
- places.oakbrook={name:'Oakbrook public preview',coordinates:[(west+east)/2,(south+north)/2]};
- if(geoMap)geoMap.fitBounds([[west,south],[east,north]],{padding:{top:document.querySelector('.map-tools').getBoundingClientRect().height+30,bottom:innerWidth<1024?innerHeight*.64+30:100,left:innerWidth>=1024?450:20,right:70},maxZoom:18,duration:0});
- scheduleDraw();
-},onSelect(tile){setPanel(true,'hf');const points=tile.corners,center=[points.reduce((n,p)=>n+p[0],0)/4,points.reduce((n,p)=>n+p[1],0)/4];if(geoMap){geoMap.easeTo({center,zoom:18,duration:0});if(innerWidth<1024){const point=geoMap.project(center),available=$('details-panel').getBoundingClientRect().top-$('map').getBoundingClientRect().top,tools=document.querySelector('.map-tools').getBoundingClientRect().height;geoMap.panBy([0,point.y-(tools+Math.max(20,available-tools)/2)],{duration:0});}}scheduleDraw();}});
-$('selection-hf').onclick=$('hf-open').onclick=()=>{setPanel(true,'hf');publicBlocks.open();};

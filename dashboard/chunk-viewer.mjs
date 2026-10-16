@@ -3,7 +3,7 @@
 // blocks.html?base=<…/world/region/>&chunk=cx,cz&radius=r&view=orbit|iso|top|street&yaw=deg
 // qa=1 adds a fixed-size, chrome-free deterministic capture that sets window.__earthcraftRender.
 import * as THREE from './assets/vendor/three/three.module.min.js';
-import {RegionClient,hfRegionBase,chunkRegion} from './anvil.mjs?v=blocks-1';
+import {RegionClient,HF_REPO,hfRegionBase,chunkRegion} from './anvil.mjs?v=blocks-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-1';
 
 export const WATER_TOWER_BLOCK=[32,33];// Inherited frame: easting 0, northing 0 → X 32, Z 33.
@@ -218,7 +218,11 @@ export function installBlocksPage(doc=document){
   viewer.setView(params.view,{yaw:params.yaw,pitch:params.pitch??DEFAULT_PITCH[params.view]});
   const setStatus=text=>{$('viewer-status').textContent=text;};
   const regionName=([rx,rz])=>`r.${rx}.${rz}.mca`;
-  $('source-note').textContent=(params.custom?'Custom source ':'Hugging Face dataset EricSpencer00/earthcraft, revision '+params.revision+', ')+params.base+'. The page reads each region’s 8 KiB header, then only the requested chunks with HTTP Range requests.';
+  if(params.custom)$('source-note').textContent='Blocks are read from a custom source: '+params.base;
+  else{
+    const link=doc.createElement('a');link.href='https://huggingface.co/datasets/'+HF_REPO;link.textContent='Earthcraft dataset on Hugging Face';
+    $('source-note').replaceChildren('Blocks are read straight from the ',link,params.revision==='main'?', one chunk at a time.':` (revision ${params.revision}), one chunk at a time.`);
+  }
 
   function updateCamera(){
     const v=viewer,ox=state.originX,oz=state.originZ,heading=((Math.round(v.yaw)%360)+360)%360;
