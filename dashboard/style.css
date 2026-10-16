@@ -171,6 +171,8 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #cell-provenance,#browse-provenance { font-size:12px; overflow-wrap:anywhere; }
 #cell-actions { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
 #cell-actions p { flex-basis:100%; margin:2px 0 8px; }
+#cell-actions a { display:inline-flex; align-items:center; min-height:44px; padding:8px 12px; border:1px solid var(--control-line); border-radius:2px; text-decoration:none; }
+#cell-actions a:hover { background:var(--wash); }
 @media(max-width:700px) { .places-menu { order:1; margin-left:auto; } .location-search { width:calc(100% - 124px); order:1; } .layer-switch { order:2; } #search-status { flex-basis:100%; } }
 
 .places-menu summary { border:1px solid var(--control-line); border-radius:2px; }

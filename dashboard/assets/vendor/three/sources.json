@@ -1,0 +1,27 @@
+{
+  "package": "three",
+  "version": "0.185.1",
+  "retrieved": "2026-10-16",
+  "license": "MIT",
+  "note": "Newest release that still ships minified ESM builds; three.module.min.js imports ./three.core.min.js.",
+  "files": [
+    {
+      "file": "LICENSE",
+      "source_url": "https://unpkg.com/three@0.185.1/LICENSE",
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+      "bytes": 1081
+    },
+    {
+      "file": "three.core.min.js",
+      "source_url": "https://unpkg.com/three@0.185.1/build/three.core.min.js",
+      "sha256": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90",
+      "bytes": 385386
+    },
+    {
+      "file": "three.module.min.js",
+      "source_url": "https://unpkg.com/three@0.185.1/build/three.module.min.js",
+      "sha256": "86bcee248b64f44bcfc23c331ae74619061957d59cab040171dcb6fb5900beb6",
+      "bytes": 365552
+    }
+  ]
+}

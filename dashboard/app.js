@@ -645,7 +645,7 @@ function renderSelection(){
   const details=$('selection-details');details.replaceChildren();
   $('cell-actions').hidden=selectedIndex===null;
   $('cell-provenance').textContent=selectedIndex===null?'':`Public record as of ${snapshot?.updated_utc||'unknown date'}; ${atlas?.area.id==='world'?'saved manifest footprint':'published progress snapshot'}. Not live generator progress.`;
-  details.hidden=true;$('clear-selection').hidden=selectedIndex===null;
+  details.hidden=true;$('clear-selection').hidden=selectedIndex===null;$('cell-blocks').hidden=true;
   if(selectedIndex===null||!atlas){
     $('selection-title').textContent='Choose a cell';
     $('cell').textContent='Select a square on the map. You can also use the arrow keys.';
@@ -658,6 +658,11 @@ function renderSelection(){
   const unit=atlas.area.cell_size_blocks===16?'Chunk':'Cell';
   const id=atlas.cell_ids?.[selectedIndex]||Math.floor(blockX/atlas.area.cell_size_blocks)+'_'+Math.floor(blockZ/atlas.area.cell_size_blocks);
   $('selection-title').textContent=unit+' '+id.replace('_',', ');
+  if(code>=0){
+    // Open the 3D chunk viewer on this cell: centre block and enough chunks to cover it (capped at radius 8).
+    const size=atlas.area.cell_size_blocks,radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
+    $('cell-blocks').href=`./blocks.html?block=${Math.floor(blockX+size/2)},${Math.floor(blockZ+size/2)}&radius=${radius}`;$('cell-blocks').hidden=false;
+  }
   $('cell').textContent=code<0?'No build record for this square.':atlas.area.id==='live'?'Imported into Minecraft.':atlas.area.id==='world'?'Saved manifest record. Current block fill is unverified.':stateLabel(atlas.palette[code])+'.';
   const rows=[['Size',number(atlas.area.cell_size_blocks)+' × '+number(atlas.area.cell_size_blocks)+' m']];
   if(record){

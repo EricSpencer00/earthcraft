@@ -84,6 +84,7 @@ try{
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
       await expect(page.locator('#selection-details')).toContainText('Street-photo colorPending');
       await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
+      await expect(page.locator('#cell-blocks')).toHaveAttribute('href','./blocks.html?block=-26240,-384&radius=8');
       await expect(page.locator('#mapnote')).toContainText('Elmhurst · cell');
       await expect(page.locator('body')).toHaveAttribute('data-camera','idle',{timeout:15000});
       const accessibility=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
