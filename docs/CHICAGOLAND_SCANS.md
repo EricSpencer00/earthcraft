@@ -168,8 +168,10 @@ once:
 and copy the two world templates (`chicago-water-tower-64/Arnis World 1` and
 `Earthcraft-Chicago-Photo-Atlas-v2/datapacks/earthcraft_height`) into
 `runs/regional/control/templates/`. They are not published: the template
-`level.dat` holds a real player compound. `--prepare` rediscovers the catalogs
-from the publishers instead. Then run one tile, or the supervisor:
+`level.dat` holds a real player compound. Block colours come from the owned
+Minecraft 1.21.10 client JAR (the launcher's copy, or `EARTHCRAFT_CLIENT_JAR`);
+a worker refuses to start without templates or JAR. `--prepare` rediscovers
+the catalogs from the publishers instead. Then run one tile, or the supervisor:
 
 ```sh
 /usr/sbin/taskpolicy -c utility .venv/bin/python scripts/regional_generate.py \
