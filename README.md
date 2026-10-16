@@ -76,9 +76,10 @@ phone, tablet, and desktop sizes and saves screenshots with the test results.
 Geographic generation needs macOS, a separate Minecraft Java installation,
 and local input manifests. Start with the [smallest world experiment](docs/MVP.md)
 or the [geometry-only KML importer](docs/GOOGLE_EARTH_KML.md). The
-[Chicago supervisor](scripts/earthcraft_supervisor.py) supports unattended runs
-on the external data volume; the generation workflow requires the configured
-`earthcraft-lacie` runner. Runtime compatibility is recorded with each snapshot.
+[regional generator](docs/CHICAGOLAND_SCANS.md) writes tiles straight to the
+[Hugging Face dataset](docs/WORLD_DATASET.md) within a bounded local disk
+footprint, and `scripts/hf_install.py` installs them into a closed save.
+Runtime compatibility is recorded with each snapshot.
 
 ## Contribute
 

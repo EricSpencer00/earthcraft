@@ -31,15 +31,20 @@ unrelated work while the source owner continues in parallel. Geometry remains
 single-owner per tile. Interrupted unpublished staging is preserved, rebuilt,
 and verified before promotion.
 
+The external drive this lane ran from is retired, and the city lane has not
+been moved to the bounded Hugging Face store yet (the regional generator has;
+see [CHICAGOLAND_SCANS.md](CHICAGOLAND_SCANS.md)). Its paths are therefore
+placeholders for a bounded workspace:
+
 ```sh
-EARTHCRAFT_BULK_ROOT=/Volumes/LaCie/Earthcraft PYTHONPATH=scripts \
+EARTHCRAFT_BULK_ROOT="$WORKSPACE" PYTHONPATH=scripts \
   .venv/bin/python scripts/chicago_worker.py \
   --plan runs/chicago-adaptation-city-001 \
   --catalog runs/chicago-source-index-003/city-sources.json \
-  --output /Volumes/LaCie/Earthcraft/chicago/city-tiles-001 \
-  --bulk /Volumes/LaCie/Earthcraft/chicago/lidar-2022 \
-  --source-cache /Volumes/LaCie/Earthcraft/chicago/cache/metric-source-supertiles-v1 \
-  --way-index /Volumes/LaCie/Earthcraft/chicago/cache/metric-ways-v1.sqlite \
+  --output "$WORKSPACE/chicago/city-tiles-001" \
+  --bulk "$WORKSPACE/chicago/lidar-2022" \
+  --source-cache "$WORKSPACE/chicago/cache/metric-source-supertiles-v1" \
+  --way-index "$WORKSPACE/chicago/cache/metric-ways-v1.sqlite" \
   --lidar-mode deferred --workers 8 --limit 10000
 ```
 
@@ -62,10 +67,10 @@ The live publisher prefers a valid refinement receipt when it exists before a
 chunk is first published. It never overwrites an already claimed player chunk.
 
 ```sh
-EARTHCRAFT_BULK_ROOT=/Volumes/LaCie/Earthcraft PYTHONPATH=scripts \
+EARTHCRAFT_BULK_ROOT="$WORKSPACE" PYTHONPATH=scripts \
   .venv/bin/python scripts/chicago_lidar_refinement.py \
-  --output /Volumes/LaCie/Earthcraft/chicago/refinement-ops \
-  --index-root /Volumes/LaCie/Earthcraft/chicago/cache/lidar-spatial-v1 \
+  --output "$WORKSPACE/chicago/refinement-ops" \
+  --index-root "$WORKSPACE/chicago/cache/lidar-spatial-v1" \
   --workers 1 --limit 10000
 ```
 

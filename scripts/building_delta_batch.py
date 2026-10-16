@@ -194,7 +194,7 @@ if __name__ == '__main__':
     parser.add_argument('--binding', type=Path, required=True,
                         help='Existing live-world binding')
     parser.add_argument('--output', type=Path, required=True,
-                        help='Fresh immutable LaCie stage directory')
+                        help='Fresh immutable stage directory')
     parser.add_argument('--workers', type=int, default=1,
                         help='Independent deterministic tile stages (1-8; default: 1)')
     parser.add_argument('--resume', action='store_true',

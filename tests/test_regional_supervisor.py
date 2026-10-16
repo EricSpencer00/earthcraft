@@ -53,7 +53,7 @@ class SupervisorTests(unittest.TestCase):
             if sys.platform=='darwin':self.assertEqual(command[:6],['/usr/sbin/taskpolicy','-c','utility','nice','-n','10'])
             strict=rs.worker_command(self.arguments(root,'--qos','background'),'base-1')
             if sys.platform=='darwin':self.assertEqual(strict[:2],['/usr/sbin/taskpolicy','-b'])
-            self.assertFalse(any('LaCie' in part or 'bulk' in part for part in command))
+            self.assertFalse(any('/Volumes/' in part or 'bulk' in part for part in command))
 
 
 if __name__=='__main__':unittest.main()

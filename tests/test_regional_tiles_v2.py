@@ -74,7 +74,7 @@ class PackagingTests(unittest.TestCase):
 
     def test_gate_refuses_unmapped_local_paths_and_foreign_regions(self):
         with self.assertRaisesRegex(ValueError, 'Local path left'):
-            rt.assert_portable({'note': 'read from /Volumes/LaCie/Earthcraft/x'}, 'receipt')
+            rt.assert_portable({'note': 'read from /Volumes/External/Earthcraft/x'}, 'receipt')
         rt.assert_portable({'url': 'https://example.invalid/var/tmp/x', 'wkt': 'PROJCRS["x"]'}, 'receipt')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / '0_0'

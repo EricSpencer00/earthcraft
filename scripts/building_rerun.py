@@ -20,7 +20,6 @@ from chicago_tiles import digest
 
 
 SCHEMA = 'building-rerun-manifest-v1'
-DEFAULT_SOURCE_ROOT = Path('/Volumes/LaCie/Earthcraft/chicago/city-tiles-001')
 
 
 def sha(path):
@@ -54,7 +53,7 @@ def tile_record(tile, row, source_root, output_root):
     evidence = Path(row['evidence']).resolve()
     root = evidence.parent
     if not root.is_relative_to(source_root):
-        raise ValueError(f'{tile}: source root escaped the LaCie tile root: {root}')
+        raise ValueError(f'{tile}: source root escaped the configured tile root: {root}')
     world = root / 'world'
     sources = root / 'sources'
     if not (world / 'earthcraft.json').is_file() or not (sources / 'sources.json').is_file():
@@ -140,7 +139,7 @@ def select(args):
             continue
         evidence = Path(row['evidence']).resolve()
         if not evidence.parent.parent.is_relative_to(source_root):
-            skipped['not_lacie'] = skipped.get('not_lacie', 0) + 1
+            skipped['outside_source_root'] = skipped.get('outside_source_root', 0) + 1
             continue
         candidates.append((tile['id'], row))
     def inspect(candidate):
@@ -284,7 +283,8 @@ def parser():
     p.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     p.add_argument('--plan', type=Path, required=True)
     p.add_argument('--journal', type=Path, required=True)
-    p.add_argument('--source-root', type=Path, default=DEFAULT_SOURCE_ROOT)
+    p.add_argument('--source-root', type=Path, required=True,
+                   help='city tile root holding each journal receipt (the retired external drive is not a default)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--manifest', type=Path)
     p.add_argument('--tile-list',type=Path,
