@@ -3,8 +3,8 @@
 // blocks.html?base=<…/world/region/>&chunk=cx,cz&radius=r&view=orbit|iso|top|street&yaw=deg
 // qa=1 adds a fixed-size, chrome-free deterministic capture that sets window.__earthcraftRender.
 import * as THREE from './assets/vendor/three/three.module.min.js';
-import {RegionClient,HF_REPO,hfRegionBase,chunkRegion} from './anvil.mjs?v=blocks-1';
-import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-1';
+import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=blocks-2';
+import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-2';
 
 export const WATER_TOWER_BLOCK=[32,33];// Inherited frame: easting 0, northing 0 → X 32, Z 33.
 export const MAX_RADIUS=8,VIEWS=['orbit','iso','top','street'];
@@ -15,7 +15,7 @@ const DEFAULT_YAW={orbit:45,iso:45,top:0,street:0};
 export function parseViewerParams(search,href=globalThis.location?.href||'http://localhost/'){
   const q=new URLSearchParams(search),pair=name=>{const v=q.get(name);if(v===null||v==='')return null;const parts=v.split(',').map(s=>s.trim());if(parts.length!==2||!parts.every(s=>/^-?\d{1,8}$/.test(s)))throw Error(`${name} must be two integers, such as ${name}=2,2.`);return parts.map(Number);};
   const number=(name,lo,hi)=>{const v=q.get(name);if(v===null||v==='')return null;const n=Number(v);if(!Number.isFinite(n))throw Error(name+' must be a number.');return Math.max(lo,Math.min(hi,n));};
-  const revision=q.get('revision')||'main',custom=q.get('base');
+  const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
@@ -213,7 +213,7 @@ export function installBlocksPage(doc=document){
     new ResizeObserver(entries=>doc.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px')).observe(doc.querySelector('.viewer-tools'));
   }
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();$('viewer-status').textContent='The graphics context was lost. Reload the page to draw the blocks again.';});
-  const client=new RegionClient({base:params.base}),registry=new BlockRegistry();
+  const client=new RegionClient({base:params.base,packs:params.custom?[]:VIEW_CACHES}),registry=new BlockRegistry();
   let world=new BlockWorld(registry),state={center:params.center,radius:params.radius,floor:params.floor,floorY:-64,originX:0,originZ:0,statuses:new Map(),errors:[]},session=null,hover=null,pinned=null;
   viewer.setView(params.view,{yaw:params.yaw,pitch:params.pitch??DEFAULT_PITCH[params.view]});
   const setStatus=text=>{$('viewer-status').textContent=text;};
@@ -221,7 +221,7 @@ export function installBlocksPage(doc=document){
   if(params.custom)$('source-note').textContent='Blocks are read from a custom source: '+params.base;
   else{
     const link=doc.createElement('a');link.href='https://huggingface.co/datasets/'+HF_REPO;link.textContent='Earthcraft dataset on Hugging Face';
-    $('source-note').replaceChildren('Blocks are read straight from the ',link,params.revision==='main'?', one chunk at a time.':` (revision ${params.revision}), one chunk at a time.`);
+    $('source-note').replaceChildren('Blocks are read straight from the ',link,params.revision===PINNED_REVISION?` (pinned revision ${PINNED_REVISION.slice(0,8)}), one chunk at a time; the Water Tower area comes from a byte-identical cache on this site.`:` (revision ${params.revision}), one chunk at a time.`);
   }
 
   function updateCamera(){
@@ -272,7 +272,7 @@ export function installBlocksPage(doc=document){
   }
   function syncUrl(){
     if(params.qa)return;const q=new URLSearchParams();q.set('chunk',state.center.join(','));q.set('radius',String(state.radius));q.set('view',viewer.view);
-    if(params.custom)q.set('base',params.base);else if(params.revision!=='main')q.set('revision',params.revision);
+    if(params.custom)q.set('base',params.base);else if(params.revision!==PINNED_REVISION)q.set('revision',params.revision);
     history.replaceState(null,'','?'+q.toString());
   }
   function stats(blocks,faces,regions){

@@ -21,3 +21,10 @@ Block viewer colors are authored approximations; no Minecraft textures are bundl
 Street map: OpenFreeMap, © OpenMapTiles and © OpenStreetMap contributors.
 OpenStreetMap data: ODbL (https://www.openstreetmap.org/copyright).
 Archived-sample data credits and licenses: progress/headless/report.json.
+
+Generated world data (HF dataset EricSpencer00/earthcraft, and the byte-identical
+chunk cache in dashboard/cache/) incorporates OpenStreetMap data,
+© OpenStreetMap contributors, available under the Open Database License (ODbL 1.0,
+https://opendatacommons.org/licenses/odbl/1-0/). See docs/HOSTING_AND_TERMS.md.
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.

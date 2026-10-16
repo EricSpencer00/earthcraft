@@ -634,7 +634,7 @@ function renderSelection(){
   const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
   $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}`;$('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
-  cellPreview??=import('./cell-preview.mjs?v=cell-1');
+  cellPreview??=import('./cell-preview.mjs?v=cell-2');
   cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2})).then(result=>{
     if(token!==cellToken||result.status==='aborted')return;
     $('cell-view').dataset.state=result.status;

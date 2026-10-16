@@ -55,6 +55,7 @@ jobs:
           mkdir -p site/progress
           cp dashboard/*.html dashboard/*.js dashboard/*.mjs dashboard/*.css site/
           cp -R dashboard/assets site/assets
+          cp -R dashboard/cache site/cache
           cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
           python scripts/headless_site.py --bundle progress/headless --output site/headless
@@ -72,6 +73,7 @@ jobs:
           node tests/location_search.mjs
           node tests/cell_browser.mjs
           node tests/anvil.mjs
+          node tests/view_cache.mjs
           node tests/dashboard_browser.mjs site
           node tests/blocks_browser.mjs site
           node tests/headless_browser.mjs site/headless

@@ -3,9 +3,14 @@
 // downloads a whole region file from a server that honours Range.
 export const SECTOR=4096,HEADER_BYTES=8192,MAX_REQUEST_BYTES=2*1024*1024,MAX_INFLATED_BYTES=16*1024*1024,MAX_WHOLE_FILE_BYTES=256*1024;
 export const HF_REPO='EricSpencer00/earthcraft';
+// Immutable dataset commit the site reads by default (content at a SHA never changes, so CDNs and
+// browsers may cache it). Bump together with dashboard/cache/*.json via scripts/build_view_cache.mjs.
+export const PINNED_REVISION='770e8308816b3443f4f66c56b378e49ff8ae0480';
+export const VIEW_CACHES=['./cache/water-tower.json'];
+export const MAX_PACK_BYTES=8*1024*1024;
 const REVISION=/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/,REPO=/^[-\w]+\/[-\w.]+$/;
 // Published layout: world/region/<bx>/r.X.Z.mca with bx = floor(X / 16) (≤ 10k files per folder).
-export function hfRegionBase(revision='main',repo=HF_REPO){
+export function hfRegionBase(revision=PINNED_REVISION,repo=HF_REPO){
   if(!REVISION.test(revision))throw Error('Invalid dataset revision.');if(!REPO.test(repo))throw Error('Invalid dataset repository.');
   return `https://huggingface.co/datasets/${repo}/resolve/${revision}/world/region/`;
 }
@@ -136,13 +141,37 @@ class LRU{
 }
 
 export class RegionClient{
-  constructor({base,fetch:fetcher=(...a)=>globalThis.fetch(...a),maxConcurrent=8,headerCache=64,chunkCache=320,gapSectors=8,maxRequestBytes=MAX_REQUEST_BYTES}={}){
+  constructor({base,fetch:fetcher=(...a)=>globalThis.fetch(...a),packs=[],maxConcurrent=6,headerCache=64,chunkCache=320,gapSectors=8,maxRequestBytes=MAX_REQUEST_BYTES}={}){
     if(typeof base!=='string'||!base)throw Error('A region base URL is required.');
     const url=new URL(base.endsWith('/')?base:base+'/',globalThis.location?.href);
     if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error('Region base must be an http(s) URL without credentials.');
     this.base=url.href;this.fetch=fetcher;this.max=maxConcurrent;this.active=0;this.queue=[];
     this.headers=new LRU(headerCache);this.pending=new Map();this.chunkCache=new LRU(chunkCache);this.gap=gapSectors;this.maxRequestBytes=Math.max(HEADER_BYTES,Math.min(maxRequestBytes,MAX_REQUEST_BYTES));
-    this.stats={requests:0,bytes:0};
+    this.stats={requests:0,bytes:0,packRequests:0,packBytes:0};
+    // Signed CDN URL each region's resolve URL redirected to; reusing it skips one 302 per read.
+    this.resolved=new Map();this.packUrls=packs;this.packs=null;
+  }
+  // Prepacked chunk records (scripts/build_view_cache.mjs). Used only when the pack was built from
+  // the same repo+revision this client reads; any failure falls back to Range reads.
+  loadPacks(){
+    return this.packs??=Promise.all(this.packUrls.map(async href=>{
+      try{
+        const indexUrl=new URL(href,globalThis.location?.href),r=await this.fetch(indexUrl.href,{credentials:'omit'});this.stats.packRequests++;
+        if(!r.ok){r.body?.cancel().catch(()=>{});return null;}
+        const m=await r.json();
+        if(m?.schema!=='earthcraft.view-cache.v1'||hfRegionBase(m.revision,m.repo)!==this.base||!(m.pack?.bytes<=MAX_PACK_BYTES))return null;
+        const b=await this.fetch(new URL(m.pack.path,indexUrl).href,{credentials:'omit'});this.stats.packRequests++;
+        if(!b.ok){b.body?.cancel().catch(()=>{});return null;}
+        const bytes=await readLimited(b.body,MAX_PACK_BYTES,'View cache is larger than declared.');this.stats.packBytes+=bytes.length;
+        if(bytes.length!==m.pack.bytes)return null;
+        if(globalThis.crypto?.subtle){const hex=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(v=>v.toString(16).padStart(2,'0')).join('');if(hex!==m.pack.sha256)return null;}
+        return {bytes,chunks:new Map(Object.entries(m.chunks))};
+      }catch{return null;}
+    })).then(list=>list.filter(Boolean));
+  }
+  fromPack(packs,cx,cz){
+    for(const p of packs){const e=p.chunks.get(cx+','+cz);if(e&&e[0]+e[1]<=p.bytes.length)return p.bytes.subarray(e[0],e[0]+e[1]);}
+    return null;
   }
   url(rx,rz){return new URL(regionPath(rx,rz),this.base).href;}
   slot(signal){
@@ -155,8 +184,12 @@ export class RegionClient{
     if(length<1||length>this.maxRequestBytes)throw Error('Range request exceeds the per-request cap.');
     await this.slot(signal);
     try{
-      const response=await this.fetch(url,{headers:{Range:`bytes=${start}-${start+length-1}`},signal,credentials:'omit',referrerPolicy:'no-referrer'});
-      this.stats.requests++;
+      const init={headers:{Range:`bytes=${start}-${start+length-1}`},signal,credentials:'omit',referrerPolicy:'no-referrer'},direct=this.resolved.get(url);
+      let response=await this.fetch(direct||url,init);this.stats.requests++;
+      if(direct&&response.status>=400&&response.status!==416){// signed URL expired: go back through the resolve URL
+        response.body?.cancel().catch(()=>{});this.resolved.delete(url);response=await this.fetch(url,init);this.stats.requests++;
+      }
+      if(!direct&&response.redirected&&response.url&&response.url!==url&&[200,206].includes(response.status))this.resolved.set(url,response.url);
       if(response.status===404){response.body?.cancel().catch(()=>{});return null;}
       if(response.status===416){response.body?.cancel().catch(()=>{});return new Uint8Array(0);}
       if(response.status===206){
@@ -190,7 +223,13 @@ export class RegionClient{
   async loadChunks(coords,{signal,onChunk=()=>{}}={}){
     const byRegion=new Map(),results=[];
     const report=r=>{results.push(r);onChunk(r);};
-    for(const [cx,cz] of coords){const [rx,rz]=chunkRegion(cx,cz),k=rx+','+rz;if(!byRegion.has(k))byRegion.set(k,{rx,rz,items:[]});byRegion.get(k).items.push({cx,cz});}
+    const packs=this.packUrls.length?await this.loadPacks():[];signal?.throwIfAborted();
+    for(const [cx,cz] of coords){
+      const record=packs.length&&this.fromPack(packs,cx,cz);
+      if(record){
+        try{const chunk=decodeChunk(readNBT(await readChunkPayload(record)).value);signal?.throwIfAborted();report({cx,cz,status:'ok',chunk,packed:true});continue;}
+        catch(error){if(signal?.aborted)throw error;}// fall through to a Range read
+      }const [rx,rz]=chunkRegion(cx,cz),k=rx+','+rz;if(!byRegion.has(k))byRegion.set(k,{rx,rz,items:[]});byRegion.get(k).items.push({cx,cz});}
     await Promise.all([...byRegion.values()].map(async({rx,rz,items})=>{
       let header;
       try{header=await this.header(rx,rz,signal);}catch(error){if(signal?.aborted)throw error;for(const {cx,cz} of items)report({cx,cz,status:'error',error});return;}

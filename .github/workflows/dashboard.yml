@@ -7,6 +7,8 @@ on:
       - tests/dashboard_browser.mjs
       - tests/blocks_browser.mjs
       - tests/anvil.mjs
+      - tests/view_cache.mjs
+      - scripts/build_view_cache.mjs
       - tests/range_server.mjs
       - tests/fixtures/anvil/**
       - .github/workflows/dashboard.yml
@@ -18,6 +20,8 @@ on:
       - tests/dashboard_browser.mjs
       - tests/blocks_browser.mjs
       - tests/anvil.mjs
+      - tests/view_cache.mjs
+      - scripts/build_view_cache.mjs
       - tests/range_server.mjs
       - tests/fixtures/anvil/**
       - .github/workflows/dashboard.yml
@@ -48,6 +52,7 @@ jobs:
       - name: Check the atlas and capture each layout
         run: |
           node tests/anvil.mjs
+          node tests/view_cache.mjs
           node tests/dashboard_browser.mjs
           node tests/blocks_browser.mjs
       - name: Save screenshots
