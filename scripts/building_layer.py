@@ -6,6 +6,7 @@ ground, photo anchors and their exposed faces are retained. Works on closed,
 immutable generated tiles; never on a running player's save.
 """
 import argparse
+import copy
 import hashlib
 import io
 import json
@@ -287,6 +288,26 @@ def compile_layer(source_world, source, destination, roof_models=None):
             cx, cz = wx-ox//16, wz-oz//16
             zs, xs = slice(cz*16, cz*16+16), slice(cx*16, cx*16+16)
             volume = np.zeros((height, 16, 16), np.uint8)
+            # A derived shell can rise above the highest non-empty source
+            # section.  Materialize every section touched by the declared
+            # world height before encoding, otherwise the top 16 blocks of a
+            # building silently disappear from the Anvil chunk.
+            section_map = {int(section['Y']): section for section in tag['sections']}
+            biome_template = copy.deepcopy(
+                next((section['biomes'] for section in tag['sections'] if 'biomes' in section),
+                     n.Compound({'palette': n.List[n.String]([n.String('minecraft:plains')])})))
+            first_section = min_y // 16
+            last_section = (min_y + height - 1) // 16
+            for section_y in range(first_section, last_section + 1):
+                if section_y not in section_map:
+                    section_map[section_y] = n.Compound({
+                        'Y': n.Byte(section_y),
+                        'block_states': n.Compound({'palette': n.List[n.Compound]([
+                            n.Compound({'Name': n.String('minecraft:air')})])}),
+                        'biomes': copy.deepcopy(biome_template),
+                    })
+            tag['sections'] = n.List[n.Compound]([
+                section_map[section_y] for section_y in sorted(section_map)])
             for section in tag['sections']:
                 state = section['block_states']; palette = state['palette']
                 if any(p.get('Properties') for p in palette):

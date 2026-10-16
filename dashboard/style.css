@@ -41,6 +41,7 @@ body[data-map='geographic'] #map { pointer-events: none; }
 #basemap { display: none; }
 body[data-map='geographic'] #basemap { display: block; }
 .maphead { position: absolute; z-index: 3; top: 20px; left: var(--map-left); display: flex; align-items: center; gap: 24px; }
+.maphead > div:first-child { padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
 .map-unit { display: block; color: var(--muted); font-size: 12px; }
 h1 { margin: 2px 0 0; font: 600 26px/1.2 var(--font-display); letter-spacing: -.035em; }
 .place-switch, .layer-switch { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
@@ -120,9 +121,9 @@ figcaption { margin-top: 8px; color: var(--muted); font-size: 10px; }
   :root { --header-height: 60px; --map-left: 12px; }
   .site-header { padding: 0 12px; gap: 12px; } .brand { font-size: 22px; gap: 8px; } .brand svg { width: 26px; height: 26px; }
   nav { gap: 0; } nav button { padding: 8px; font-size: 12px; } .source-link { display: none; } #about-open { display: none; }
-  h1 { font-size: 23px; } .maphead { left: 12px; top: 14px; } .map-unit { font-size: 11px; } .place-switch { top: 66px; }
+  h1 { font-size: 23px; } .maphead { left: 12px; top: 14px; } .maphead > div:first-child { padding: 6px 10px; } .map-unit { font-size: 11px; } .place-switch { top: 82px; }
   .toolbar { top: 14px; right: 12px; gap: 6px; } select { max-width: 100px; font-size: 12px; padding-left: 8px; padding-right: 18px; }
-  .layer-switch { top: 144px; left: 12px; } .place-switch button, .layer-switch button { font-size: 13px; }
+  .layer-switch { top: 146px; left: 12px; } .place-switch button, .layer-switch button { font-size: 13px; }
   .map-controls { right: 12px; bottom: 130px; } .map-bottom { left: 12px; right: 12px; bottom: 34px; }
   .map-readout { gap: 8px 12px; font-size: 11px; max-width: calc(100% - 52px); } #grid-size { display: none; }
   .legend { font-size: 12px; gap: 7px 12px; } .map-attribution { right: 12px; font-size: 9px; }

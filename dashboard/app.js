@@ -13,7 +13,8 @@ const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(v
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
-const places={chicago:{name:'Chicago',coordinates:[-87.62443,41.8972]},elmhurst:{name:'Elmhurst',coordinates:[-87.9403418,41.8994745]}};
+// One metro-area view: the whole generated Chicago extent, centred on the Water Tower origin.
+const places={chicago:{name:'Chicago',coordinates:[-87.62443,41.8972]}};
 
 function setPanel(open,section=document.body.dataset.section||'world'){
   const changed=section!==document.body.dataset.section;
@@ -69,7 +70,6 @@ function fitGeography(){
   geoMap.fitBounds([[geoBounds[0],geoBounds[1]],[geoBounds[2],geoBounds[3]]],{
     padding:{top:innerWidth>1200?150:210,bottom:140,left:panel?340:40,right:80},duration:0,maxZoom:14
   });
-  for(const id of Object.keys(places))$('place-'+id).setAttribute('aria-pressed','false');
   updateZoomButtons();scheduleDraw();
 }
 
@@ -176,14 +176,10 @@ function setLayer(layer){
   }else if(atlas)renderAtlas();
 }
 
-function goToPlace(id){
+function showMetro(){
   if(!geographic())return;
-  const place=places[id];
-  for(const name of Object.keys(places))$('place-'+name).setAttribute('aria-pressed',String(name===id));
-  geoMap.easeTo({center:place.coordinates,zoom:13,duration:0});
-  const cell=cellAtLocation({lng:place.coordinates[0],lat:place.coordinates[1]});
-  if(cell){selectIndex(cell.index);setMapMessage(place.name+' · cell '+atlas.cell_ids[cell.index]);}
-  else{clearSelection();setMapMessage(place.name+' has no cell in this published snapshot.');}
+  fitGeography();
+  setMapMessage('Chicago metro area · '+number(atlas.area.tiles)+' cells');
 }
 
 function setMapMessage(message){$('mapnote').textContent=message;}
@@ -254,7 +250,7 @@ function renderSnapshot(){
   $('appearance').textContent=countLabel(local.stages?.appearance?.complete);
   const world=atlas?.area.id==='world'?snapshot.generated_world:null;
   if(world){
-    $('phase').textContent='Chicagoland save';
+    $('phase').textContent='Chicago metro save';
     $('geometry').textContent=number(world.unique_cells);
     $('sources').textContent=number(world.scan_upgrade_parent_tiles);
     $('appearance').textContent=number(world.photo_colored_cells);
@@ -404,7 +400,7 @@ function renderLegend(isPublished,counts,live){
 function renderAtlas(){
   if(!atlas){
     geoSignature='';geoCells=[];document.body.dataset.map='grid';$('map-attribution').hidden=true;
-    for(const id of ['place-chicago','place-elmhurst','layer-appearance'])$(id).disabled=true;
+    for(const id of ['place-chicago','layer-appearance'])$(id).disabled=true;
     $('grid-size').textContent='Unavailable';
     $('grid-count').textContent='The selected source has not published an atlas.';
     $('chunk-count').textContent='Unavailable';
@@ -428,7 +424,7 @@ function renderAtlas(){
   }
   const {area,counts}=atlas;
   prepareGeography();
-  for(const id of ['place-chicago','place-elmhurst'])$(id).disabled=!geographic();
+  for(const id of ['place-chicago'])$(id).disabled=!geographic();
   $('layer-appearance').disabled=atlas.source!=='published';
   if(atlas.source!=='published'){
     mapLayer='build';$('layer-build').setAttribute('aria-pressed','true');$('layer-appearance').setAttribute('aria-pressed','false');
@@ -444,10 +440,10 @@ function renderAtlas(){
     $('border').textContent='Published grid';
     $('leases').textContent='Snapshot';
     $('map-unit').textContent=number(area.cell_size_blocks)+' m generation cells';
-    $('map-title').textContent=world?'Generated world':'Published progress';
+    $('map-title').textContent=world?'Chicago metro':'Published progress';
     $('map-caption').textContent='Each square covers '+number(area.cell_size_blocks)+' × '+number(area.cell_size_blocks)+' metres. Green means terrain and buildings have been generated.';
     if(world){
-      $('map-caption').textContent=Number(world.unique_area_km2).toLocaleString(undefined,{maximumFractionDigits:1})+' km² across Chicago, Elmhurst, and the surrounding area. Select a cell to inspect its record.';
+      $('map-caption').textContent=Number(world.unique_area_km2).toLocaleString(undefined,{maximumFractionDigits:1})+' km² across the Chicago metro area. Select a cell to inspect its record.';
       $('border').textContent='Existing world frame';
       $('chunk-count').textContent=number(world.native_tiles)+' saved tile records';
     }
@@ -672,13 +668,15 @@ $('panel-close').onclick=()=>{setPanel(false);$('panel-toggle').focus();};
 $('about-open').onclick=()=>setPanel(true,'about');
 for(const id of ['world','cell','about'])$('tab-'+id).onclick=()=>setPanel(true,id);
 for(const id of ['build','appearance'])$('layer-'+id).onclick=()=>setLayer(id);
-for(const id of Object.keys(places))$('place-'+id).onclick=()=>goToPlace(id);
+$('place-chicago').onclick=showMetro;
 $('clear-selection').onclick=clearSelection;
 $('refresh').onclick=refresh;
 $('area').onchange=refresh;
 $('auto').onchange=()=>{if($('auto').checked)refresh();};
 function responsiveLabels(){
-  $('area').querySelector('[value="published"]').textContent=innerWidth<=540?'Snapshot':'Published build';
+  const narrow=innerWidth<=540;
+  $('area').querySelector('[value="world"]').textContent=narrow?'World':'Generated world';
+  $('area').querySelector('[value="published"]').textContent=narrow?'Snapshot':'Published build';
 }
 window.addEventListener('resize',()=>{responsiveLabels();resizeCanvas();});
 document.fonts.ready.then(()=>{if(atlas)drawAtlas();});
