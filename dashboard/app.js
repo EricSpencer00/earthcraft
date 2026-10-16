@@ -1,4 +1,4 @@
-import {cellRecord,installCellBrowser} from './cell-browser.mjs?v=simple-1';
+import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
 import {parseLocation} from './location-search.mjs?v=simple-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
@@ -605,44 +605,44 @@ function indexAtPointer(event){
   return row*mapMetrics.width+column;
 }
 
+let cellPreview=null,cellToken=0;
 function renderSelection(){
   const details=$('selection-details');details.replaceChildren();
-  $('cell-actions').hidden=selectedIndex===null;
-  $('cell-provenance').textContent=selectedIndex===null||!snapshot?.updated_utc?'':'Map updated '+dateLabel(snapshot.updated_utc)+'.';
-  details.hidden=true;$('clear-selection').hidden=selectedIndex===null;$('cell-blocks').hidden=true;
+  details.hidden=true;$('clear-selection').hidden=selectedIndex===null;$('cell-actions').hidden=true;$('cell-view').hidden=true;
+  const token=++cellToken;
   if(selectedIndex===null||!atlas){
     $('selection-title').textContent='Choose a cell';
-    $('cell').textContent='Select a square on the map to see it up close. You can also use the arrow keys.';
+    $('cell').hidden=false;$('cell').textContent='Select a square on the map to see it up close. You can also use the arrow keys.';
     return;
   }
   const width=atlas.area.width_cells,column=selectedIndex%width,row=Math.floor(selectedIndex/width);
-  const code=atlas.cells[selectedIndex],record=atlas.records?.[selectedIndex];
-  const blockX=atlas.area.left_block+column*atlas.area.cell_size_blocks;
-  const blockZ=atlas.area.top_block+row*atlas.area.cell_size_blocks;
-  const unit=atlas.area.cell_size_blocks===16?'Chunk':'Cell';
-  const id=atlas.cell_ids?.[selectedIndex]||Math.floor(blockX/atlas.area.cell_size_blocks)+'_'+Math.floor(blockZ/atlas.area.cell_size_blocks);
+  const code=atlas.cells[selectedIndex],record=atlas.records?.[selectedIndex],size=atlas.area.cell_size_blocks;
+  const blockX=atlas.area.left_block+column*size,blockZ=atlas.area.top_block+row*size;
+  const unit=size===16?'Chunk':'Cell';
+  const id=atlas.cell_ids?.[selectedIndex]||Math.floor(blockX/size)+'_'+Math.floor(blockZ/size);
   $('selection-title').textContent=unit+' '+id.replace('_',', ');
-  if(code>=0){
-    // Open the 3D chunk viewer on this cell: centre block and enough chunks to cover it (capped at radius 8).
-    const size=atlas.area.cell_size_blocks,radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
-    $('cell-blocks').href=`./blocks.html?block=${Math.floor(blockX+size/2)},${Math.floor(blockZ+size/2)}&radius=${radius}`;$('cell-blocks').hidden=false;
-  }
-  $('cell').textContent=code<0?'Not built yet.':atlas.area.id==='live'?'Imported into Minecraft.':atlas.area.id==='world'?'Built. Open it in 3D to look around.':stateLabel(atlas.palette[code])+'.';
-  const rows=[['Size',number(atlas.area.cell_size_blocks)+' × '+number(atlas.area.cell_size_blocks)+' m']];
-  if(record){
-    if(Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
-    if(atlas.area.id==='world'){
-      rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
-      rows.push(['Extra scan detail',record.scan_upgrade_recorded_in_parent_tile?'In part of this area':'No']);
-      rows.push(['Street-photo color','Coming later']);
-    }
-    for(const [label,field] of [['Map data','source_state'],['Terrain & buildings','geometry_state'],['Surface detail','appearance_state'],['Minecraft check','game_verify_state']])if(record[field])rows.push([label,stateLabel(record[field])]);
-  }else if(code>=0)rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
+  const rows=[['Size',number(size)+' × '+number(size)+' m']];
+  if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
+  rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
   for(const [label,value] of rows){
-    const row=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
-    dt.textContent=label;dd.textContent=value;row.append(dt,dd);details.append(row);
+    const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
+    dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
   }
   details.hidden=false;
+  if(code<0){$('cell').hidden=false;$('cell').textContent='Not built yet.';return;}
+  $('cell').hidden=true;
+  const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
+  $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}`;$('cell-actions').hidden=false;
+  $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
+  cellPreview??=import('./cell-preview.mjs?v=cell-1');
+  cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2})).then(result=>{
+    if(token!==cellToken||result.status==='aborted')return;
+    $('cell-view').dataset.state=result.status;
+    $('cell-view-status').textContent=result.status==='empty'?'Not built yet.':'Drag to turn · scroll or pinch to zoom.';
+  }).catch(error=>{
+    if(token!==cellToken)return;console.warn(error);
+    $('cell-view').dataset.state='error';$('cell-view-status').textContent='The 3D view could not be drawn here. Use Open full screen.';
+  });
 }
 
 function clearSelection(){
@@ -723,8 +723,4 @@ setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!do
 
 
 cellBrowser=installCellBrowser($('browse-panel'),{select:index=>{selectIndex(index);$('selection-title').tabIndex=-1;$('selection-title').focus({preventScroll:true});},visibleBounds:()=>{if(!geographic())return null;const bounds=geoMap.getBounds();return {west:bounds.getWest(),east:bounds.getEast(),south:bounds.getSouth(),north:bounds.getNorth()};}});
-$('browse-open').onclick=$('cell-browse').onclick=()=>{setPanel(true,'browse');cellBrowser.setData(atlas,snapshot);};
-$('record-download').onclick=()=>{
- if(selectedIndex===null||!atlas)return;const record=cellRecord(atlas,selectedIndex,snapshot),url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
- const anchor=document.createElement('a');anchor.href=url;anchor.download='earthcraft-cell-'+record.cell_id.replace(/[^a-zA-Z0-9_.-]/g,'_')+'.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-};
+$('browse-open').onclick=()=>{setPanel(true,'browse');cellBrowser.setData(atlas,snapshot);};

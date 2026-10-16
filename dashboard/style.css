@@ -173,3 +173,9 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 
 .places-menu summary { border:1px solid var(--control-line); border-radius:2px; }
 .places-menu:not([open]) .place-switch { display:none; }
+.cell-view { position:relative; margin:14px 0 8px; }
+.cell-view canvas { display:block; width:100%; aspect-ratio:4/3; background:#c9d9e3; border-radius:2px; touch-action:none; }
+.cell-view canvas:focus-visible { outline:2px solid var(--accent-ink, #1f4a32); outline-offset:2px; }
+.cell-view-status { margin:6px 0 0; font-size:13px; color:var(--muted, #4b5650); }
+.cell-view[data-state="loading"] canvas { opacity:.6; }
+.cell-view[data-state="empty"] canvas { display:none; }

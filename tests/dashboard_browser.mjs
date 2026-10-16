@@ -27,7 +27,7 @@ const server=createServer(async(req,res)=>{
       body=await readFile(filename);
     }
     res.writeHead(200,{'Content-Type':mime[extname(filename)]||'application/octet-stream',
-      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://tiles.openfreemap.org; img-src 'self' data: blob: https://tiles.openfreemap.org; worker-src 'self' blob:; frame-ancestors 'none'"});
+      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://tiles.openfreemap.org https://huggingface.co; img-src 'self' data: blob: https://tiles.openfreemap.org; worker-src 'self' blob:; frame-ancestors 'none'"});
     res.end(body);
   }catch{res.writeHead(404);res.end('Not found');}
 });
@@ -37,6 +37,8 @@ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||unde
 await mkdir(resolve(root,'test-results'),{recursive:true});
 const problems=[];
 const context=await browser.newContext({viewport:{width:1440,height:1000},hasTouch:true});
+// Region files are not fetched in isolated checks: every HF region answers with an empty header (no chunks stored).
+await context.route('https://huggingface.co/**',route=>route.fulfill({status:206,body:Buffer.alloc(8192),headers:{'Access-Control-Allow-Origin':'*','Content-Range':'bytes 0-8191/8192','Content-Type':'application/octet-stream'}}));
 const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
 page.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
@@ -83,7 +85,10 @@ try{
       await page.locator('#places-menu').evaluate(el=>el.open=true);
       await page.locator('#place-elmhurst').click();
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
-      await expect(page.locator('#selection-details')).toContainText('Street-photo colorComing later');
+      await expect(page.locator('#selection-details')).not.toContainText('Street-photo');
+      await expect(page.locator('#cell-blocks')).toHaveText('Open full screen');
+      await expect(page.locator('#cell-view')).toHaveAttribute('data-state','empty',{timeout:20000});
+      await expect(page.locator('#cell-view-status')).toHaveText('Not built yet.');
       await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
       await expect(page.locator('#cell-blocks')).toHaveAttribute('href','./blocks.html?block=-26240,-384&radius=8');
       await expect(page.locator('#mapnote')).toContainText('Elmhurst · cell');
@@ -195,8 +200,8 @@ try{
   const fitScale=await page.locator('#map-scale').textContent();
   await page.locator('#map').press('ArrowRight');
   await expect(page.locator('#selection-title')).toHaveText(/^Cell /);
-  await expect(page.locator('#selection-details')).toContainText('Surface detail');
-  await expect(page.locator('#selection-details')).toContainText('Minecraft check');
+  await expect(page.locator('#selection-details')).toContainText('Size');
+  await expect(page.locator('#cell-panel')).not.toContainText(/Minecraft check|unverified|Pending|Queued|Not recorded/);
   const selected=await page.locator('#selection-title').textContent();
   await page.getByRole('button',{name:'Zoom in',exact:true}).click();
   assert.notEqual(await page.locator('#map-scale').textContent(),fitScale,'Zoom did not change the map scale');

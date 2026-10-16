@@ -154,7 +154,7 @@ export class ChunkViewer{
   }
 }
 
-function installControls(viewer,canvas,{onHover,onTap,onKey}){
+export function installControls(viewer,canvas,{onHover,onTap,onKey}){
   const pointers=new Map();let mode='rotate',moved=0,last=null,pinch=null,hoverPending=null;
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('pointerdown',e=>{
