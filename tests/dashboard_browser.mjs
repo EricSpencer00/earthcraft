@@ -86,7 +86,7 @@ try{
       await page.locator('#place-elmhurst').click();
       await expect(page.locator('#selection-title')).toHaveText('Cell -103, -2');
       await expect(page.locator('#selection-details')).not.toContainText('Street-photo');
-      await expect(page.locator('#cell-blocks')).toHaveText('Open full screen');
+      await expect(page.locator('#cell-blocks')).toHaveText('Explore in Minecraft viewer');
       await expect(page.locator('#cell-view')).toHaveAttribute('data-state','empty',{timeout:20000});
       await expect(page.locator('#cell-view-status')).toHaveText('Not built yet.');
       await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
