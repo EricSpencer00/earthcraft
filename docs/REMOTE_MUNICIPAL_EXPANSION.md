@@ -22,9 +22,10 @@ The metric builder's existing world and height templates must also be available.
 Keep bulk output on the selected storage volume and control journals on a
 filesystem suitable for SQLite.
 
-When LaCie is attached to the personal Mac mini, run generation there through
-the configured SSH alias and keep the MacBook as coordinator. Resolve the
-alias with `ssh -G` and verify the actual mount and free space before copying.
+The external drive that used to hold this output is retired; never depend on
+removable storage. Run generation on a compute host through its configured SSH
+alias and keep the MacBook as coordinator. Resolve the alias with `ssh -G` and
+verify the destination's free space before copying.
 Transfer a closed baseline and frozen ownership inventory; use the same
 coordinate frame on both machines. Return the verified completed save to a
 staging directory on the installed save's filesystem before publication.

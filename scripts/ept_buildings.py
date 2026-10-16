@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,6 +20,7 @@ from pyproj import Transformer
 from point_geometry import voxelize
 from regional_scans import frozen_get, frozen_file
 from region_expansion import atomic, sha
+import regional_cache
 
 _CHECKED_INDEXES = {}
 
@@ -35,7 +35,9 @@ def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30,
     with (root.parent/(root.name+'.lock')).open('a+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         if not (root/'manifest.json').exists():
-            if shutil.disk_usage(path).free<reserve_bytes:raise ValueError('Preserve regional scan/index storage reserve')
+            # Upper bound: float64 xyz plus one class byte for every point in the node.
+            regional_cache.admit(root,25*count+2**20,what='EPT index '+path.stem,legacy_reserve=reserve_bytes,
+                                 legacy_message='Preserve regional scan/index storage reserve')
             if root.exists():root.rename(root.with_name(root.name+'.incomplete-'+str(time.time_ns())))
             root.mkdir()
             points=laspy.read(path)
@@ -65,6 +67,7 @@ def indexed_node(path, count, inverse, grid, reserve_bytes=151*2**30,
             if any(sha(root/name)!=checksum for name,checksum in manifest['files'].items()):
                 raise ValueError('Shared EPT node coordinates changed')
             _CHECKED_INDEXES[str(root)]=identity
+        regional_cache.touch(root)
         xyz=np.load(root/'coordinates.npy',mmap_mode='r');labels=np.load(root/'classification.npy',mmap_mode='r')
         positions=[]
         for bx in range(int(np.floor(grid['west']/256)),int(np.floor((grid['west']+grid['size'])/256))+1):

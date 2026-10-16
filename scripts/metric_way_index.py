@@ -6,7 +6,7 @@ source coordinates, tags, closure and file order are preserved exactly.
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
 
@@ -65,29 +65,65 @@ def build_index(source,destination,crs,reserve_bytes=0,max_bytes=4*2**30):
 
 
 class MetricWayIndex:
-    def __init__(self,path,source,crs):
-        self.path,self.source=Path(path).resolve(),Path(source).resolve()
+    """Read-only, verified view of one frozen index.
+
+    The PBF an index was built from may be absent. The regional state extracts
+    died with the external drive, and the indexes are now fetched from the
+    dataset (sources/indexes/). Without the PBF the index's own recorded source
+    identity (SHA-256, size and mtime, written when the index was built from
+    that exact file) is trusted instead of a re-hash. The index itself is still
+    verified against its receipt (index_sha256) on open and stat-checked on
+    every select, and receipts say which kind of check was made. When the PBF is
+    present the original strict checks apply unchanged.
+    """
+    def __init__(self,path,source,crs,*,dataset_path=None):
+        self.path=Path(path).resolve();self.dataset_path=dataset_path
         receipt=json.loads(self.path.with_suffix('.json').read_text())
         if sha(self.path)!=receipt['index_sha256']:raise ValueError('Frozen OSM index changed')
+        self.index_sha256=receipt['index_sha256']
         self.db=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True)
         try:
             self.meta=json.loads(self.db.execute('SELECT value FROM metadata').fetchone()[0])
             if self.meta!=receipt['metadata'] or self.meta['version']!=1:raise ValueError('OSM index receipt mismatch')
-            if self.meta['source']!=str(self.source) or sha(self.source)!=self.meta['source_sha256']:
-                raise ValueError('OSM source differs from indexed observations')
+            self.source_present=source is not None and Path(source).exists()
+            if self.source_present:
+                self.source=Path(source).resolve()
+                if self.meta['source']!=str(self.source) or sha(self.source)!=self.meta['source_sha256']:
+                    raise ValueError('OSM source differs from indexed observations')
+                self.source_stat=signature(self.source)
+            else:
+                self.source,self.source_stat=None,None
             if self.meta['crs']!=CRS.from_user_input(crs).to_wkt():raise ValueError('OSM index uses another coordinate frame')
-            self.source_stat=signature(self.source);self.index_stat=signature(self.path)
+            self.index_stat=signature(self.path)
         except Exception:self.db.close();raise
 
+    @property
+    def identity(self):
+        """Portable provenance for receipts: dataset path and hashes, no local paths."""
+        return {'index':self.dataset_path or self.path.name,'index_sha256':self.index_sha256,
+                'source_file':PurePosixPath(self.meta['source']).name,'source_sha256':self.meta['source_sha256'],
+                'source_stat':self.meta['source_stat'],'ways':self.meta['ways'],'index_version':self.meta['version'],
+                'source_check':'re-hashed' if self.source_present else 'recorded in index; PBF not present'}
+
     def select(self,source,crs,west,north,size):
-        if Path(source).resolve()!=self.source or CRS.from_user_input(crs).to_wkt()!=self.meta['crs']:
+        if self.source_present:
+            if source is None or Path(source).resolve()!=self.source:raise ValueError('OSM query source/frame mismatch')
+        elif source is not None and str(source)!=self.meta['source']:
             raise ValueError('OSM query source/frame mismatch')
-        if signature(self.source)!=self.source_stat or signature(self.path)!=self.index_stat:
+        if CRS.from_user_input(crs).to_wkt()!=self.meta['crs']:raise ValueError('OSM query source/frame mismatch')
+        if (self.source_present and signature(self.source)!=self.source_stat) or signature(self.path)!=self.index_stat:
             raise ValueError('Frozen OSM index/source changed during run')
         east,south=west+size,north-size
         rows=self.db.execute('SELECT w.payload,w.minx,w.maxx,w.miny,w.maxy FROM bounds b JOIN ways w ON w.seq=b.seq '
             'WHERE b.minx<=? AND b.maxx>=? AND b.miny<=? AND b.maxy>=? ORDER BY w.seq',(east,west,north,south))
         return [json.loads(payload) for payload,minx,maxx,miny,maxy in rows
             if not (maxx<west or minx>east or maxy<south or miny>north)]
+
+    def covers(self,west,north,size):
+        """True if any indexed way meets the window (the exact test select() applies)."""
+        east,south=west+size,north-size
+        return self.db.execute('SELECT 1 FROM bounds b JOIN ways w ON w.seq=b.seq WHERE b.minx<=? AND b.maxx>=? '
+            'AND b.miny<=? AND b.maxy>=? AND NOT (w.maxx<? OR w.minx>? OR w.maxy<? OR w.miny>?) LIMIT 1',
+            (east,west,north,south,west,east,south,north)).fetchone() is not None
 
     def close(self):self.db.close()

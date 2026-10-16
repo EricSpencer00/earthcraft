@@ -17,6 +17,7 @@ from PIL import Image
 import rasterio
 from affine import Affine
 from metric_chart import chart, geographic_centres
+import regional_cache
 
 ROOT=Path(__file__).resolve().parents[1]
 BUCKET='https://elevation-tiles-prod.s3.amazonaws.com'
@@ -24,9 +25,21 @@ REGISTRY='https://registry.opendata.aws/terrain-tiles/'
 ATTRIBUTION='https://github.com/tilezen/joerd/blob/master/docs/attribution.md'
 FORMAT='https://github.com/tilezen/joerd/blob/master/docs/formats.md'
 SOURCE_DOC='https://github.com/tilezen/joerd/blob/master/docs/data-sources.md'
+MIN_PREPARATION_FREE_BYTES=22*1024**3
 
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def preparation_free_bytes():
+    """Return free bytes on the code volume checked by terrain preparation."""
+    return shutil.disk_usage(ROOT).free
+
+
+def require_preparation_capacity():
+    """The active disk guard's floor, else the original source-preparation reserve."""
+    regional_cache.require_free(ROOT,MIN_PREPARATION_FREE_BYTES,'Preserve 20 GiB free reserve plus working allowance')
+    return preparation_free_bytes()
 
 
 def write_rasters(path, elevation, cover):
@@ -72,6 +85,7 @@ def fetch_tile(cache,zoom,x,y):
         record=json.loads(manifest.read_text())
         if record['url']!=url or digest(path)!=record['sha256']:
             raise ValueError('Frozen AWS tile cache mismatch')
+        regional_cache.touch(path)
         return path,record
     # Public HTTPS only; urllib does not load AWS credentials or sign requests.
     with urllib.request.urlopen(url,timeout=30) as response:
@@ -85,6 +99,7 @@ def fetch_tile(cache,zoom,x,y):
     with Image.open(io.BytesIO(raw)) as image:
         if image.size!=(256,256) or image.mode!='RGB':raise ValueError('Unexpected Terrarium tile')
         image.verify()
+    regional_cache.admit(path,len(raw)+8192,what=path.name)
     path.write_bytes(raw)
     record={'url':url,'sha256':digest(path),'bytes':len(raw),'headers':headers,
         'retrieved_utc':datetime.now(timezone.utc).isoformat(),'requester_pays':False,
@@ -97,7 +112,7 @@ def fetch_tile(cache,zoom,x,y):
 def prepare(lon,lat,size,destination,cache=None,chart_meta=None):
     destination=Path(destination);cache=Path(cache or ROOT/'runs/aws-terrain-cache')
     if destination.exists():raise FileExistsError(destination)
-    if shutil.disk_usage(ROOT).free<22*1024**3:raise ValueError('Preserve 20 GiB free reserve plus working allowance')
+    require_preparation_capacity()
     meta=chart_meta or chart(lon,lat,size);lons,lats=geographic_centres(meta)
     px,py=tile_pixels(lons,lats)
     pairs=np.unique(np.column_stack((px.ravel()//256,py.ravel()//256)),axis=0)

@@ -115,10 +115,10 @@ def _archive_receipt(source, destination):
 def _fixture(prefix):
     """Create a disposable verifier fixture on the local APFS filesystem.
 
-    Fabric extracts many runtime files.  On the LaCie filesystem macOS creates
+    Fabric extracts many runtime files.  On exFAT volumes macOS creates
     AppleDouble sidecars for those files, which Fabric mistakes for datapack
     content.  The fixture is neither a source, cache nor live-import artifact:
-    its only durable result is copied to the LaCie proof archive before cleanup.
+    its only durable result is copied to the proof archive before cleanup.
     """
     return Path('/private/tmp') / f'{prefix}-{os.getpid()}-{time.time_ns()}'
 

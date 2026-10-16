@@ -20,6 +20,7 @@ from shapely.geometry import box, mapping, shape
 from shapely.ops import transform, unary_union
 
 from city_point_crop import PointCache
+import regional_cache
 
 
 BIN_SIZE_NATIVE = 128.0
@@ -128,7 +129,10 @@ class SpatialPointIndex:
         with (self.root/'.locks'/f'{identifier}.lock').open('a+') as lock:
             fcntl.lockf(lock,fcntl.LOCK_EX)
             if destination.exists():
-                _validate(destination,identity);return destination
+                _validate(destination,identity);regional_cache.touch(destination);return destination
+            # int32 xyz, class byte and uint32 source index per retained point (at most every point).
+            points=_header(path,shape(asset['native_geometry']))['point_count']
+            regional_cache.admit(destination,17*points+2**20,what='LAS index '+identifier)
             staging=self.root/f'.{identifier}.building-{os.getpid()}-{uuid.uuid4().hex}'
             try:
                 self._build(path,record,asset,staging)

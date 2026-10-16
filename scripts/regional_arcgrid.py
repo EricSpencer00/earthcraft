@@ -10,8 +10,8 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import copy
 import re
-import shutil
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
@@ -27,6 +27,7 @@ from shapely.ops import transform
 from http_zip_range import RangeReader
 from regional_scans import frozen_get, SURVEY_FOOT
 from region_expansion import atomic, sha
+import regional_cache
 
 BASE='https://clearinghouse.isgs.illinois.edu/distribute/'
 SOURCES=(('Will',2021,'district1/will/2021/','will'),
@@ -125,7 +126,7 @@ def index_archive(url,destination,prefix,cache,reference,datum,factor):
     west,south,east,north=layout['bounds']
     record={'kind':'original-arcgrid-zip','archive_url':url,'archive_etag':reader.etag,
         'archive_bytes':reader.length,'grid_prefix':prefix,'members':members,'layout':layout,
-        'cache':str(Path(cache).resolve()),'spatial_reference':reference,
+        'cache':str(cache),'spatial_reference':reference,
         'metres_per_vertical_unit':factor,'vertical_reference':datum,
         'native_pixel_size':layout['pixel_size'][0],
         'extent':{'xmin':west,'ymin':south,'xmax':east,'ymax':north,'spatialReference':reference},
@@ -145,8 +146,10 @@ def original_member(layer,name,reserve_bytes=150*2**30):
             if _VERIFIED.get(str(path))!=identity:
                 if path.stat().st_size!=entry['bytes'] or sha(path)!=record['sha256']:raise ValueError('Original grid cache bytes changed')
                 _VERIFIED[str(path)]=identity
+            regional_cache.touch(path)
             return path,record
-        if shutil.disk_usage(root).free<reserve_bytes+entry['bytes']+2**30:raise ValueError('Preserve original grid cache storage reserve')
+        regional_cache.admit(path,entry['bytes']+2**20,what='grid member '+name,
+            legacy_reserve=reserve_bytes+entry['bytes']+2**30,legacy_message='Preserve original grid cache storage reserve')
         reader=BufferedRangeReader(layer['archive_url'],budget=entry['compressed_bytes']+32*2**20)
         if reader.etag!=layer['archive_etag'] or reader.length!=layer['archive_bytes']:raise ValueError('Remote grid archive version changed')
         temporary=path.with_name(name+'.partial');digest=hashlib.sha256();count=0
@@ -201,8 +204,30 @@ def sample(layer,grid,destination):
     return array*layer['metres_per_vertical_unit']
 
 
-def prepare(control,bulk):
-    control=Path(control);bulk=Path(bulk)
+def localize(catalog,cache_root):
+    """Point original-grid layers at this machine's source cache.
+
+    Catalogs name the member cache relative to the cache root
+    ('arcgrid/<county>/<kind>'). Catalogs written by the retired external-drive
+    worker held an absolute path; its last two components are the same
+    county/kind pair, so they map onto the cache root as well.
+    """
+    catalog=copy.deepcopy(catalog);cache_root=Path(cache_root)
+    for source in catalog.get('sources',[]):
+        for kind in ('dtm','dsm'):
+            layer=source.get(kind) or {}
+            if layer.get('kind')!='original-arcgrid-zip':continue
+            cache=Path(layer['cache'])
+            relative=Path('arcgrid',*cache.parts[-2:]) if cache.is_absolute() else cache
+            if relative.parts[:1]!=('arcgrid',) or len(relative.parts)!=3 or '..' in relative.parts:
+                raise ValueError('Unexpected original grid cache location in scan catalog')
+            layer['cache']=str(cache_root/relative)
+    return catalog
+
+
+def prepare(control):
+    """Index the original county grid archives; members are fetched lazily into the cache."""
+    control=Path(control)
     catalog=json.loads((control/'scans/catalog.json').read_text())
     boundaries=json.loads((control/'scans/county-boundaries.geojson').read_text())
     borders={feature['properties']['GEOID']:feature['geometry'] for feature in boundaries['features']}
@@ -214,7 +239,7 @@ def prepare(control,bulk):
         for kind in ('dtm','dsm'):
             prefix=f'{short}_{kind}_{year}'
             pair[kind]=index_archive(BASE+directory+prefix+'.zip',destination/(kind+'.json'),prefix,
-                  bulk/'arcgrid-cache'/county/kind,reference,datum,factor)
+                  Path('arcgrid')/county/kind,reference,datum,factor)
         catalog['sources']=[source for source in catalog['sources'] if source['county']!=county]
         catalog['sources'].append({'county':county,'year':year,'boundary':borders[county_ids[county]],
             'publisher_xml_sha256':hashlib.sha256(raw).hexdigest(),**pair})
@@ -224,5 +249,5 @@ def prepare(control,bulk):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--control',type=Path,required=True);parser.add_argument('--bulk',type=Path,required=True)
-    args=parser.parse_args();prepare(args.control,args.bulk)
+    parser.add_argument('--control',type=Path,required=True)
+    args=parser.parse_args();prepare(args.control)

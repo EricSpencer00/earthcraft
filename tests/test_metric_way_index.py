@@ -43,6 +43,28 @@ class MetricWayIndexTests(unittest.TestCase):
             with path.open('ab') as stream:stream.write(b'changed')
             with self.assertRaisesRegex(ValueError,'index changed'):MetricWayIndex(path,source,crs)
 
+    def test_absent_pbf_trusts_the_indexed_source_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source,path,crs=self.fixture(Path(folder))
+            strict=MetricWayIndex(path,source,crs);expected=strict.select(source,crs,-1,111,113);strict.close()
+            recorded=json.loads(path.with_suffix('.json').read_text())['metadata']['source_sha256']
+            source.unlink()
+            index=MetricWayIndex(path,None,crs,dataset_path='sources/indexes/index.sqlite')
+            try:
+                self.assertFalse(index.source_present)
+                self.assertEqual(index.select(None,crs,-1,111,113),expected)
+                self.assertTrue(index.covers(-1,111,113));self.assertFalse(index.covers(200,250,16))
+                identity=index.identity
+                self.assertEqual(identity['source_sha256'],recorded)
+                self.assertEqual(identity['index'],'sources/indexes/index.sqlite')
+                self.assertEqual(identity['source_file'],'source.osm.pbf')
+                self.assertNotIn(folder,json.dumps(identity))
+                path.touch()
+                with self.assertRaisesRegex(ValueError,'changed during run'):index.select(None,crs,0,10,16)
+            finally:index.close()
+            with path.open('ab') as stream:stream.write(b'changed')
+            with self.assertRaisesRegex(ValueError,'index changed'):MetricWayIndex(path,None,crs)
+
     def test_existing_or_interrupted_build_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
             source,path,crs=self.fixture(Path(folder))

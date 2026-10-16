@@ -12,7 +12,6 @@ on:
       - tests/test_headless_blocks.py
       - tests/headless_browser.mjs
       - tests/dashboard_browser.mjs
-      - tests/mini_transport.mjs
       - requirements-headless.txt
       - docs/HEADLESS_EVIDENCE.md
       - docs/photos/watertower-sep-10-26.png
@@ -72,7 +71,6 @@ jobs:
         run: |
           node tests/location_search.mjs
           node tests/cell_browser.mjs
-          node tests/mini_transport.mjs
           node tests/anvil.mjs
           node tests/dashboard_browser.mjs site
           node tests/blocks_browser.mjs site

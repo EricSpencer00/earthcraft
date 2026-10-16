@@ -1,0 +1,13 @@
+{
+  "description": "First 8192 bytes (location + timestamp tables) of region/r.-54.8.mca from the public Oakbrook native slice",
+  "license": "ODbL-1.0",
+  "attribution": ["USGS 3DEP 2022 Mid-North Illinois lidar; Merrick-Surdex", "© OpenStreetMap contributors"],
+  "source": {
+    "repo": "EricSpencer00/earthcraft",
+    "revision": "25ccd4bbc672e1c2dfd0a6481b63210ad40c5d97",
+    "path": "releases/e6b031df5a1bd81ff68baa1a2c6040422941cc3b6213da6377e4c09292d24d59/native/shards/48/48c30fa0e4874d67a42b598e0da0e3a039aa233453e1b9901543b0268031b23b.tar",
+    "member": "region/r.-54.8.mca"
+  },
+  "chunk_bounds_inclusive": [[-1713, 267], [-1710, 270]],
+  "chunks": 16
+}

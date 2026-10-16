@@ -1,11 +1,33 @@
-"""Restartable Chicagoland base and scan lanes in the existing Chicago frame.
+"""One-pass Chicagoland tile generator that writes straight to Hugging Face.
 
-Each immutable tile is verified separately. Queued/generated tiles are never
-reported as installed, and existing Chicago observations are not downgraded.
-Control journals must use the system disk; bulk artifacts use mounted LaCie.
+One tile is one unit of work. Inside runs/scratch/gen/<tile>/ (capped per
+tile) it builds the tile's sources, its LQ geometry and, where a measured scan
+covers it, the appearance upgrade, in one pass. The result is packaged as
+tiles/v2/<tile>/ (see regional_tiles), several tiles share one verified Hugging
+Face commit made by hf_store, the journal records each stage's dataset receipt
+path, SHA-256 and commit, and the scratch directory is deleted. Every source
+cache is one capped LRU root and every byte written counts against one
+footprint with a free-space floor (see regional_cache); when the guard says no
+the worker pauses or refuses to start, it does not crash. No external drive.
+
+Lanes: 'base' takes tiles never generated and runs every stage in one pass;
+'scans' takes tiles whose geometry is complete and adds the measured
+appearance, regenerating the LQ geometry in the same pass as the upgrade
+baseline (and as the delivered world when no measured scan improves it; many
+such tiles were generated on the retired drive but never installed).
+Generated tiles are never reported as installed; hf_install.py installs them
+into the save.
+
+  regional_generate.py --control runs/regional/control --frame FRAME [--lane base|scans]
+      [--tiles ID,...] [--limit N] [--footprints] [--hf-python PATH]
+  regional_generate.py --control ... --frame ... --status
+  regional_generate.py --control ... --frame ... --seed-control     (archived plan, journal, catalogs)
+  regional_generate.py --control ... --frame ... --prepare          (fresh catalog discovery, small)
+  regional_generate.py --control ... --frame ... --index-coverage [--index-dir DIR]
 """
 import argparse
-from contextlib import ExitStack
+from contextlib import closing
+from datetime import datetime, timezone
 import fcntl
 import faulthandler
 import json
@@ -15,6 +37,7 @@ import shutil
 import signal
 import sys
 import time
+import traceback
 import urllib.parse
 import urllib.error
 
@@ -24,18 +47,46 @@ from shapely.geometry import box, shape
 from shapely.ops import transform
 
 from aws_terrain import prepare as terrain
-from chicago_tiles import Journal, boundary_geometry, digest, tile_plan
-from metric_way_index import MetricWayIndex, build_index
+from chicago_tiles import Journal, STAGES, digest, tile_plan
+import hf_store
+from hf_store import DatasetReader, DiskGuardError, GiB, MiB, StoreClient, human, parse_size
+from metric_way_index import MetricWayIndex
 from metric_world import build
 from municipal_generate import presentation_ways
 from region_expansion import atomic, sha
+import regional_cache
+from regional_cache import CacheCapacityError, Footprint, SourceCache
 from regional_scans import acquire, discover, frozen_get
-from verify_metric_world import verify
-from regional_store import compact, materialized, region_hashes
 from regional_sources import validate as validate_sources
-from worker_lease import heartbeat
+from regional_store import region_hashes
+from regional_tiles import TILE_ID, TILE_SCHEMA, package_tile, receipt_bytes, tile_prefix
+from verify_metric_world import verify
+from worker_lease import LeaseKeeper
+from world_templates import chunk_template, height_template
 
+ROOT = Path(__file__).resolve().parents[1]
+EX_TEMPFAIL = 75  # the guard refused; the supervisor waits and retries
+CONTROL_ALLOWANCE = 512 * MiB
+WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
+FOOTPRINT_INDEX = 'regional-footprints'
+INDEX_PREFIX = 'sources/indexes'
+# Control state of the retired external-drive worker, archived byte-identical on the Hub. It seeds a
+# new control directory (plan, journal, catalogs) and holds the index receipts until sources/indexes/
+# carries them itself.
+LEGACY_CONTROL = 'archive/mini-worker-20260929/runs/chicagoland-scans-20260929'
+SEED_FILES = ('plan.json', 'jobs.sqlite', 'scans/catalog.json', 'point-surveys/catalog.json', 'cook2022/catalog.json',
+              'will2021/catalog.json', 'metro.geojson', 'metro.geojson.receipt.json', 'kenosha.geojson',
+              'kenosha.geojson.receipt.json')
+COVERAGE_SCHEMA = 'earthcraft.way-index-coverage.v1'
 _SCAN_COVERAGES = {}
+
+
+class TileCapacityError(DiskGuardError):
+    """One tile needs more scratch or source cache than its cap; fail it, keep going."""
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
 def supported_points(pieces,grid,surfaces):
@@ -77,22 +128,6 @@ def prepare_scope(control, frame):
     return plan
 
 
-def indexes(control, bulk, frame, illinois):
-    sources = {'illinois': Path(illinois)}
-    for state in ('indiana', 'wisconsin'):
-        path = bulk/'osm'/(state+'.osm.pbf')
-        frozen_get('https://download.geofabrik.de/north-america/us/'+state+'-latest.osm.pbf',
-                   path, limit=1024*2**20)
-        sources[state] = path
-    result = []
-    for state, source in sources.items():
-        path = control/(state+'-ways.sqlite')
-        if not path.exists():
-            build_index(source, path, frame['crs'], max_bytes=4*2**30)
-        result.append((path, source))
-    return result
-
-
 def select_ways(readers, tile, frame):
     unique = {}
     for reader in readers:
@@ -132,7 +167,7 @@ def make_source(tile, frame, root, readers, cache):
         building_height_policy='Measured tags first; missing heights explicitly estimated',
         purpose='Regional LQ coverage; separate measured scan upgrade receipts',
         osm_license='ODbL 1.0; OpenStreetMap contributors',
-        osm_inputs=[reader.meta for reader in readers],
+        osm_inputs=[reader.identity for reader in readers],
         missing_layers=['multipolygon relations', 'complete land cover', 'facade photography'])
     atomic(source/'sources.json', json.dumps(meta).encode())
     receipt = {'tile': tile['id'], 'stage': 'sources', 'result': 'pass',
@@ -166,15 +201,13 @@ def select_pair(tile, frame, catalog):
     return max(candidates, key=lambda entry: entry[:4])[-1] if candidates else None
 
 
-def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None,will_catalog=None):
-    with ExitStack() as stack:
-        for candidate in root.glob('world*'):
-            if candidate.name!='world' and candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
-                stack.enter_context(materialized(candidate))
-        return _scan_tile(tile,frame,root,pair,point_catalog,point_cache,cook_catalog,will_catalog)
+def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, cook_catalog=None, will_catalog=None,
+              footprint_index=None):
+    """Measured appearance for one tile whose sources and LQ geometry are in root.
 
-
-def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,cook_catalog=None,will_catalog=None):
+    footprint_index: the Overture footprint sqlite used to associate
+    unclassified returns with mapped buildings (None leaves it out).
+    """
     if pair is None:
         if point_catalog is not None:
             result=point_only_tile(tile,frame,root,point_catalog,point_cache)
@@ -197,9 +230,9 @@ def _scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None,coo
         meta.update(elevation_source=f"{pair['county']} {pair['year']} LiDAR DTM; explicit LQ coverage gaps",
             elevation_vertical_datum=pair['dtm']['vertical_reference'], scan_surface_receipt=record,
             elevation_sha256=sha(scan_source/'elevation.tif'))
-        if os.environ.get('EARTHCRAFT_BUILDING_INDEX'):
+        if footprint_index is not None:
             from regional_footprints import crop as footprint_crop
-            meta['scan_footprint_receipt']=footprint_crop(os.environ['EARTHCRAFT_BUILDING_INDEX'],meta,scan_source/'scan-footprints.geojson')
+            meta['scan_footprint_receipt']=footprint_crop(footprint_index,meta,scan_source/'scan-footprints.geojson')
         atomic(scan_source/'sources.json', json.dumps(meta).encode())
     quality = 'scan-roof'
     attempts = []
@@ -350,130 +383,695 @@ def update_elevation(path, array):
         raster.write(array.astype(np.float32), 1)
 
 
-def run(args):
-    control, bulk = args.control.resolve(), args.bulk.resolve()
-    if not Path('/Volumes/LaCie').is_mount() or not bulk.is_relative_to('/Volumes/LaCie/Earthcraft'):
-        raise ValueError('Regional bulk writes require the mounted mini LaCie; no internal fallback')
-    control.mkdir(parents=True, exist_ok=True); bulk.mkdir(parents=True, exist_ok=True)
-    with (control/('worker-'+args.worker_id+'.lock')).open('a+') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        faulthandler.register(signal.SIGUSR1,file=sys.stderr,all_threads=True)
-        frame = json.loads(args.frame.read_text())
-        if os.environ.get('EARTHCRAFT_BUILDING_INDEX'):
-            index=Path(os.environ['EARTHCRAFT_BUILDING_INDEX']);record=json.loads(index.with_suffix('.json').read_text())
-            if sha(index)!=record['sha256'] or record['crs']!=frame['crs']:
-                raise ValueError('Configured regional footprint index changed')
-        if (control/'plan.json').exists():
-            plan = json.loads((control/'plan.json').read_text())
-            if plan['frame'] != frame:
+# --------------------------------------------------------------------------
+# Source indexes from sources/indexes/ on the Hub, held in the LRU cache
+
+
+class IndexUnavailable(RuntimeError):
+    pass
+
+
+class IndexSet:
+    """Fetch, verify and open the large source indexes a tile needs, inside the cache budget.
+
+    The way indexes are large (Illinois alone is 3.4 GB), so a tile opens only
+    the state indexes that hold at least one way in its query window, as listed
+    in control/index-coverage.json (written by --index-coverage). Without that
+    file every index is opened, which is always correct, only larger. Skipping an
+    index with no way in the window leaves select_ways() output unchanged.
+    """
+
+    def __init__(self, control, cache, reader, frame, *, names=WAY_INDEXES, log=None, index_dir=None):
+        self.control, self.cache, self.reader, self.frame = Path(control), cache, reader, frame
+        self.names, self.log = tuple(names), log or (lambda **_: None)
+        self.index_dir = Path(index_dir) if index_dir else None
+        self.open, self.coverage = {}, None
+        path = self.control / 'index-coverage.json'
+        if path.exists():
+            record = json.loads(path.read_text())
+            if record.get('schema') != COVERAGE_SCHEMA:
+                raise ValueError('Unknown index coverage schema')
+            self.coverage = {name: (entry['index_sha256'], frozenset(entry['tiles']))
+                             for name, entry in record['indexes'].items()}
+
+    def local(self, name):
+        if self.index_dir is not None:
+            return self.index_dir / (name + '.sqlite')
+        return self.cache.root / 'indexes' / (name + '.sqlite')
+
+    def needed(self, tile):
+        if self.coverage is None:
+            return list(self.names)
+        return [name for name in self.names if name not in self.coverage or tile['id'] in self.coverage[name][1]]
+
+    def ensure(self, name):
+        """Local verified copy of sources/indexes/<name>.sqlite and its receipt; fetched into the cache."""
+        local = self.local(name)
+        receipt = local.with_suffix('.json')
+        if local.exists() and receipt.exists():
+            regional_cache.touch(local)
+            return local
+        if self.index_dir is not None:
+            raise IndexUnavailable(f'{local} is missing')
+        data, receipts = f'{INDEX_PREFIX}/{name}.sqlite', [f'{INDEX_PREFIX}/{name}.json', f'{LEGACY_CONTROL}/{name}.json']
+        info = self.reader.info([data, *receipts])
+        receipt_path = next((path for path in receipts if path in info), None)
+        if data not in info or receipt_path is None:
+            raise IndexUnavailable(f'{data} or its receipt is not published in the dataset yet')
+        raw = self.reader.read(receipt_path, limit=MiB, expected=info[receipt_path])
+        record = json.loads(raw)
+        recorded = record.get('index_sha256') or record.get('sha256')
+        if info[data].sha256 and recorded != info[data].sha256:
+            raise ValueError(f'{data} on the Hub differs from its receipt {receipt_path}')
+        self.cache.admit(local, info[data].size + len(raw) + MiB, what=f'index {name}')
+        started = time.monotonic()
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        atomic(receipt, raw)
+        self.reader.download(data, local, expected=info[data])
+        self.log(event='index_fetched', index=name, bytes=info[data].size, receipt=receipt_path,
+                 seconds=round(time.monotonic() - started, 1))
+        return local
+
+    def readers_for(self, tile):
+        readers = []
+        for name in self.needed(tile):
+            local = self.ensure(name)
+            reader = self.open.get(name)
+            if reader is not None and not reader.path.exists():  # evicted between tiles
+                reader.close()
+                reader = None
+            if reader is None:
+                reader = MetricWayIndex(local, None, self.frame['crs'], dataset_path=f'{INDEX_PREFIX}/{name}.sqlite')
+                if self.coverage and name in self.coverage and self.coverage[name][0] != reader.index_sha256:
+                    raise ValueError(f'index-coverage.json describes another {name} build')
+                self.open[name] = reader
+            regional_cache.touch(local)
+            readers.append(reader)
+        return readers
+
+    def footprints(self):
+        local = self.ensure(FOOTPRINT_INDEX)
+        if FOOTPRINT_INDEX not in self.open:
+            record = json.loads(local.with_suffix('.json').read_text())
+            if sha(local) != record['sha256'] or record['crs'] != self.frame['crs']:
+                raise ValueError('Regional footprint index differs from its receipt or frame')
+            self.open[FOOTPRINT_INDEX] = local
+        regional_cache.touch(local)
+        return local
+
+    def close(self):
+        for reader in self.open.values():
+            if hasattr(reader, 'close'):
+                reader.close()
+        self.open = {}
+
+
+def index_coverage(control, plan, frame, indexes):
+    """Record which plan tiles have at least one way of each index in their 32 m-padded window."""
+    record = {'schema': COVERAGE_SCHEMA, 'plan_sha256': digest(plan), 'window': 'tile padded by 32 m',
+              'created_utc': utc_now(), 'indexes': {}}
+    for name in indexes.names:
+        local = indexes.ensure(name)
+        reader = MetricWayIndex(local, None, frame['crs'], dataset_path=f'{INDEX_PREFIX}/{name}.sqlite')
+        try:
+            tiles = sorted(tile['id'] for tile in plan['tiles']
+                           if reader.covers(tile['west'] - 32, tile['north'] + 32, tile['size'] + 64))
+            record['indexes'][name] = {'index_sha256': reader.index_sha256, 'tiles': tiles}
+        finally:
+            reader.close()
+        print(json.dumps({'event': 'index_coverage', 'index': name, 'tiles': len(tiles)}), flush=True)
+    atomic(Path(control) / 'index-coverage.json', json.dumps(record).encode())
+    return {name: len(entry['tiles']) for name, entry in record['indexes'].items()}
+
+
+# --------------------------------------------------------------------------
+# One pass, one tile
+
+
+def generate_tile(tile, job, root, ctx):
+    """Run every stage of one tile in root; returns (receipts, failures, delivered world, LQ world)."""
+    frame = ctx['frame']
+    receipts, failures = {}, {}
+    readers = ctx['indexes'].readers_for(tile)
+    make_source(tile, frame, root, readers, ctx['cache_root'] / 'terrain')
+    validate_sources(root, tile)
+    receipts['sources'] = json.loads((root / 'sources-receipt.json').read_text())
+    world, staging = root / 'world', root / 'world.building'
+    build(root / 'sources', staging, world_frame=frame)
+    checks = verify(staging)
+    staging.rename(world)
+    receipts['geometry'] = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass', 'world': str(world.resolve()),
+                            'quality': 'LQ', 'installed': False, 'world_manifest_sha256': sha(world / 'earthcraft.json'),
+                            'regions': region_hashes(world), 'checks': checks}
+    # The LQ world is delivered unless a measured world supersedes it. In the
+    # scans lane that matters too: many tiles completed geometry on the retired
+    # drive but were never installed or archived, and installing an LQ tile
+    # only ever adds chunks that are absent.
+    delivered, lq = world, None
+    if 'appearance' in job['stages']:
+        try:
+            pair = select_pair(tile, frame, ctx['catalog'])
+            footprint = ctx['indexes'].footprints() if ctx['footprints'] and pair is not None else None
+            receipt = scan_tile(tile, frame, root, pair, ctx['point_catalog'], ctx['cache_root'] / 'ept',
+                                ctx['cook_catalog'], ctx['will_catalog'], footprint_index=footprint)
+            receipts['appearance'] = receipt
+            if receipt.get('world'):
+                delivered, lq = Path(receipt['world']), world
+        except (DiskGuardError, IndexUnavailable):
+            raise
+        except Exception as error:  # noqa: BLE001 - a base tile still delivers its verified LQ
+            if job['lane'] == 'scans':
+                raise
+            failures['appearance'] = error
+    return receipts, failures, delivered, lq
+
+
+class Worker:
+    def __init__(self, args, *, reader=None, store=None):
+        self.args, self.stopping = args, False
+        self._reader, self._store = reader, store  # injected in tests (fake Hub)
+        self.worker_id = args.worker_id
+        self.control = args.control.resolve()
+        self.scratch = args.scratch.resolve()
+        self.cache_root, self.gen = self.scratch / 'cache', self.scratch / 'gen'
+        self.hf_scratch = self.gen / f'_hf-{self.worker_id}'
+        self.exit_code = 0
+        self.events = []
+        self.tile_peaks = {}
+
+    # -- logging
+    def log(self, **event):
+        event = {'utc': utc_now(), 'worker': self.worker_id, **event}
+        print(json.dumps(event, default=str, sort_keys=True), flush=True)
+
+    # -- setup
+    def budget(self):
+        a = self.args
+        need = a.cache_cap + a.workers * (a.tile_cap + a.batch_cap + a.hf_cap) + CONTROL_ALLOWANCE
+        if need > a.footprint_cap:
+            raise SystemExit(f'Caps exceed the footprint: cache {human(a.cache_cap)} + {a.workers} x (tile '
+                             f'{human(a.tile_cap)} + batch {human(a.batch_cap)} + hf {human(a.hf_cap)}) + control '
+                             f'{human(CONTROL_ALLOWANCE)} = {human(need)} > {human(a.footprint_cap)}')
+
+    def setup(self):
+        a = self.args
+        self.budget()
+        self.control.mkdir(parents=True, exist_ok=True)
+        self.gen.mkdir(parents=True, exist_ok=True)
+        self.cache = SourceCache(self.cache_root, a.cache_cap, None, log=self.log)
+        self.footprint = Footprint({'cache': self.cache.used, 'gen': self.gen, 'control': self.control},
+                                   a.footprint_cap, a.min_free, volume=self.scratch)
+        self.cache.footprint = self.footprint
+        regional_cache.activate(self.cache)
+        self.footprint.check(0, 'start')  # refuse to start (EX_TEMPFAIL) rather than fill the disk
+        self.reader = self._reader or DatasetReader(a.repo)
+        hf_python = a.hf_python or os.environ.get('EARTHCRAFT_HF_PYTHON')
+        if self._store is not None:
+            self.store = self._store
+        elif hf_python:
+            self.store = StoreClient(python=hf_python, scratch=self.hf_scratch, repo=a.repo, cap=a.hf_cap,
+                                     min_free=a.min_free, log=self.log)
+        else:
+            self.store = None
+        templates = a.templates or self.control / 'templates'
+        if templates.exists():
+            os.environ['EARTHCRAFT_WORLD_TEMPLATES'] = str(templates.resolve())
+        chunk_template(ROOT), height_template(ROOT)  # fail fast: every world build needs both
+        from material_router import texture_colors
+        texture_colors()  # and the Minecraft 1.21.10 client JAR (EARTHCRAFT_CLIENT_JAR) for block colours
+        self.frame = json.loads(a.frame.read_text())
+        plan_path = self.control / 'plan.json'
+        if plan_path.exists():
+            self.plan = json.loads(plan_path.read_text())
+            if self.plan['frame'] != self.frame:
                 raise ValueError('Regional frozen frame changed')
         else:
-            plan = prepare_scope(control, frame)
-        if args.prepare:
-            discover(control/'scans')
-            from regional_arcgrid import prepare as prepare_grid_archives
-            prepare_grid_archives(control,bulk)
-            from regional_cook_points import prepare as prepare_original_cook
-            prepare_original_cook(control)
-            from regional_will_points import prepare as prepare_original_will
-            prepare_original_will(control)
-            from regional_point_catalog import discover as discover_points
-            discover_points(plan,control/'point-surveys')
-            entries = indexes(control, bulk, frame, args.illinois)
-            atomic(control/'indexes.json', json.dumps([[str(a), str(b)] for a,b in entries]).encode())
-            journal = Journal(control/'jobs.sqlite', plan); journal.close()
-            print(json.dumps({'tiles': len(plan['tiles']), 'area_km2': plan['city_area_m2']/1e6}), flush=True)
-            return
-        readers = []
-        with ExitStack() as stack:
-            for path, source in json.loads((control/'indexes.json').read_text()):
-                reader = MetricWayIndex(path, source, frame['crs']); stack.callback(reader.close); readers.append(reader)
-            journal = Journal(control/'jobs.sqlite', plan); stack.callback(journal.close)
-            journal.requeue_owner_leases(args.worker_id)
-            catalog = json.loads((control/'scans/catalog.json').read_text())
-            point_catalog = json.loads((control/'point-surveys/catalog.json').read_text()) if args.lane=='scans' else None
-            tiles = {tile['id']: tile for tile in plan['tiles']}
-            stopping = False
+            self.plan = prepare_scope(self.control, self.frame)
+        self.plan_sha = digest(self.plan)
+        self.tiles = {tile['id']: tile for tile in self.plan['tiles']}
+        self.revision = a.source_revision or os.environ.get('EARTHCRAFT_SOURCE_REVISION') or hf_store.git_revision(ROOT)
+
+    def catalogs(self):
+        from regional_arcgrid import localize
+        scans = self.control / 'scans' / 'catalog.json'
+        points = self.control / 'point-surveys' / 'catalog.json'
+        return {'catalog': localize(json.loads(scans.read_text()), self.cache_root) if scans.exists() else {'sources': []},
+                'point_catalog': json.loads(points.read_text()) if points.exists() else None,
+                'cook_catalog': self.control / 'cook2022' / 'catalog.json',
+                'will_catalog': self.control / 'will2021' / 'catalog.json'}
+
+    def sweep(self, journal):
+        """Remove scratch left by an earlier, interrupted attempt (never a live lease's)."""
+        now = time.time()
+        for path in sorted(self.gen.iterdir()):
+            if path == self.hf_scratch:
+                shutil.rmtree(path, ignore_errors=True)
+            elif TILE_ID.fullmatch(path.name):
+                live = journal.db.execute("SELECT 1 FROM jobs WHERE tile=? AND state='running' AND expires>? "
+                                          "AND owner!=? LIMIT 1", (path.name, now, self.worker_id)).fetchone()
+                if not live:
+                    shutil.rmtree(path, ignore_errors=True)
+                    self.log(event='scratch_swept', tile=path.name)
+
+    # -- capacity
+    def wait_for_capacity(self, batch):
+        waited = False
+        while not self.stopping:
+            try:
+                if self.footprint.breach:
+                    self.footprint.clear_breach()
+                self.footprint.check(self.args.tile_cap, 'next tile')
+                if waited:
+                    self.log(event='capacity_available')
+                return True
+            except DiskGuardError as error:
+                if batch.pending:
+                    batch.flush()
+                    continue
+                if not waited:
+                    self.log(event='waiting_for_capacity', reason=str(error))
+                waited = True
+                if self.args.no_wait:
+                    return False
+                for _ in range(60):
+                    if self.stopping:
+                        break
+                    time.sleep(1)
+        return False
+
+    # -- per-tile
+    def failure_receipt(self, tile, stage, error):
+        directory = self.control / 'failures'
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f'{tile}-{stage}-{time.time_ns()}.json'
+        atomic(path, json.dumps({'tile': tile, 'stage': stage, 'result': 'failed', 'error_type': type(error).__name__,
+                                 'reason': str(error)[:500], 'installed': False}).encode())
+        return path
+
+    def fail(self, journal, job, stage, error):
+        journal.fail({'tile': job['tile'], 'stage': stage, 'token': job['token']},
+                     self.failure_receipt(job['tile'], stage, error))
+
+    def fail_tile(self, journal, keeper, job, root, error):
+        anchor = job['stages'][0]
+        self.fail(journal, job, anchor, error)
+        others = [stage for stage in job['stages'] if stage != anchor]
+        if others:
+            journal.release_tile(job, 1, f'{anchor} failed', stages=others)
+        keeper.remove(job)
+        shutil.rmtree(root, ignore_errors=True)
+        self.log(event='tile_failed', tile=job['tile'], stage=anchor, error_type=type(error).__name__,
+                 reason=str(error)[:300])
+
+    def release(self, journal, keeper, job, root, error, event):
+        """Return the tile's stages to the queue (capacity or transient error), not a failure."""
+        journal.release_tile(job, 300, (type(error).__name__ + ': ' + str(error))[:200])
+        keeper.remove(job)
+        shutil.rmtree(root, ignore_errors=True)
+        self.log(event=event, tile=job['tile'], reason=str(error)[:300])
+
+    def adopt(self, journal, keeper, job):
+        """Finish a tile whose package is already verified on the Hub (e.g. after a crash)."""
+        base = tile_prefix(job['tile'])
+        info = self.reader.info([f'{base}/tile.json'])
+        if not info:
+            return False
+        manifest = json.loads(self.reader.read(f'{base}/tile.json', limit=4 * MiB, expected=info[f'{base}/tile.json']))
+        stages = manifest.get('stages', {})
+        if (manifest.get('schema') != TILE_SCHEMA or manifest.get('plan_sha256') != self.plan_sha or
+                any(stage not in stages for stage in job['stages'])):
+            return False
+        raws = {stage: self.reader.read(stages[stage]['receipt'], limit=MiB) for stage in job['stages']}
+        if any(hf_store.hash_bytes(raw).sha256 != stages[stage]['sha256'] for stage, raw in raws.items()):
+            return False
+        commit = 'adopted@' + self.reader.head_revision()
+        for stage, raw in raws.items():
+            journal.finish_remote(job, stage, stages[stage]['receipt'], raw, commit)
+        keeper.remove(job)
+        self.log(event='tile_adopted', tile=job['tile'], stages=job['stages'], commit=commit)
+        return True
+
+    def process(self, journal, keeper, batch, job, ctx):
+        tile = self.tiles[job['tile']]
+        root = self.gen / tile['id']
+        started = time.monotonic()
+        try:
+            try:
+                if not self.args.no_adopt and self.adopt(journal, keeper, job):
+                    return 'adopted'
+            except Exception as error:  # noqa: BLE001 - adoption is an optimisation; generate instead
+                self.log(event='adopt_check_failed', tile=tile['id'], reason=str(error)[:200])
+            if root.exists():
+                shutil.rmtree(root)
+            root.mkdir(parents=True)
+            self.cache.begin_tile()
+            self.footprint.peak_detail.pop('tile', None)
+            self.log(event='tile_start', tile=tile['id'], lane=job['lane'], stages=job['stages'])
+            with self.footprint.watch(interval=self.args.watch_seconds, extra={'tile': (root, self.args.tile_cap)}):
+                receipts, failures, delivered, lq = generate_tile(tile, job, root, ctx)
+                self.footprint._record(0, self.footprint.free(), {'tile': regional_cache.entry_bytes(root)})
+                if self.footprint.breach:
+                    raise (TileCapacityError if self.footprint.breach_kind == 'tile' else DiskGuardError)(
+                        self.footprint.breach)
+                generator = {'revision': self.revision, 'lane': job['lane'], 'worker': self.worker_id,
+                             'generated_utc': utc_now(), 'journal_stages': job['stages'],
+                             'prior_evidence': job.get('prior', {}), 'seconds': round(time.monotonic() - started, 1)}
+                notes = [f'appearance failed: {type(e).__name__}: {str(e)[:200]}' for e in failures.values()]
+                package = package_tile(tile, root, receipts=receipts, delivered=delivered, lq=lq,
+                                       plan_sha256=self.plan_sha, frame_sha256=digest(self.frame), generator=generator,
+                                       prefixes={self.cache_root: 'cache:', self.control: 'control:', ROOT: 'repo:'},
+                                       notes=notes)
+            for path in sorted(root.iterdir()):  # keep only the package while the batch waits
+                if path.name != 'package':
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+            self.tile_peaks[tile['id']] = self.footprint.peak_detail.get('tile', 0)
+            batch.add(job, package, failures)
+            self.log(event='tile_packaged', tile=tile['id'], quality=package.manifest['quality'],
+                     files=len(package.items), bytes=package.bytes, seconds=round(time.monotonic() - started, 1),
+                     tile_scratch_peak_bytes=self.tile_peaks[tile['id']])
+            return 'packaged'
+        except (CacheCapacityError, TileCapacityError) as error:
+            self.fail_tile(journal, keeper, job, root, error)
+            self.footprint.clear_breach()
+            return 'capacity'
+        except DiskGuardError as error:
+            if self.footprint.breach_kind == 'tile':  # this tile alone outgrew its scratch cap
+                self.fail_tile(journal, keeper, job, root, TileCapacityError(str(error)))
+                self.footprint.clear_breach()
+                return 'capacity'
+            self.release(journal, keeper, job, root, error, 'tile_paused')
+            self.footprint.clear_breach()
+            return 'paused'
+        except IndexUnavailable as error:
+            self.release(journal, keeper, job, root, error, 'waiting_for_indexes')
+            self.stopping, self.exit_code = True, EX_TEMPFAIL
+            return 'paused'
+        except Exception as error:  # noqa: BLE001 - recorded as a fenced failure receipt
+            if hf_store.is_retryable(error):  # timeouts, resets, 429/5xx: try this tile again later
+                self.release(journal, keeper, job, root, error, 'tile_deferred_network')
+                return 'deferred'
+            if self.args.verbose:
+                traceback.print_exc()
+            self.fail_tile(journal, keeper, job, root, error)
+            return 'failed'
+        finally:
+            self.cache.end_tile()
+
+    # -- main loop
+    def run(self):
+        a = self.args
+        try:
+            self.setup()
+        except DiskGuardError as error:
+            self.log(event='waiting_for_storage', reason=str(error))
+            return EX_TEMPFAIL
+        if self.store is None:
+            raise SystemExit('No interpreter with huggingface_hub: pass --hf-python or set EARTHCRAFT_HF_PYTHON')
+        with (self.control / f'worker-{self.worker_id}.lock').open('a+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+
             def stop(signum, _):
-                nonlocal stopping
-                stopping = True
-            signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
-            processed = 0
-            consecutive_failures = 0
-            while not stopping and processed < args.limit:
-                if not Path('/Volumes/LaCie').is_mount():
-                    raise ValueError('LaCie unmounted during generation; stop bulk writes')
-                if shutil.disk_usage(bulk).free < args.reserve_gib*2**30:
-                    raise ValueError('Regional bulk reserve reached; preserve existing artifacts')
-                if shutil.disk_usage(control).free < 12*2**30:
-                    raise ValueError('Regional control disk reserve reached')
-                job = journal.claim('appearance' if args.lane == 'scans' else 'geometry',
-                                    args.worker_id, lease_seconds=3600)
-                if job is None and args.lane == 'base':
-                    job = journal.claim('sources', args.worker_id, lease_seconds=3600)
-                if job is None:
-                    if args.lane == 'scans' and any(row['state'] != 'complete' and row['stage'] in ('sources', 'geometry')
-                                                  for row in journal.summary()):
-                        time.sleep(15); continue
-                    break
-                tile = tiles[job['tile']]; root = bulk/'tiles'/tile['id']; root.mkdir(parents=True, exist_ok=True)
-                print(json.dumps({'tile': tile['id'], 'lane': args.lane, 'stage': job['stage']}), flush=True)
-                try:
-                    with heartbeat(control/'jobs.sqlite', job, ('sources','geometry','appearance','game_verify').index(job['stage'])):
-                        if job['stage'] == 'sources':
-                            make_source(tile, frame, root, readers, bulk/'terrain-cache')
-                            receipt_file = root/'sources-receipt.json'
-                        elif job['stage'] == 'geometry':
-                            validate_sources(root, tile)
-                            world = root/'world'
-                            if not world.exists():
-                                staging = root/'world.building'
-                                if staging.exists(): staging.rename(root/f'world.incomplete-{time.time_ns()}')
-                                build(root/'sources', staging, world_frame=frame)
-                                checks = verify(staging); staging.rename(world)
-                            else:
-                                with materialized(world):checks = verify(world)
-                            receipt = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass',
-                                'world': str(world.resolve()), 'quality': 'LQ', 'installed': False,
-                                'world_manifest_sha256': sha(world/'earthcraft.json'),
-                                'regions': region_hashes(world), 'checks': checks}
-                            atomic(root/'geometry-receipt.json', json.dumps(receipt).encode())
-                            compact(world, expected=receipt['regions'])
-                            receipt_file = root/'geometry-receipt.json'
-                        else:
-                            receipt = scan_tile(tile, frame, root, select_pair(tile, frame, catalog),
-                                                point_catalog, bulk/'ept-cache',control/'cook2022/catalog.json',control/'will2021/catalog.json')
-                            atomic(root/'scan-receipt.json', json.dumps(receipt).encode())
-                            for candidate in root.glob('world*'):
-                                if candidate.is_dir() and not any(word in candidate.name for word in ('building','incomplete')):
-                                    expected = receipt.get('regions') if str(candidate.resolve()) == receipt.get('world') else None
-                                    compact(candidate, expected=expected)
-                            receipt_file = root/'scan-receipt.json'
-                    journal.finish(job, receipt_file)
-                    consecutive_failures = 0
-                except Exception as error:
-                    failure_file = root/('failure-'+job['stage']+'-'+str(time.time_ns())+'.json')
-                    atomic(failure_file, json.dumps({'tile': tile['id'], 'stage': job['stage'],
-                        'result': 'failed', 'error_type': type(error).__name__, 'reason': str(error)[:500],
-                        'installed': False}).encode())
-                    journal.fail(job, failure_file)
-                    print(json.dumps({'tile': tile['id'], 'result': 'failed', 'error_type': type(error).__name__}), flush=True)
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        raise RuntimeError('Three consecutive tile failures; inspect retained evidence') from error
-                processed += 1
-            print(json.dumps({'processed': processed, 'summary': journal.summary(), 'installed': False}), flush=True)
+                self.stopping = True
+            signal.signal(signal.SIGTERM, stop)
+            signal.signal(signal.SIGINT, stop)
+            journal = Journal(self.control / 'jobs.sqlite', self.plan)
+            keeper = LeaseKeeper(self.control / 'jobs.sqlite')
+            indexes = IndexSet(self.control, self.cache, self.reader, self.frame, log=self.log)
+            batch = Batch(self, journal, keeper)
+            try:
+                journal.requeue_owner_leases(self.worker_id)
+                self.sweep(journal)
+                ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
+                       'footprints': a.footprints, **self.catalogs()}
+                processed = consecutive = deferred_run = 0
+                outcomes = {}
+                while not self.stopping and processed < a.limit:
+                    if not self.wait_for_capacity(batch):
+                        break
+                    job = journal.claim_tile(self.worker_id, a.lane, tiles=a.tiles, lease_seconds=3600)
+                    if job is None:
+                        break
+                    keeper.add(job)
+                    outcome = self.process(journal, keeper, batch, job, ctx)
+                    outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                    if outcome not in ('paused', 'deferred'):
+                        processed += 1
+                    consecutive = consecutive + 1 if outcome == 'failed' else 0
+                    deferred_run = deferred_run + 1 if outcome == 'deferred' else 0
+                    if consecutive >= 3:
+                        batch.flush()
+                        raise RuntimeError('Three consecutive tile failures; inspect control/failures/')
+                    if deferred_run >= 3:  # the network is down: back off instead of cycling the queue
+                        self.log(event='network_backoff', seconds=600)
+                        for _ in range(600):
+                            if self.stopping:
+                                break
+                            time.sleep(1)
+                        deferred_run = 0
+                    if outcome == 'paused' and a.no_wait:
+                        break
+                    if batch.due():
+                        batch.flush()
+                batch.flush()
+            finally:
+                if batch.pending:
+                    try:
+                        batch.flush()
+                    except Exception as error:  # noqa: BLE001 - leases expire; the next run adopts or redoes
+                        self.log(event='final_flush_failed', reason=str(error)[:300])
+                keeper.close()
+                indexes.close()
+                journal_summary = journal.summary()
+                journal.close()
+                self.cache.close()
+                shutil.rmtree(self.hf_scratch, ignore_errors=True)
+            report = {'event': 'result', 'processed': processed, 'outcomes': outcomes,
+                      'commits': batch.commits, 'published_tiles': batch.published,
+                      'footprint': self.footprint.report(), 'cache': self.cache.status(),
+                      'tile_scratch_peak_bytes': self.tile_peaks, 'summary': journal_summary, 'installed': False}
+            self.log(**report)
+            return self.exit_code
+
+
+class Batch:
+    """Tiles packaged and waiting for one verified commit; journal and scratch follow the commit."""
+
+    def __init__(self, worker, journal, keeper):
+        self.worker, self.journal, self.keeper = worker, journal, keeper
+        self.pending, self.first, self.commits, self.published = [], None, [], []
+
+    @property
+    def bytes(self):
+        return sum(entry[1].bytes for entry in self.pending)
+
+    def add(self, job, package, failures):
+        self.pending.append((job, package, failures))
+        self.first = self.first or time.monotonic()
+
+    def due(self):
+        a = self.worker.args
+        return bool(self.pending) and (len(self.pending) >= a.batch_tiles or self.bytes >= a.batch_cap or
+                                       time.monotonic() - self.first >= a.batch_seconds)
+
+    def flush(self):
+        if not self.pending:
+            return None
+        items = [{key: value for key, value in item.items() if key != 'role'}
+                 for _, package, _ in self.pending for item in package.items]
+        tiles = [job['tile'] for job, _, _ in self.pending]
+        label = f'Generate tiles/v2: {len(tiles)} tile(s) ' + ', '.join(tiles[:6]) + (' ...' if len(tiles) > 6 else '')
+        for attempt in range(3):
+            try:
+                result = self.worker.store.push(items, label)
+                break
+            except Exception as error:  # noqa: BLE001 - hf_store already retried each request
+                self.worker.log(event='batch_push_failed', attempt=attempt + 1, reason=str(error)[:400])
+                if attempt == 2:
+                    raise
+                time.sleep(60 * (attempt + 1))
+        self.commits += result['commits']
+        for job, package, failures in self.pending:
+            try:
+                self.keeper.check(job)
+                for stage in job['stages']:
+                    if stage in failures:
+                        self.worker.fail(self.journal, job, stage, failures[stage])
+                        continue
+                    record = package.receipts[stage]
+                    commit = result['files'][record['receipt']]['commit']
+                    self.journal.finish_remote(job, stage, record['receipt'], receipt_bytes(package, stage), commit)
+                self.published.append(job['tile'])
+                self.worker.log(event='tile_published', tile=job['tile'], commits=result['commits'],
+                                path=tile_prefix(job['tile']))
+            except Exception as error:  # noqa: BLE001 - the tile is on the Hub; a later claim adopts it
+                self.worker.log(event='journal_finish_failed', tile=job['tile'], reason=str(error)[:300])
+            finally:
+                self.keeper.remove(job)
+                shutil.rmtree(self.worker.gen / job['tile'], ignore_errors=True)
+        self.pending, self.first = [], None
+        return result
+
+
+# --------------------------------------------------------------------------
+# CLI
+
+
+def status(args):
+    control = args.control.resolve()
+    scratch = args.scratch.resolve()
+    footprint = Footprint({'cache': scratch / 'cache', 'gen': scratch / 'gen', 'control': control},
+                          args.footprint_cap, args.min_free, volume=scratch)
+    result = {'footprint': {'used_bytes': footprint.used(), 'free_bytes': footprint.free(),
+                            'cap_bytes': footprint.cap, 'floor_bytes': footprint.floor}}
+    try:
+        footprint.check(args.tile_cap, 'next tile')
+        result['would_start'] = True
+    except DiskGuardError as error:
+        result['would_start'], result['reason'] = False, str(error)
+    if (control / 'jobs.sqlite').exists():
+        import sqlite3
+        with closing(sqlite3.connect(control / 'jobs.sqlite', timeout=20)) as db:  # WAL journal: a plain reader
+            result['journal'] = [{'stage': STAGES[s], 'state': state, 'count': n} for s, state, n in db.execute(
+                'SELECT stage,state,count(*) FROM jobs GROUP BY stage,state ORDER BY stage,state')]
+    print(json.dumps(result, indent=1))
+    return 0
+
+
+def seed_control(args):
+    """Start a control directory from the archived worker state (plan, journal, catalogs; ~75 MB).
+
+    Existing files are never overwritten. The archived journal's completed
+    stages point at receipts that died with the external drive; claim_tile()
+    accepts them as legacy and the one-pass worker regenerates every input.
+    """
+    control = args.control.resolve()
+    reader = DatasetReader(args.repo)
+    paths = [f'{LEGACY_CONTROL}/{name}' for name in SEED_FILES]
+    info = reader.info(paths)
+    footprint = Footprint({'control': control}, CONTROL_ALLOWANCE, args.min_free, volume=control.parent)
+    copied = []
+    for name, path in zip(SEED_FILES, paths):
+        target = control / name
+        if target.exists() or path not in info:
+            continue
+        footprint.check(info[path].size, f'seed {name}')
+        reader.download(path, target, expected=info[path])
+        copied.append(name)
+    frame = json.loads(args.frame.read_text())
+    if (control / 'plan.json').exists() and json.loads((control / 'plan.json').read_text())['frame'] != frame:
+        raise ValueError('The archived plan uses another frame')
+    print(json.dumps({'event': 'control_seeded', 'copied': copied, 'source': LEGACY_CONTROL}), flush=True)
+    return 0
+
+
+def prepare(args):
+    """Discover the scan, point-survey and original-LAS catalogs into control (small files only)."""
+    control = args.control.resolve()
+    control.mkdir(parents=True, exist_ok=True)
+    frame = json.loads(args.frame.read_text())
+    plan = json.loads((control / 'plan.json').read_text()) if (control / 'plan.json').exists() else prepare_scope(control, frame)
+    discover(control / 'scans')
+    from regional_arcgrid import prepare as prepare_grid_archives
+    prepare_grid_archives(control)
+    from regional_cook_points import prepare as prepare_original_cook
+    prepare_original_cook(control)
+    from regional_will_points import prepare as prepare_original_will
+    prepare_original_will(control)
+    from regional_point_catalog import discover as discover_points
+    discover_points(plan, control / 'point-surveys')
+    Journal(control / 'jobs.sqlite', plan).close()
+    print(json.dumps({'tiles': len(plan['tiles']), 'area_km2': plan['city_area_m2'] / 1e6}), flush=True)
+    return 0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--control', type=Path, default=ROOT / 'runs/regional/control')
+    parser.add_argument('--frame', type=Path, required=True)
+    parser.add_argument('--scratch', type=Path, default=ROOT / 'runs/scratch',
+                        help='parent of cache/ and gen/ (default runs/scratch)')
+    parser.add_argument('--repo', default=hf_store.DEFAULT_REPO)
+    parser.add_argument('--hf-python', type=Path, default=None,
+                        help='interpreter with huggingface_hub for hf_store (or EARTHCRAFT_HF_PYTHON)')
+    parser.add_argument('--source-revision', default=None, help='generator revision recorded in tile.json')
+    parser.add_argument('--templates', type=Path, default=None,
+                        help='world templates directory (default control/templates, else the repository worlds/)')
+    parser.add_argument('--cache-cap', type=parse_size, default=12 * GiB)
+    parser.add_argument('--footprint-cap', type=parse_size, default=25 * GiB,
+                        help='cache + gen scratch + control (default 25GiB)')
+    parser.add_argument('--min-free', type=parse_size, default=40 * GiB, help='free-space floor (default 40GiB)')
+    parser.add_argument('--tile-cap', type=parse_size, default=4 * GiB, help='scratch cap of one tile (4GiB)')
+    parser.add_argument('--batch-cap', type=parse_size, default=GiB, help='packaged bytes waiting to commit (1GiB)')
+    parser.add_argument('--hf-cap', type=parse_size, default=GiB, help='hf_store scratch cap per worker (1GiB)')
+    parser.add_argument('--workers', type=int, default=1, help='concurrent workers sharing the footprint (1-2)')
+    parser.add_argument('--batch-tiles', type=int, default=6, help='tiles per commit (6)')
+    parser.add_argument('--batch-seconds', type=float, default=1200, help='commit a partial batch after this (1200)')
+    parser.add_argument('--watch-seconds', type=float, default=5)
+    parser.add_argument('--lane', choices=('base', 'scans'), default='base')
+    parser.add_argument('--worker-id', default='base-1')
+    parser.add_argument('--tiles', type=lambda v: [t for t in v.split(',') if t], default=None)
+    parser.add_argument('--limit', type=int, default=1_000_000)
+    parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
+    parser.add_argument('--nice', type=int, default=10, help='raise niceness by this much (default 10)')
+    parser.add_argument('--no-wait', action='store_true', help='exit instead of pausing when the guard refuses')
+    parser.add_argument('--no-adopt', action='store_true')
+    parser.add_argument('--verbose', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--status', action='store_true')
+    mode.add_argument('--prepare', action='store_true')
+    mode.add_argument('--index-coverage', action='store_true')
+    mode.add_argument('--clear-cache', action='store_true')
+    mode.add_argument('--seed-control', action='store_true', help='copy the archived plan/journal/catalogs once')
+    mode.add_argument('--requeue-failed', action='store_true',
+                      help='return failed sources/geometry/appearance stages (of --tiles, or all) to the queue')
+    parser.add_argument('--index-dir', type=Path, default=None,
+                        help='--index-coverage: read local index copies instead of the cache')
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if not 1 <= args.workers <= 2:
+        raise SystemExit('Use one or two workers on the MacBook')
+    if args.nice:
+        os.nice(args.nice)
+    if args.status:
+        return status(args)
+    if args.prepare:
+        return prepare(args)
+    if args.seed_control:
+        return seed_control(args)
+    if args.requeue_failed:
+        control = args.control.resolve()
+        journal = Journal(control / 'jobs.sqlite', json.loads((control / 'plan.json').read_text()))
+        try:
+            changed = journal.requeue_failed(stages=('sources', 'geometry', 'appearance'), tiles=args.tiles)
+        finally:
+            journal.close()
+        print(json.dumps({'event': 'requeued', 'stages': changed}))
+        return 0
+    if args.clear_cache:
+        cache = SourceCache(args.scratch.resolve() / 'cache', args.cache_cap)
+        remaining = cache.clear()
+        cache.close()
+        print(json.dumps({'cache_bytes': remaining}))
+        return 0
+    if args.index_coverage:
+        control = args.control.resolve()
+        frame = json.loads(args.frame.read_text())
+        plan = json.loads((control / 'plan.json').read_text())
+        if plan['frame'] != frame:
+            raise ValueError('Regional frozen frame changed')
+        cache = None
+        if args.index_dir is None:
+            footprint = Footprint({'cache': args.scratch.resolve() / 'cache'}, args.footprint_cap, args.min_free)
+            cache = regional_cache.activate(SourceCache(args.scratch.resolve() / 'cache', args.cache_cap, footprint))
+        indexes = IndexSet(control, cache, DatasetReader(args.repo), frame, index_dir=args.index_dir)
+        print(json.dumps(index_coverage(control, plan, frame, indexes)))
+        return 0
+    return Worker(args).run()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--control', type=Path, required=True)
-    parser.add_argument('--bulk', type=Path, required=True)
-    parser.add_argument('--frame', type=Path, required=True)
-    parser.add_argument('--illinois', type=Path, required=True)
-    parser.add_argument('--prepare', action='store_true')
-    parser.add_argument('--lane', choices=('base', 'scans'), default='base')
-    parser.add_argument('--worker-id', default='base-1')
-    parser.add_argument('--limit', type=int, default=1_000_000)
-    parser.add_argument('--reserve-gib', type=int, default=150)
-    run(parser.parse_args())
+    raise SystemExit(main())

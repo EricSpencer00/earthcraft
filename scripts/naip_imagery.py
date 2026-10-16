@@ -10,7 +10,6 @@ import json
 import math
 import re
 from pathlib import Path
-import shutil
 import urllib.parse
 import urllib.request
 
@@ -24,6 +23,7 @@ from rasterio.warp import reproject, Resampling
 from shapely.geometry import Polygon
 from shapely.ops import transform as transform_geometry
 from appearance_adapter import rank_capture, temporal_relation
+import regional_cache
 
 SERVICE = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer'
 RIGHTS = SERVICE + '/info/iteminfo?f=pjson'
@@ -143,8 +143,7 @@ def replay(imagery, output):
 def acquire(source, output, preferred_year=2022, target_capture=None):
     source, output = Path(source), Path(output)
     if output.exists(): raise FileExistsError(output)
-    if shutil.disk_usage(source).free < 21*2**30:
-        raise ValueError('Preserve 20 GiB internal reserve plus working allowance')
+    regional_cache.require_free(source, 21*2**30, 'Preserve 20 GiB internal reserve plus working allowance')
     meta = json.loads((source/'sources.json').read_text())
     size = meta['size']
     if type(size) is not int or not 16 <= size <= 512 or size % 16:

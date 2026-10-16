@@ -11,7 +11,7 @@ import numpy as np
 
 from inspect_world import chunks
 from verify_metric_world import unpack
-from world_templates import height_template
+from world_templates import chunk_template, height_template
 
 
 def digest(value):
@@ -98,7 +98,7 @@ def input_snapshot(root, region, source, points, photo_world=None):
     Hashes identify bytes, not source accuracy. Input paths are retained in the
     config for replay; generated save metadata is deliberately not an input.
     """
-    template = root / 'worlds/chicago-water-tower-64/Arnis World 1'
+    template = chunk_template(root)
     height = height_template(root)
     client = Path.home() / 'Library/Application Support/minecraft/versions/1.21.10/1.21.10.jar'
     return {
