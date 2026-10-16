@@ -4,9 +4,13 @@ Workers are regional_generate.py processes (see its docstring): each tile is
 generated in guarded scratch and committed straight to the Hugging Face
 dataset. The supervisor checks the disk footprint guard (cache + scratch +
 control <= cap, free space >= floor) before every start; when it refuses, the
-state is 'waiting_for_storage' and nothing is spawned. Workers run in the
-background QoS band (taskpolicy -b on macOS, otherwise nice) so the machine
-stays usable, Minecraft included. Only task-created child PIDs are managed.
+state is 'waiting_for_storage' and nothing is spawned. Workers run at low
+priority so the machine stays usable, Minecraft included: nice +10 and, on
+macOS, the 'utility' QoS clamp (taskpolicy -c utility), which yields CPU and
+disk to interactive work. '--qos background' (taskpolicy -b) yields more but
+also throttles networking: measured on the MacBook it cut Hub downloads from
+about 20 MB/s to 0.3 MB/s, so a 3.4 GB way index took hours.
+Only task-created child PIDs are managed.
 A worker exiting with 75 is waiting for capacity or indexes, not failing.
 
   regional_supervisor.py --frame FRAME [--lane base] [--workers 1] [--ensure]
@@ -49,10 +53,11 @@ def storage_ready(args):
         return False, str(error)
 
 
-def low_priority(command):
-    """Background QoS on macOS (CPU and I/O throttled under interactive load), nice elsewhere."""
+def low_priority(command, qos='utility'):
+    """nice +10, plus a macOS QoS clamp: 'utility' (default) or 'background' (taskpolicy -b)."""
     if sys.platform == 'darwin' and Path('/usr/sbin/taskpolicy').exists():
-        return ['/usr/sbin/taskpolicy', '-b', *command]
+        clamp = ['-b'] if qos == 'background' else ['-c', qos]
+        return ['/usr/sbin/taskpolicy', *clamp, 'nice', '-n', '10', *command]
     return ['nice', '-n', '10', *command]
 
 
@@ -67,7 +72,7 @@ def worker_command(args, owner):
         command += ['--hf-python', str(args.hf_python)]
     if args.footprints:
         command.append('--footprints')
-    return low_priority(command)
+    return low_priority(command + ['--nice', '0'], args.qos)
 
 
 def pending_work(control, lane):
@@ -122,8 +127,9 @@ def ensure(args):
         logs = control / 'logs'
         logs.mkdir(exist_ok=True)
         rotate(logs / 'supervisor.log')
+        command += ['--qos', args.qos]
         with (logs / 'supervisor.log').open('a') as log:
-            child = subprocess.Popen(low_priority(command), env=env, stdout=log, stderr=subprocess.STDOUT,
+            child = subprocess.Popen(low_priority(command, args.qos), env=env, stdout=log, stderr=subprocess.STDOUT,
                                      start_new_session=True)
         record = {'state': 'starting', 'supervisor_pid': child.pid, 'time': time.time()}
         atomic(control / 'supervisor-start.json', json.dumps(record).encode())
@@ -224,6 +230,8 @@ def build_parser():
     parser.add_argument('--min-free', type=parse_size, default=40 * GiB)
     parser.add_argument('--tile-cap', type=parse_size, default=4 * GiB)
     parser.add_argument('--batch-tiles', type=int, default=6)
+    parser.add_argument('--qos', choices=('utility', 'background'), default='utility',
+                        help='macOS QoS clamp for workers (background also throttles network)')
     parser.add_argument('--ensure', action='store_true')
     return parser
 

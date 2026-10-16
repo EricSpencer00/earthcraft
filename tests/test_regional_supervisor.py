@@ -39,6 +39,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(command[command.index('--workers')+1],'2')
             self.assertIn('--footprints',command);self.assertIn('/opt/hf/python',command)
             self.assertTrue(command[0].endswith('taskpolicy') or command[0]=='nice')
+            self.assertEqual(command[command.index('--qos')+1],'utility')
             self.assertTrue(spawn.call_args.kwargs['start_new_session'])
             self.assertEqual(json.loads((root/'control/supervisor-start.json').read_text()),result)
 
@@ -49,7 +50,9 @@ class SupervisorTests(unittest.TestCase):
             self.assertIn('regional_generate.py',' '.join(command))
             self.assertEqual(command[command.index('--lane')+1],'scans')
             self.assertEqual(command[command.index('--worker-id')+1],'scans-1')
-            if sys.platform=='darwin':self.assertEqual(command[:2],['/usr/sbin/taskpolicy','-b'])
+            if sys.platform=='darwin':self.assertEqual(command[:6],['/usr/sbin/taskpolicy','-c','utility','nice','-n','10'])
+            strict=rs.worker_command(self.arguments(root,'--qos','background'),'base-1')
+            if sys.platform=='darwin':self.assertEqual(strict[:2],['/usr/sbin/taskpolicy','-b'])
             self.assertFalse(any('LaCie' in part or 'bulk' in part for part in command))
 
 
