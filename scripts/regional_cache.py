@@ -443,6 +443,20 @@ def touch(path):
         _ACTIVE.touch(path)
 
 
+def require_free(path, legacy_reserve, message):
+    """Free-space check before a bulk write outside the cache (sources, worlds, imagery).
+
+    With a guarded run active, its footprint cap and free-space floor decide
+    (DiskGuardError: the generator pauses the tile). Otherwise the caller's
+    original fixed reserve applies unchanged.
+    """
+    if _ACTIVE is not None and _ACTIVE.footprint is not None:
+        _ACTIVE.footprint.check(0, message)
+        return
+    if shutil.disk_usage(existing_ancestor(path)).free < legacy_reserve:
+        raise ValueError(message)
+
+
 def describe(path):
     """Portable name for a cache path in receipts: 'cache:<relative>'."""
     if owns(path):

@@ -11,8 +11,8 @@ import nbtlib as n
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from regional_fixtures import (FRAME, FakeHub, REPO, chunk_record, fake_tile_pass, make_ctx, reader_for,  # noqa: E402
-                               region)
+from regional_fixtures import (FRAME, FakeHub, REPO, chunk_record, fake_tile_pass, make_ctx,  # noqa: E402
+                               reader_for)
 import hf_install  # noqa: E402
 import hf_store as hs  # noqa: E402
 from region_expansion import encode, records  # noqa: E402

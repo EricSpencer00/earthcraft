@@ -13,7 +13,6 @@ import gzip
 import hashlib
 import io
 from pathlib import Path
-import shutil
 import time
 import zlib
 from functools import lru_cache

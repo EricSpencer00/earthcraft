@@ -35,7 +35,6 @@ import os
 from pathlib import Path
 import shutil
 import signal
-import subprocess
 import sys
 import time
 import traceback
@@ -1022,6 +1021,8 @@ def build_parser():
     mode.add_argument('--index-coverage', action='store_true')
     mode.add_argument('--clear-cache', action='store_true')
     mode.add_argument('--seed-control', action='store_true', help='copy the archived plan/journal/catalogs once')
+    mode.add_argument('--requeue-failed', action='store_true',
+                      help='return failed sources/geometry/appearance stages (of --tiles, or all) to the queue')
     parser.add_argument('--index-dir', type=Path, default=None,
                         help='--index-coverage: read local index copies instead of the cache')
     return parser
@@ -1039,6 +1040,15 @@ def main(argv=None):
         return prepare(args)
     if args.seed_control:
         return seed_control(args)
+    if args.requeue_failed:
+        control = args.control.resolve()
+        journal = Journal(control / 'jobs.sqlite', json.loads((control / 'plan.json').read_text()))
+        try:
+            changed = journal.requeue_failed(stages=('sources', 'geometry', 'appearance'), tiles=args.tiles)
+        finally:
+            journal.close()
+        print(json.dumps({'event': 'requeued', 'stages': changed}))
+        return 0
     if args.clear_cache:
         cache = SourceCache(args.scratch.resolve() / 'cache', args.cache_cap)
         remaining = cache.clear()

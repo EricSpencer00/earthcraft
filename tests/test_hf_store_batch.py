@@ -1,7 +1,6 @@
 """push-batch (caller-owned files) and the stdlib DatasetReader against a fake Hub."""
 import json
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace

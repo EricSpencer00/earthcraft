@@ -32,6 +32,7 @@ from point_ground_materials import load as load_ground_materials
 from metric_frame import tile_layout
 from world_border import bounds_for_tiles, update_world_border
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH, geometry_layer_masks
+import regional_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 PALETTE = ['air', 'bedrock', 'stone', 'dirt', 'grass_block', 'sand', 'water',
@@ -66,8 +67,7 @@ def output_volume(destination):
 
 def check_output_capacity(destination, reserve=OUTPUT_FREE_SPACE_RESERVE):
     volume = output_volume(destination)
-    if shutil.disk_usage(volume).free < reserve:
-        raise ValueError(f'Preserve 20 GiB free-space reserve on output volume {volume}')
+    regional_cache.require_free(volume, reserve, f'Preserve 20 GiB free-space reserve on output volume {volume}')
     return volume
 
 

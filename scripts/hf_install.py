@@ -32,11 +32,9 @@ import argparse
 from contextlib import closing
 from datetime import datetime, timezone
 import gzip
-import io
 import json
 import os
 from pathlib import Path
-import shutil
 import sqlite3
 import subprocess
 import sys

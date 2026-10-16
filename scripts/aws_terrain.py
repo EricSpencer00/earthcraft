@@ -37,11 +37,9 @@ def preparation_free_bytes():
 
 
 def require_preparation_capacity():
-    """Keep the original source-preparation reserve as the final guard."""
-    free_bytes=preparation_free_bytes()
-    if free_bytes<MIN_PREPARATION_FREE_BYTES:
-        raise ValueError('Preserve 20 GiB free reserve plus working allowance')
-    return free_bytes
+    """The active disk guard's floor, else the original source-preparation reserve."""
+    regional_cache.require_free(ROOT,MIN_PREPARATION_FREE_BYTES,'Preserve 20 GiB free reserve plus working allowance')
+    return preparation_free_bytes()
 
 
 def write_rasters(path, elevation, cover):
