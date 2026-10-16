@@ -27,11 +27,12 @@ from material_router import APPEARANCE_BLOCKS, route
 from geographic_quality import vertical_layout
 from point_geometry import load_tower_points
 from batch_point_geometry import load_batch_points
-from world_templates import height_template
+from world_templates import chunk_template, height_template
 from point_ground_materials import load as load_ground_materials
 from metric_frame import tile_layout
 from world_border import bounds_for_tiles, update_world_border
 from geometry_layers import TOPOLOGY_SUPPORT_DEPTH, geometry_layer_masks
+import regional_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 PALETTE = ['air', 'bedrock', 'stone', 'dirt', 'grass_block', 'sand', 'water',
@@ -66,8 +67,7 @@ def output_volume(destination):
 
 def check_output_capacity(destination, reserve=OUTPUT_FREE_SPACE_RESERVE):
     volume = output_volume(destination)
-    if shutil.disk_usage(volume).free < reserve:
-        raise ValueError(f'Preserve 20 GiB free-space reserve on output volume {volume}')
+    regional_cache.require_free(volume, reserve, f'Preserve 20 GiB free-space reserve on output volume {volume}')
     return volume
 
 
@@ -415,7 +415,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
     min_y = -64
     destination.mkdir(parents=True)
     (destination/'region').mkdir()
-    template = ROOT/'worlds/chicago-water-tower-64/Arnis World 1'
+    template = chunk_template(ROOT)
     _, sample, _ = next(chunks(template/'region/r.0.0.mca'))
     # The sample tag is immutable after this point.  A shallow per-chunk copy
     # is sufficient because every mutable field we change below is replaced by

@@ -32,10 +32,10 @@ class HydrologyTests(unittest.TestCase):
         self.assertEqual(inventory['water_relation_features'],1)
 
     @unittest.skipUnless(os.environ.get('EARTHCRAFT_RUN_EXTERNAL_HYDROLOGY') == '1' and
-                         Path('/Volumes/LaCie/Earthcraft/chicago/sources/chicago.osm.pbf').exists(),
-                         'External Chicago hydrology extraction is opt-in')
+                         Path(os.environ.get('EARTHCRAFT_CHICAGO_PBF', '')).is_file(),
+                         'External Chicago hydrology extraction is opt-in (set EARTHCRAFT_CHICAGO_PBF)')
     def test_lake_michigan_relation_is_extractable(self):
-        features,report=extract('/Volumes/LaCie/Earthcraft/chicago/sources/chicago.osm.pbf',
+        features,report=extract(os.environ['EARTHCRAFT_CHICAGO_PBF'],
                                 relation_names=['Lake Michigan'])
         lake=[feature for feature in features if feature['tags'].get('name')=='Lake Michigan']
         self.assertTrue(lake)

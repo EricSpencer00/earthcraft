@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template LaunchAgent for unattended regional generation on the MacBook.
+  It is NOT installed by anything in this repository.
+
+  What it runs: regional_supervisor.py in the foreground, which keeps one
+  one-pass worker (regional_generate.py) alive. Workers write tiles straight to
+  the Hugging Face dataset; the only local writes are the guarded source cache
+  (runs/scratch/cache, 12 GiB), per-tile scratch (runs/scratch/gen) and the
+  control directory (runs/regional/control). Cache + scratch + control stay
+  under 25 GiB and the volume keeps 40 GiB free; when it cannot, the
+  supervisor waits ("waiting_for_storage" in supervisor-status.json) instead
+  of writing.
+
+  Priority: Nice, LowPriorityIO and the supervisor's default worker clamp
+  (taskpolicy -c utility plus nice 10) give Minecraft and other interactive
+  work the CPU and disk first. ProcessType is Standard on purpose: the
+  Background type (like taskpolicy -b) also throttles networking, which on
+  the MacBook cut Hub downloads from about 20 MB/s to 0.3 MB/s.
+
+  Host policy: the MacBook's codex-coordinator-guard LaunchAgent kills local
+  python processes started with -u or from scripts/ (local_compute_blocked in
+  ~/.codex/resilience/events.log), per the coordinator-only policy in
+  ~/.codex/AGENTS.md. Do not install this agent on a host with that guard
+  unless its owner has exempted the regional generator.
+
+  Fill in, load, stop:
+    1. Replace __EARTHCRAFT_ROOT__ with the absolute path of the checkout
+       (~/earthcraft expanded), __REPO_PYTHON__ with its .venv/bin/python, and
+       __HF_PYTHON__ with an interpreter that has huggingface_hub and the write
+       token (for example the hf CLI's libexec/bin/python).
+    2. Seed the control directory once (regional_generate.py with the seed-control option) and
+       copy the world templates into runs/regional/control/templates/.
+    3. cp configs/earthcraft-regional-generator.plist \
+          ~/Library/LaunchAgents/com.earthcraft.regional-generator.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.earthcraft.regional-generator.plist
+    4. Stop:  launchctl bootout gui/$(id -u)/com.earthcraft.regional-generator
+       (SIGTERM; the worker finishes its tile and commits its batch, so the
+       generous ExitTimeOut matters).
+    Progress: runs/regional/control/supervisor-status.json, control/logs/,
+    and regional_generate.py with its status option (see docs/CHICAGOLAND_SCANS.md).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.earthcraft.regional-generator</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_PYTHON__</string>
+    <string>-u</string>
+    <string>__EARTHCRAFT_ROOT__/scripts/regional_supervisor.py</string>
+    <string>--control</string>
+    <string>__EARTHCRAFT_ROOT__/runs/regional/control</string>
+    <string>--frame</string>
+    <string>__EARTHCRAFT_ROOT__/runs/chicago-adaptation-city-001/frame.json</string>
+    <string>--scratch</string>
+    <string>__EARTHCRAFT_ROOT__/runs/scratch</string>
+    <string>--hf-python</string>
+    <string>__HF_PYTHON__</string>
+    <string>--lane</string>
+    <string>base</string>
+    <string>--workers</string>
+    <string>1</string>
+    <string>--footprints</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__EARTHCRAFT_ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>__EARTHCRAFT_ROOT__/scripts</string>
+    <key>EARTHCRAFT_HF_PYTHON</key>
+    <string>__HF_PYTHON__</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+  </dict>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>LowPriorityBackgroundIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>ExitTimeOut</key>
+  <integer>600</integer>
+  <key>StandardOutPath</key>
+  <string>__EARTHCRAFT_ROOT__/runs/regional/control/logs/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__EARTHCRAFT_ROOT__/runs/regional/control/logs/launchd.log</string>
+</dict>
+</plist>

@@ -19,6 +19,7 @@ import rasterio
 from pyproj import CRS
 
 from region_expansion import atomic, sha
+import regional_cache
 
 ROOT = 'https://data.isgs.illinois.edu/arcgis/rest/services/Elevation'
 COUNTIES = ('Cook', 'DuPage', 'DeKalb', 'Grundy', 'Kane', 'Kendall', 'Lake', 'McHenry', 'Will')
@@ -52,6 +53,7 @@ def _frozen_file(url, path, limit):
         if _VERIFIED_FILES.get(str(path.resolve()))!=identity:
             if sha(path)!=record['sha256']:raise ValueError('Frozen scan source changed')
             _VERIFIED_FILES[str(path.resolve())]=identity
+        regional_cache.touch(path)
         return record
     for attempt in range(3):
         try:
@@ -74,7 +76,9 @@ def _frozen_file(url, path, limit):
     # completing that interrupted transition; never replace changed evidence.
     if path.exists():
         if path.read_bytes()!=raw:raise ValueError('Unreceipted scan payload differs from publisher; retain it')
-    else:atomic(path, raw)
+    else:
+        regional_cache.admit(path, len(raw)+8192, what=path.name)
+        atomic(path, raw)
     record={'url': url, 'sha256': hashlib.sha256(raw).hexdigest(),'bytes': len(raw)}
     atomic(receipt, json.dumps(record).encode())
     return record

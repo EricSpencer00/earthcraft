@@ -52,11 +52,12 @@ supplements outlines missing from OSM. The 2026-09-23.1 release produced
 3,840,217 features in the regional bounding rectangle, which also includes
 land outside the frozen metro boundary. These are OSM, contributor and
 ML-derived footprints, not measured LiDAR. Original attribution is retained
-per feature in a metre SQLite R-tree. Install `requirements-footprints.txt`
-on the compute host to acquire an index with `regional_footprints.py`.
-Set `EARTHCRAFT_BUILDING_INDEX` to its immutable SQLite file, or configure
-`supervisor.building_index` in the private publisher configuration. Workers
-verify its SHA-256 and CRS before use; tile crops have separate receipts.
+per feature in a metre SQLite R-tree, published as
+`sources/indexes/regional-footprints.sqlite` (`regional_footprints.py` builds
+a new one with `requirements-footprints.txt`). Pass `--footprints` to the
+generator: it fetches the index into its source cache only for tiles with a
+paired survey and verifies its SHA-256 and CRS before use; tile crops have
+separate receipts.
 
 Supplemental roof geometry requires valid paired DSM/DTM and more than 2 m
 of measured ground clearance. Existing mapped buildings own overlapping
@@ -94,8 +95,16 @@ a source gap; its paired DSM/DTM products and usable EPT candidates provide
 the current route. Original-file inventories do not imply that all county
 point payloads have been downloaded or installed.
 
-The base uses frozen Illinois, Indiana and Wisconsin OSM way indexes and
-public terrain tiles. Missing height and road-width measurements remain
+The base uses frozen Illinois, Indiana and Wisconsin OSM way indexes
+(`sources/indexes/*-ways.sqlite`) and public terrain tiles. The PBF extracts
+the indexes were built from died with the external drive, so a reader trusts
+the source SHA-256, size and mtime recorded inside each index instead of
+re-hashing the PBF; the index file itself is still checked against its receipt
+on open and stat-checked on every query, and receipts say which check was
+made. `control/index-coverage.json` (from `regional_generate.py
+--index-coverage`) lists the tiles that have at least one way of each index in
+their padded window, so a tile opens only the state indexes it needs; the
+selected ways are identical. Missing height and road-width measurements remain
 explicit presentation estimates. Multipolygon relations, complete land
 cover and the full Lake Michigan water relation remain missing from this
 regional way-only base. These limitations are recorded in each source
@@ -103,137 +112,134 @@ manifest and must not be described as complete geographic fidelity.
 
 ## Execution and storage
 
-Run generation on the authorized personal compute host with LaCie actually
-mounted there. Keep SQLite journals, merge replicas and transport exports on
-its internal filesystem. The exFAT bulk volume holds source data and verified
-tile artifacts; many small merge writes on exFAT can stall for minutes.
-Task-generated MCA files can be retained as byte-exact gzip originals.
+Generation runs on a host with the repository virtualenv and a Hub write
+token (the plan names the MacBook) and writes straight to the public dataset.
+Nothing depends on an external drive, and every byte it writes counts against
+one guarded footprint:
 
-Install the pinned test/scan dependencies, provide the original world metadata
-templates, and set `EARTHCRAFT_CLIENT_JAR` to the owned Minecraft 1.21.10 JAR.
-With task-specific paths supplied, prepare and start the regional run:
+| Root | Holds | Bound |
+| --- | --- | --- |
+| `runs/scratch/cache/` | every source cache: terrain tiles, EPT nodes and their spatial indexes, original Cook/Will LAS and ArcGrid members, the way and footprint indexes | LRU, `--cache-cap` (12 GiB) |
+| `runs/scratch/gen/<tile>/` | one tile's sources, worlds and package until its commit is verified | `--tile-cap` (4 GiB) per tile |
+| `runs/scratch/gen/_hf-<worker>/` | hf_store's client caches and batch ledger | `--hf-cap` (1 GiB) |
+| `runs/regional/control/` | plan, `jobs.sqlite`, catalogs, templates, failure receipts, logs | ~100 MB |
+
+Cache, scratch and control together stay under `--footprint-cap` (25 GiB) and
+the volume keeps at least `--min-free` (40 GiB) free. Writers into the cache
+call `regional_cache.admit()` first: least-recently-used units are evicted,
+then the cap and floor are checked, before any byte is written. Units a running
+tile has used are pinned. A watcher samples scratch between checks, so a world
+build that outgrows its tile cap is caught at the next check. When the guard
+refuses, the worker does not crash: at start it exits with status 75 (the
+supervisor waits); mid-tile it returns the tile to the queue and waits for
+space; a tile that alone needs more source cache than the cap fails with an
+explicit capacity receipt (raise `--cache-cap`, within the footprint, and
+requeue it). Dense Cook tiles with original LAS and all three way indexes can
+need about 18 GiB of cache.
+
+One tile is one unit of work. `Journal.claim_tile` leases every unfinished
+stage of a tile under one token. In `runs/scratch/gen/<tile>/` the worker
+builds the sources, the LQ geometry and the measured appearance in one pass,
+packages the result as `tiles/v2/<tile>/` (see [the dataset](WORLD_DATASET.md)),
+and keeps only the package while its batch waits. Several tiles go into one
+commit (`--batch-tiles`, default 6, or after `--batch-seconds`), because the
+Hub allows about 128 commits an hour. `hf_store.py push-batch` re-hashes every
+file, commits in bounded batches with backoff, and verifies each path's
+SHA-256 on the Hub. Only then does the journal record each stage's dataset
+receipt path, SHA-256 and commit, and the tile scratch is deleted. A lease
+keeper renews leases until then. A tile whose package is already on the Hub
+(a crash after the commit) is adopted rather than regenerated. Lane `base`
+takes tiles never generated; lane `scans` takes tiles whose geometry
+completed on the retired worker and regenerates their LQ geometry as the
+upgrade baseline (and as the delivered world when no scan improves it: many
+were never installed or archived).
+
+Two interpreters are involved: the repository virtualenv runs generation and
+reads the public dataset with the standard library; an interpreter with
+`huggingface_hub` (for example the `hf` CLI's) runs `hf_store.py` for writes.
+Set it with `--hf-python` or `EARTHCRAFT_HF_PYTHON`. Set up a control directory
+once:
 
 ```sh
-PYTHONPATH=scripts .venv/bin/python scripts/regional_generate.py \
-  --control "$TASK_CONTROL" --bulk "$TASK_BULK" \
-  --frame "$TASK_FRAME" --illinois "$TASK_ILLINOIS_PBF" --prepare
-
-PYTHONPATH=scripts .venv/bin/python scripts/regional_supervisor.py \
-  --control "$TASK_CONTROL" --bulk "$TASK_BULK" \
-  --frame "$TASK_FRAME" --illinois "$TASK_ILLINOIS_PBF"
+.venv/bin/python scripts/regional_generate.py --frame runs/chicago-adaptation-city-001/frame.json \
+  --seed-control     # plan, journal and catalogs from archive/mini-worker-20260929/
 ```
 
-The supervisor owns two base workers and up to three scan workers. Extra scan
-workers wait until at least 2 GiB is available before starting. SQLite leases resume
-unfinished jobs after restarts. Ten failures stop the affected worker; it
-never reports unfinished jobs as complete. The default generation deadline
-is forty-five days and persists across restarts. LaCie retains a 150 GiB
-reserve and the control disk a 12 GiB reserve. The receiver retains a 50 GiB
-reserve. A full materialized metro save can exceed the coordinator's storage;
-these boundaries stop writes with explicit status rather than guaranteeing
-that the entire plan fits. Restart or storage changes require checking the
-remaining jobs and recorded boundary first.
+and copy the two world templates (`chicago-water-tower-64/Arnis World 1` and
+`Earthcraft-Chicago-Photo-Atlas-v2/datapacks/earthcraft_height`) into
+`runs/regional/control/templates/`. They are not published: the template
+`level.dat` holds a real player compound. Block colours come from the owned
+Minecraft 1.21.10 client JAR (the launcher's copy, or `EARTHCRAFT_CLIENT_JAR`);
+a worker refuses to start without templates or JAR. `--prepare` rediscovers
+the catalogs from the publishers instead. Then run one tile, or the supervisor:
 
-The scan path collects observations before building the final geometry, so
-it no longer serializes an intermediate roof world and then rebuilds it with
-points. Full-density EPT node downloads use four bounded concurrent requests;
+```sh
+/usr/sbin/taskpolicy -c utility .venv/bin/python scripts/regional_generate.py \
+  --frame runs/chicago-adaptation-city-001/frame.json --hf-python "$HF_PYTHON" --tiles 17_54 --limit 1
+.venv/bin/python scripts/regional_supervisor.py \
+  --frame runs/chicago-adaptation-city-001/frame.json --hf-python "$HF_PYTHON" --footprints
+.venv/bin/python scripts/regional_generate.py --frame runs/chicago-adaptation-city-001/frame.json --status
+```
+
+Workers run at nice +10 under the macOS `utility` QoS clamp
+(`taskpolicy -c utility`), which yields CPU and disk to interactive work, so
+Minecraft stays playable while generation runs. `--qos background`
+(`taskpolicy -b`) yields more but also throttles networking: on the MacBook it
+cut Hub downloads from about 20 MB/s to 0.3 MB/s, so a 3.4 GB way index took
+hours. `configs/earthcraft-regional-generator.plist` is a launchd template
+(not installed) for unattended runs; its comments say how to fill it in, load
+it and stop it. Mind host policy: the MacBook's coordinator guard kills local
+`python -u .../scripts/...` workloads (`local_compute_blocked`), so generation
+there needs its owner's exemption, or another compute host with the two
+interpreters and a Hub write token. The supervisor keeps one worker (two at
+most on the MacBook), retries failures with backoff, stops a lane after ten,
+and keeps a 45-day deadline. `supervisor-status.json`, the journal summary and
+`control/logs/` record progress; `--clear-cache` empties the source cache.
+
+The scan path collects observations before building the final geometry.
+Full-density EPT node downloads use four bounded concurrent requests;
 decoding and indexing remain serial within each worker to limit memory.
-Unchanged frozen files are hashed once per worker/file identity instead of
-being reread for every neighbouring crop. Receipt identity is checked on
-every use; changed size, inode or timestamps trigger checksum verification.
-Original point densities and source node identities remain unchanged.
+Unchanged frozen files are hashed once per worker and file identity instead of
+for every neighbouring crop. Original point densities and node identities stay
+unchanged.
 
-An optional private AWS burst uses `regional_cloud_exchange.py` to lease a
-bounded batch, `regional_aws_launch.mjs` to create task-owned compute and
-`regional_aws_collect.mjs` to verify and return candidates. It sends frozen
-source crops, catalogs and the world frame; it does not send the live save.
-Available footprint crops accompany individual jobs without shipping the
-whole regional index. Each original base source remains immutable.
-
-The launcher verifies the authenticated account and refreshes official
-compute, storage, IPv4 and egress pricing before spending. It refuses an
-existing Earthcraft accelerator, requires aggregate task costs below the
-standing $10/hour consent, and can fall back from 32 to 16 vCPUs when the
-existing quota requires it. Private settings specify the owned account and a
-fresh task name. `--check` performs account and price checks without launching.
-The bucket blocks public access, enforces owner-only ACLs, encryption and TLS,
-and has a seven-day expiration fallback. Compute has no inbound rules,
-encrypted temporary storage and a two-hour termination timer. Native AWS
-login remains on the coordinator; the instance has only task-bucket and
-management permissions.
-
-Queue renewals cannot revive expired or reclaimed leases. The mini validates
-returned source identities, manifests, region bytes, observed geometry and
-placement before acknowledging a candidate. Original LAZ/LAS caches are
-retained privately until their verified transfer to LaCie. Task-created
-compute, bucket, identity and network resources are cleaned up after collection.
-An interrupted collection must retain the source bucket and resume verification;
-it must not delete the only remaining originals.
+The private AWS accelerator (`regional_cloud_exchange.py` and its launch and
+collect scripts) is retired: it shipped staged sources from the external drive
+and returned candidates and original LAZ caches to it. Any machine with the
+two interpreters can now run the same one-pass generator against the same
+journal semantics; it needs no exchange format.
 
 The September 30 burst produced 24 scan/roof candidates with four workers on
-a 16-vCPU instance. Median per-tile generation was about 62 seconds; observed
-tiles ranged from 27 to 454 seconds. This includes different sources and cache
-states, and is not a controlled before/after speedup measurement. A cached
-comparison helper, `benchmark_regional_scans.py`, checks exact point arrays
-and original node identities before reporting its narrower crop speedup.
-The full 95,399-tile regional pass remains unfinished.
-
-If a macOS background launch context stalls reopening the removable volume,
-use the already authorized SSH execution context. The publisher's optional
-`supervisor` configuration calls `regional_supervisor.py --ensure` over the
-verified MacBook-to-mini route. It starts a missing detached supervisor,
-preserves the existing lock and deadline, and refuses to restart completed
-work or a lane at its ten-failure boundary. Source checks and disk reserves
-remain identical. The original task LaunchAgent must be stopped before
-changing the startup route; do not change filesystem privacy permissions.
-
-`supervisor-status.json`, the SQLite stage summary and the worker logs record
-generation progress. `publisher-state.json` tracks acknowledged source
-receipts; `publisher-status.json` records delivery, retry and storage states.
-The world's `regional-quality.json` reports chunks actually added or
-upgraded and chunks preserved. A received tile with all chunks protected is
-acknowledged but contributes no newly installed geometry.
+a 16-vCPU instance; median per-tile generation was about 62 seconds (27 to
+454 seconds). `benchmark_regional_scans.py` checks exact point arrays and
+original node identities before reporting a narrower crop speedup. The full
+95,399-tile regional pass remains unfinished.
 
 ## Delivery into the existing world
 
-`regional_publish.mjs` performs lightweight coordination on the save's host.
-Compile `regional_lock.c` for that host and record its SHA-256 in the private
-publisher configuration. The configuration supplies the authorized SSH
-alias, expected hostname/user, remote Python/repository/control/bulk paths,
-legacy baseline directories, existing save path, reserve and lock-helper
-identity. Each SSH operation resolves and checks that route again. Data
-transfers use SSH; no public file service is created.
+`scripts/hf_install.py` installs on the machine that holds the save; it
+replaces the earlier bundle, SSH, rsync and remote-merge round trip. It
+refuses while Minecraft holds `session.lock`, downloads the needed `tiles/v2`
+packages and LQ baselines into capped scratch, and merges under one
+session-lock fence with `regional_install.install_tile`. Every existing player
+chunk wins unless all blocks, properties and biomes still match a recorded
+extrusion baseline (`tiles/v2/<tile>/lq/` from the same pass, or the tile's
+`tiles/v1` shard member). Vanilla lighting, palette order and maintenance
+timestamps can change without changing geometry. Entities, block entities,
+scheduled ticks and changed or cleared blocks protect the chunk. Measured
+roof/point worlds are never extrusion baselines, so a candidate cannot replace
+those observations. Coverage and the world border expand only when new chunks
+were added; `regional-quality.json` reports chunks added, upgraded and kept.
 
-On an APFS save volume, the optional `native_region_compression` setting uses
-macOS `ditto --hfsCompression` on incoming region files. Their readable bytes
-and SHA-256 must remain identical before installation. Minecraft sees ordinary
-Anvil files; native filesystem compression reduces their sector-padding disk
-cost. A representative 4.01 MiB scan region occupied 676 KiB after compression.
-Ratios vary, Minecraft can decompress files when rewriting them, and the disk
-reserve still applies. Test this in private staging on the actual filesystem
-before enabling it; a failed readable-byte check refuses installation.
-
-The sender exports at most 24 verified tile candidates by default and their immutable
-extrusion alternatives. Under Minecraft's POSIX session lock, the coordinator
-copies only the affected current region files and relevant metadata to a
-private merge replica. Block comparisons run on the compute host. Every
-existing player chunk wins unless all blocks, properties and biomes still
-match a recorded extrusion baseline. Vanilla lighting, palette order and
-maintenance timestamps can change without changing geometry. Entities,
-block entities, scheduled ticks and changed or cleared blocks protect the
-chunk. Existing measured roof/point worlds are excluded as extrusion
-alternatives, so a base or scan candidate cannot replace those observations.
-
-The coordinator verifies the original snapshot again, checks returned hashes,
-retains verified compressed pre-update backups, and replaces touched files
-atomically. Player metadata and the existing coordinate frame remain intact;
-coverage and the world border expand only when new chunks were added. The
-acknowledgement is durable before disposable transport files are removed.
-An open world pauses delivery until its lock becomes available.
-When the save is closed and a backlog remains, full batches continue after
-one second, smaller batches after five seconds. Empty queues and open saves
-use bounded backoff. Backups, save locks and unchanged-baseline comparisons
-still apply to every batch.
+Pre-update copies of every touched file are written as gzip to capped scratch,
+uploaded to `archive/install-backups/<attempt>/`, verified and deleted locally;
+`level.dat` is not archived publicly (it holds the player), only its border
+fields. The changed regions then go to `world/` with `hf_store.py push-world
+--only-changed`. Regions are written with macOS `ditto --hfsCompression`
+(`--no-native-compression` turns it off); readable bytes and SHA-256 are
+checked before the atomic rename. A representative 4.01 MiB scan region
+occupied 676 KiB after compression; Minecraft can decompress a file when it
+rewrites it. `--dry-run` selects tiles without touching the lock or the disk.
 
 `regional_alignment.py` checks the inherited metre CRS, exact tile/chunk
 translation, height offset, every Anvil region name/slot and complete chunk
@@ -258,6 +264,7 @@ measured roof cells, retained its 45,014 observed point voxels, passed all
 
 Offline regressions cover vertical-unit admission, original grid selection,
 point classification and tampering, mixed roof/point height envelopes, scan
-gaps, chunk upgrade eligibility, byte-exact compression and bounded transport
-unpacking. Source and derived-data licenses remain separate from the code
+gaps, chunk upgrade eligibility, guard refusals, LRU eviction and pinning, the
+one-pass tile lifecycle against a fake Hub, portable receipts, and an
+installer that refuses an open world. Source and derived-data licenses remain separate from the code
 license; consult the publisher records before redistributing a world.

@@ -21,6 +21,12 @@ deleted. Nothing on the Hub is ever deleted by this tool.
   hf_store.py --scratch DIR push-world --save SAVE [--only-changed] [--dry-run]
   hf_store.py --scratch DIR migrate [--only tiles,validations,snapshot,oakbrook,card] [--limit N]
   hf_store.py --scratch DIR verify --manifest PATH|hf:PATH [--prefix P] [--rewrite OLD=NEW]
+  hf_store.py --scratch DIR push-batch --manifest BATCH.json   (used by the tile generator and installer)
+
+Reads need no client library: DatasetReader streams public files over HTTPS
+straight to a caller-admitted destination and checks them against the Hub's
+SHA-256 (LFS/Xet) or git blob id, so the repository virtualenv can read while
+only this tool, under an interpreter with huggingface_hub, writes.
 """
 from __future__ import annotations
 
@@ -427,9 +433,17 @@ def remote_matches(remote, digest):
 # Retry
 
 
+def error_status(error):
+    """HTTP status of a requests/httpx error (.response) or a urllib HTTPError (.code)."""
+    status = getattr(getattr(error, 'response', None), 'status_code', None)
+    if status is None and isinstance(getattr(error, 'code', None), int) and hasattr(error, 'headers'):
+        status = error.code
+    return status
+
+
 def retry_after_seconds(error, now=None):
     response = getattr(error, 'response', None)
-    headers = getattr(response, 'headers', None) or {}
+    headers = getattr(response, 'headers', None) or getattr(error, 'headers', None) or {}
     try:
         value = headers.get('retry-after') or headers.get('Retry-After')
     except AttributeError:
@@ -455,13 +469,13 @@ def retry_after_seconds(error, now=None):
 
 
 def is_retryable(error):
-    response = getattr(error, 'response', None)
-    status = getattr(response, 'status_code', None)
+    status = error_status(error)
     if status is not None:
         return status in RETRY_STATUS
     if isinstance(error, (ConnectionError, TimeoutError)):
         return True
-    for module, names in (('httpx', ('TransportError',)), ('requests', ('ConnectionError', 'Timeout'))):
+    for module, names in (('httpx', ('TransportError',)), ('requests', ('ConnectionError', 'Timeout')),
+                          ('urllib.error', ('URLError',)), ('http.client', ('IncompleteRead', 'RemoteDisconnected'))):
         library = sys.modules.get(module)
         if library and any(isinstance(error, getattr(library, name, ())) for name in names):
             return True
@@ -492,7 +506,7 @@ class Retry:
                 if not is_retryable(error) or attempt == self.attempts - 1:
                     raise
                 delay = self.delay(attempt, error)
-                status = getattr(getattr(error, 'response', None), 'status_code', None)
+                status = error_status(error)
                 self.log(event='retry', what=what, attempt=attempt + 1, status=status,
                          error=type(error).__name__, wait_seconds=round(delay, 1))
                 self.sleep(delay)
@@ -1388,6 +1402,238 @@ def push_files(ctx, src, dest, include=(), exclude=()):
 
 
 # --------------------------------------------------------------------------
+# push-batch: caller-owned files (generated tiles, install backups)
+
+
+BATCH_SCHEMA = 'earthcraft.hf-store-batch.v1'
+
+
+def push_batch(ctx, items, label):
+    """Commit files another guarded tool wrote, in bounded verified commits.
+
+    `items` is a list of {path, local, sha256, bytes}. Each local file is
+    re-hashed before it is queued; the caller keeps ownership and deletes its
+    copies only after this returns, because every path has then been verified
+    on the Hub. The ledger is per batch and removed on success, so a retried
+    batch skips what an interrupted attempt already verified.
+    """
+    if not items:
+        return {'files': {}, 'commits': []}
+    seen = set()
+    for entry in items:
+        safe_repo_path(entry['path'])
+        if entry['path'] in seen:
+            raise ValueError(f'Duplicate path in batch: {entry["path"]}')
+        seen.add(entry['path'])
+    ctx.check_destination()
+    key = hashlib.sha256(canonical_json(sorted((e['path'], e['sha256']) for e in items))).hexdigest()[:16]
+    ledger = Ledger(ctx.guard, 'batch-' + key, ctx.repo)
+    committer = ctx.committer(ledger, label)
+    for entry in items:
+        local = Path(entry['local'])
+        if local.is_symlink() or not local.is_file():
+            raise ValueError(f'Refusing non-regular batch file: {entry["path"]}')
+        digest = hash_file(local)
+        if digest.sha256 != entry['sha256'] or digest.size != int(entry['bytes']):
+            raise VerificationError(f'Local file changed before commit: {entry["path"]}')
+        committer.add(Item(entry['path'], local, digest, scratch=False, source=entry.get('source')))
+    committer.close()
+    files = {}
+    for entry in items:
+        record = ledger.files.get(entry['path'])
+        if not record or record['sha256'] != entry['sha256']:
+            raise VerificationError(f'Batch path was not verified on the Hub: {entry["path"]}')
+        files[entry['path']] = {'sha256': record['sha256'], 'bytes': record['bytes'], 'commit': record['commit']}
+    ctx.guard.remove(ledger.path)
+    return {'files': files, 'commits': [c['oid'] for c in committer.stats['commits']],
+            **{k: v for k, v in committer.stats.items() if k != 'commits'}}
+
+
+class StoreClient:
+    """Push batches through hf_store, in-process or under the interpreter that has huggingface_hub.
+
+    The generator and installer run in the repository virtualenv, which does
+    not carry huggingface_hub; they hand a JSON batch manifest to this tool
+    running under `python` (for example the `hf` CLI's interpreter). Tests pass
+    an in-process Context with a fake Hub instead.
+    """
+
+    def __init__(self, *, python=None, scratch=None, repo=DEFAULT_REPO, cap=GiB, min_free=None,
+                 ctx=None, run=subprocess.run, log=None):
+        if ctx is None and (python is None or scratch is None):
+            raise ValueError('A Hub context or an interpreter plus scratch root is required')
+        self.python, self.scratch, self.repo, self.cap, self.min_free = python, scratch, repo, cap, min_free
+        self.ctx, self.run, self.log = ctx, run, log or (lambda **_: None)
+
+    def push(self, items, label):
+        if self.ctx is not None:
+            return push_batch(self.ctx, items, label)
+        scratch = Path(self.scratch)
+        scratch.mkdir(parents=True, exist_ok=True)
+        manifest = scratch / f'batch-{os.getpid()}-{time.time_ns()}.json'
+        manifest.write_text(json.dumps({'schema': BATCH_SCHEMA, 'label': label, 'items': items}))
+        command = [str(self.python), str(Path(__file__).resolve()), '--repo', self.repo, '--scratch', str(scratch),
+                   '--cap', str(int(self.cap))]
+        if self.min_free is not None:
+            command += ['--min-free', str(int(self.min_free))]
+        command += ['push-batch', '--manifest', str(manifest)]
+        try:
+            completed = self.run(command, capture_output=True, text=True)
+        finally:
+            manifest.unlink(missing_ok=True)
+        result = None
+        for line in completed.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get('event') == 'result' and event.get('command') == 'push-batch':
+                result = event
+            elif event.get('event') in ('retry', 'commit_verified'):
+                self.log(**event)
+        if completed.returncode or result is None:
+            tail = (completed.stderr or completed.stdout or '').strip().splitlines()[-3:]
+            raise RuntimeError('hf_store push-batch failed: ' + ' | '.join(tail)[-800:])
+        return result
+
+
+# --------------------------------------------------------------------------
+# Public reads (stdlib HTTPS; no client library, no client cache)
+
+
+class DatasetReader:
+    """Read the public dataset over HTTPS, verified against the Hub's own hashes.
+
+    Uses only the standard library, so it runs in the repository virtualenv.
+    Files stream straight to their destination (one write per byte) after the
+    caller's `admit(size)` accepted the size; nothing touches
+    ~/.cache/huggingface. A token is sent only to the Hub endpoint, and only
+    when HF_TOKEN or the login token file exists (higher rate limits).
+    """
+
+    def __init__(self, repo=DEFAULT_REPO, *, revision='main', endpoint='https://huggingface.co', token=None,
+                 timeout=60, opener=None, retry=None):
+        import urllib.request
+        self.repo, self.revision, self.endpoint, self.timeout = repo, revision, endpoint.rstrip('/'), timeout
+        self.opener = opener or urllib.request.urlopen
+        self.retry = retry or Retry(attempts=6)
+        self.token = token if token is not None else self._token()
+
+    @staticmethod
+    def _token():
+        value = os.environ.get('HF_TOKEN')
+        if value:
+            return value.strip()
+        path = Path(os.environ.get('HF_TOKEN_PATH', Path(os.environ.get('HF_HOME', '~/.cache/huggingface'))
+                                   .expanduser() / 'token')).expanduser()
+        try:
+            return path.read_text().strip() or None
+        except OSError:
+            return None
+
+    def _open(self, url, data=None):
+        import urllib.request
+        headers = {'User-Agent': 'earthcraft-hf-store/1'}
+        if self.token and url.startswith(self.endpoint + '/'):
+            headers['Authorization'] = 'Bearer ' + self.token
+        request = urllib.request.Request(url, data=data, headers=headers)
+        return self.opener(request, timeout=self.timeout)
+
+    def _quoted(self, path):
+        import urllib.parse
+        return urllib.parse.quote(safe_repo_path(path), safe='/')
+
+    def head_revision(self):
+        def fetch():
+            with self._open(f'{self.endpoint}/api/datasets/{self.repo}/revision/{self.revision}') as response:
+                return json.loads(response.read(4 * MiB))['sha']
+        return self.retry.call(fetch, what='revision')
+
+    def info(self, paths, revision=None):
+        """{path: RemoteFile} for the paths that exist (missing paths are omitted)."""
+        import urllib.parse
+        revision = revision or self.revision
+        result, paths = {}, [safe_repo_path(p) for p in paths]
+        for start in range(0, len(paths), 50):
+            chunk = paths[start:start + 50]
+            body = urllib.parse.urlencode([('paths', p) for p in chunk] + [('expand', 'false')]).encode()
+
+            def fetch(body=body):
+                with self._open(f'{self.endpoint}/api/datasets/{self.repo}/paths-info/{revision}', body) as response:
+                    return json.loads(response.read(16 * MiB))
+            for item in self.retry.call(fetch, what='paths-info'):
+                if item.get('type') != 'file':
+                    continue
+                lfs = item.get('lfs') or {}
+                result[item['path']] = RemoteFile(item['path'], int(item['size']), lfs.get('oid'), item.get('oid'))
+        return result
+
+    def _stream(self, path, revision, sink):
+        url = f'{self.endpoint}/datasets/{self.repo}/resolve/{revision or self.revision}/{self._quoted(path)}'
+        with self._open(url) as response:
+            while True:
+                data = response.read(MiB)
+                if not data:
+                    break
+                sink(data)
+
+    def read(self, path, *, limit=64 * MiB, revision=None, expected=None):
+        """Small file into memory, verified when `expected` (a RemoteFile) is given."""
+        expected = expected or self.info([path], revision).get(path)
+        if expected is None:
+            raise FileNotFoundError(f'{path} is not in {self.repo}@{revision or self.revision}')
+        if expected.size > limit:
+            raise ValueError(f'{path} exceeds the {human(limit)} read bound')
+
+        def fetch():
+            parts = []
+            self._stream(path, revision, parts.append)
+            return b''.join(parts)
+        raw = self.retry.call(fetch, what='download')
+        ok, reason = remote_matches(expected, hash_bytes(raw))
+        if not ok:
+            raise VerificationError(f'Downloaded {path} differs from the Hub listing: {reason}')
+        return raw
+
+    def download(self, path, target, *, expected=None, admit=None, revision=None):
+        """Stream one file to `target` (written once, via .partial), verified; returns its Digest."""
+        expected = expected or self.info([path], revision).get(path)
+        if expected is None:
+            raise FileNotFoundError(f'{path} is not in {self.repo}@{revision or self.revision}')
+        target = Path(target)
+        if admit:
+            admit(expected.size)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + '.partial')
+
+        def fetch():
+            sha, blob, count = hashlib.sha256(), hashlib.sha1(b'blob %d\0' % expected.size), 0
+            with partial.open('wb') as stream:
+                def sink(data):
+                    nonlocal count
+                    count += len(data)
+                    if count > expected.size:
+                        raise VerificationError(f'{path} is longer than its Hub listing')
+                    sha.update(data)
+                    blob.update(data)
+                    stream.write(data)
+                self._stream(path, revision, sink)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return Digest(count, sha.hexdigest(), blob.hexdigest())
+        try:
+            digest = self.retry.call(fetch, what='download')
+            ok, reason = remote_matches(expected, digest)
+            if not ok:
+                raise VerificationError(f'Downloaded {path} differs from the Hub listing: {reason}')
+            partial.replace(target)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        return digest
+
+
+# --------------------------------------------------------------------------
 # push-world
 
 
@@ -2208,6 +2454,9 @@ def build_parser():
     move = sub.add_parser('migrate', help='copy the private world dataset into the public store')
     move.add_argument('--only', default='tiles,validations,snapshot,oakbrook,card')
     move.add_argument('--limit', type=int, default=None, help='first N tiles/v1 files (subset run)')
+    batch = sub.add_parser('push-batch', help='commit caller-owned files listed in a batch manifest')
+    batch.add_argument('--manifest', type=Path, required=True,
+                       help='JSON {schema, label, items: [{path, local, sha256, bytes}]}')
     check = sub.add_parser('verify', help='re-check remote sizes/hashes for a manifest')
     check.add_argument('--manifest', required=True, help='local JSON or hf:<path in repo>')
     check.add_argument('--prefix', default='')
@@ -2236,6 +2485,11 @@ def main(argv=None, hub_factory=Hub):
             result = push_world(ctx, args.save, only_changed=args.only_changed, dry_run=args.dry_run,
                                 frame_path=args.frame, source_revision=args.source_revision,
                                 update_catalog=not args.no_catalog)
+        elif args.command == 'push-batch':
+            request = json.loads(args.manifest.read_text())
+            if request.get('schema') != BATCH_SCHEMA:
+                raise SystemExit('Unsupported batch manifest schema')
+            result = push_batch(ctx, request['items'], request.get('label') or 'Batch')
         elif args.command == 'migrate':
             groups = {g.strip() for g in args.only.split(',') if g.strip()}
             unknown = groups - {'tiles', 'validations', 'snapshot', 'oakbrook', 'card'}

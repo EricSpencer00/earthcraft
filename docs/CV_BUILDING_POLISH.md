@@ -168,7 +168,7 @@ wall's previous appearance.
 
 ## Fast generation and distance rendering
 
-Run the pilot on the Mac mini/LaCie. Keep the MacBook for coordination and
+Run the pilot on a compute host, not an external drive. Keep the MacBook for coordination and
 client inspection. Begin with two CPU workers and a measured memory limit,
 not an unbounded city-wide CV job. Use metadata/low-resolution imagery for
 selection and fetch larger images only for the best views of a wall. Reuse
@@ -338,6 +338,6 @@ The current code already provides the useful boundaries:
 A future polish stage should consume immutable source/geometry receipts, emit a
 new appearance receipt, and run before live publication. It should carry
 `llm_used: false`, preserve provenance hashes, and fail closed on missing
-calibration, unsupported geometry, or changed source bytes. The self-hosted
-LaCie CI workflow can run these CPU-bound stages in bounded batches while the
+calibration, unsupported geometry, or changed source bytes. A bounded compute
+host can run these CPU-bound stages in batches while the
 live Minecraft handoff remains a separate, edit-safe process.

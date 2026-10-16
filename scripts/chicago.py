@@ -161,7 +161,7 @@ def run(root, pilot):
                 if rss>32*GIB:raise RuntimeError('32 GiB process memory stop threshold')
                 if psutil.swap_memory().used-swap_start>2*GIB:raise RuntimeError('2 GiB system swap-growth threshold')
                 if time.time()-started>record['maximum_seconds']:raise RuntimeError('Wall-time limit reached')
-                # LaCie use outside the project is untouched; check project size once per minute.
+                # Space outside the project is untouched; check project size once per minute.
                 if time.monotonic() >= next_size_check:
                     size=sum(f.stat().st_size for f in root.rglob('*') if f.is_file())
                     if size>100*GIB:raise RuntimeError('100 GiB external project budget')

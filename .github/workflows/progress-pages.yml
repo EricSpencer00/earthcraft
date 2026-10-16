@@ -12,7 +12,6 @@ on:
       - tests/test_headless_blocks.py
       - tests/headless_browser.mjs
       - tests/dashboard_browser.mjs
-      - tests/mini_transport.mjs
       - requirements-headless.txt
       - docs/HEADLESS_EVIDENCE.md
       - docs/photos/watertower-sep-10-26.png
@@ -75,7 +74,6 @@ jobs:
           node tests/local_files.mjs
           node tests/cell_browser.mjs
           node tests/source_bound_v2.mjs
-          node tests/mini_transport.mjs
           node tests/dashboard_browser.mjs site
           node tests/headless_browser.mjs site/headless
       - name: Configure GitHub Pages
