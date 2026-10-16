@@ -29,3 +29,20 @@ test('resource deadline stops retries',async()=>{
     {shouldStop:()=>true,sleep:async()=>assert.fail('Deadline must stop immediately')}));
   assert.equal(calls,1);
 });
+test('explicit transport timeouts retain the four-attempt limit and backoff',async()=>{
+ for(const executable of ['/usr/bin/ssh','/usr/bin/rsync']){
+  let calls=0;const delays=[];
+  const error=Object.assign(failure('ETIMEDOUT','command timeout',executable),{timedOut:true});
+  await assert.rejects(retryTransport(async()=>{calls++;throw error;},{sleep:async ms=>delays.push(ms)}));
+  assert.equal(calls,4);assert.deepEqual(delays,[5000,10000,20000]);
+ }
+});
+test('uploader timeouts, authentication errors and output bounds are not transport retries',async()=>{
+ for(const error of [Object.assign(failure('ETIMEDOUT','timeout','/fake/uploader'),{timedOut:true}),
+  Object.assign(failure('ETIMEDOUT','Permission denied (publickey)'),{timedOut:true}),
+  failure('ERR_OUTPUT_LIMIT','output exceeds bound')]){
+  let calls=0;
+  await assert.rejects(retryTransport(async()=>{calls++;throw error;},{sleep:async()=>{}}));
+  assert.equal(calls,1);
+ }
+});

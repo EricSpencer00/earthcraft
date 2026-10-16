@@ -129,13 +129,13 @@ class GeneratedArchiveTests(unittest.TestCase):
             SimpleNamespace(id='EricSpencer00/earthcraft-minecraft-world',private=True,sha='a',siblings=[]),
             SimpleNamespace(id='EricSpencer00/earthcraft-minecraft-world',private=True,sha='b',siblings=[entry]),
             SimpleNamespace(id='EricSpencer00/earthcraft-minecraft-world',private=True,sha='c',siblings=[entry])]
-        module=SimpleNamespace(HfApi=lambda:api,hf_hub_download=Mock())
+        module=SimpleNamespace(HfApi=lambda:api,HfFileSystem=Mock(),CommitOperationAdd=lambda **kw:SimpleNamespace(**kw))
         with patch.dict(sys.modules,{'huggingface_hub':module}):
             with self.assertRaisesRegex(ValueError,'Remote index changed'):
                 upload(archive,result['sha256'],sha(self.control/'plan.json'),
                        'EricSpencer00/earthcraft-minecraft-world',self.root/'proof.json')
-        self.assertEqual(api.upload_file.call_count,1)
-        self.assertEqual(api.upload_file.call_args.kwargs['path_in_repo'],remote)
+        self.assertEqual(api.create_commit.call_count,0)
+        self.assertEqual(api.upload_file.call_count,0)
 
 
 if __name__ == '__main__':unittest.main()
