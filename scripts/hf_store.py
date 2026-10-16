@@ -334,7 +334,12 @@ def bound_hf_environment(guard, *, shard_cache_bytes=128 * MiB, log_max='16mb', 
     """Point every Hugging Face client write into the guarded scratch root.
 
     Must run before huggingface_hub/hf_xet are imported: both read these at
-    import. The login token stays where `hf auth login` put it.
+    import. The login token stays where `hf auth login` put it. Measured with
+    hf_xet 1.4.2: the chunk cache stays empty; the shard cache is pruned to its
+    limit at the start of each upload session, so it peaks near the limit plus
+    one commit's shards; INFO logging costs ~22 KB per downloaded file, so the
+    Rust runtime logs at WARN unless RUST_LOG is already set. The DiskGuard cap
+    covers all of it regardless.
     """
     environ = os.environ if environ is None else environ
     loaded = [name for name in ('huggingface_hub', 'hf_xet') if name in sys.modules]
@@ -359,6 +364,7 @@ def bound_hf_environment(guard, *, shard_cache_bytes=128 * MiB, log_max='16mb', 
         'HF_HUB_DISABLE_SYMLINKS_WARNING': '1',
         'TMPDIR': str(tmp),
     }
+    values['RUST_LOG'] = environ.get('RUST_LOG', 'warn')
     for path in (home, tmp):
         guard.check(0, 'create client cache directory')
         path.mkdir(parents=True, exist_ok=True)
