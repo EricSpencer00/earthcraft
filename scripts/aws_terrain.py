@@ -24,9 +24,23 @@ REGISTRY='https://registry.opendata.aws/terrain-tiles/'
 ATTRIBUTION='https://github.com/tilezen/joerd/blob/master/docs/attribution.md'
 FORMAT='https://github.com/tilezen/joerd/blob/master/docs/formats.md'
 SOURCE_DOC='https://github.com/tilezen/joerd/blob/master/docs/data-sources.md'
+MIN_PREPARATION_FREE_BYTES=22*1024**3
 
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def preparation_free_bytes():
+    """Return free bytes on the code volume checked by terrain preparation."""
+    return shutil.disk_usage(ROOT).free
+
+
+def require_preparation_capacity():
+    """Keep the original source-preparation reserve as the final guard."""
+    free_bytes=preparation_free_bytes()
+    if free_bytes<MIN_PREPARATION_FREE_BYTES:
+        raise ValueError('Preserve 20 GiB free reserve plus working allowance')
+    return free_bytes
 
 
 def write_rasters(path, elevation, cover):
@@ -97,7 +111,7 @@ def fetch_tile(cache,zoom,x,y):
 def prepare(lon,lat,size,destination,cache=None,chart_meta=None):
     destination=Path(destination);cache=Path(cache or ROOT/'runs/aws-terrain-cache')
     if destination.exists():raise FileExistsError(destination)
-    if shutil.disk_usage(ROOT).free<22*1024**3:raise ValueError('Preserve 20 GiB free reserve plus working allowance')
+    require_preparation_capacity()
     meta=chart_meta or chart(lon,lat,size);lons,lats=geographic_centres(meta)
     px,py=tile_pixels(lons,lats)
     pairs=np.unique(np.column_stack((px.ravel()//256,py.ravel()//256)),axis=0)

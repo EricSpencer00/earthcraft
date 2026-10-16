@@ -4,7 +4,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import {spawn} from 'node:child_process';
-import {sshOptions} from './mini_transport.mjs';
 
 const argv=process.argv.slice(2);
 const config=JSON.parse(await fs.readFile(argv[argv.indexOf('--config')+1],'utf8'));
@@ -15,16 +14,6 @@ async function atomic(target,raw) {
   await fs.mkdir(path.dirname(target),{recursive:true});
   const temp=target+'.partial'; const file=await fs.open(temp,'w',0o600);
   try {await file.writeFile(raw);await file.sync();} finally {await file.close();}
-  await fs.rename(temp,target);
-}
-async function installFile(target,source,raw) {
-  if(!config.native_region_compression||process.platform!=='darwin'||!target.endsWith('.mca'))return atomic(target,raw);
-  // Files remain ordinary Anvil files. APFS transparently decodes native
-  // filesystem compression, avoiding each chunk's sector-padding disk cost.
-  const temp=target+'.partial';await fs.mkdir(path.dirname(target),{recursive:true});
-  await command('/usr/bin/ditto',['--hfsCompression',source,temp]);
-  if(digest(await fs.readFile(temp))!==digest(raw))throw new Error('Native region compression changed readable bytes');
-  const file=await fs.open(temp,'r');try{await file.sync();}finally{await file.close();}
   await fs.rename(temp,target);
 }
 async function readOptional(target) {try{return await fs.readFile(target);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
@@ -45,10 +34,9 @@ async function route() {
   if(values.hostname!==config.hostname||values.user!==config.user||(values.proxyjump??'none')!=='none')throw new Error('Personal mini SSH route changed');
 }
 async function remote(args,input=null) {
-  await route();return command('/usr/bin/ssh',[...sshOptions(control,config),config.host,args.map(quote).join(' ')],input);
+  await route();return command('/usr/bin/ssh',['-o','BatchMode=yes','-o','ConnectTimeout=15',config.host,args.map(quote).join(' ')],input);
 }
-const rsyncShell=()=>['/usr/bin/ssh',...sshOptions(control,config)].map(quote).join(' ');
-async function transfer(source,destination) {await route();await command('/usr/bin/rsync',['-az','--timeout=120','-e',rsyncShell(),source,destination]);}
+async function transfer(source,destination) {await route();await command('/usr/bin/rsync',['-az','--timeout=120',source,destination]);}
 async function fence(target) {
   const binary=await fs.readFile(config.lock_helper);
   if(digest(binary)!==config.lock_helper_sha256)throw new Error('Save-lock helper changed');
@@ -69,51 +57,18 @@ const saved=await readOptional(statePath);
 const state=saved?JSON.parse(saved):{known:{},deadline:Date.now()/1000+45*86400,batches:0};
 await atomic(statePath,JSON.stringify(state));
 let stopping=false,failures=0;
-const batchLimit=config.batch_limit??24;
-if(!Number.isInteger(batchLimit)||batchLimit<1||batchLimit>32)throw new Error('Bounded delivery batch required');
 process.on('SIGTERM',()=>stopping=true);process.on('SIGINT',()=>stopping=true);
-async function acknowledge(record, transport) {
- for(const entry of record.entries)state.known[entry.tile]=entry.receipt_sha256;
- delete state.pending;state.batches++;
- state.cleanup=transport;
- // Save the acknowledgement before removing transport bytes. A restart may
- // repeat cleanup, but must never retry a bundle that has already been removed.
- await atomic(statePath,JSON.stringify(state));
-}
-async function cleanup() {
- const pending=state.cleanup;if(!pending)return;
- const code=`import shutil; from pathlib import Path; `+
-  (pending.destination?`shutil.rmtree(${JSON.stringify(pending.destination)},ignore_errors=True); `:'')+
-  `Path(${JSON.stringify(pending.bundle)}).unlink(missing_ok=True)`;
- await remote([config.python,'-c',code]);
- if(pending.local)await fs.rm(pending.local,{recursive:true,force:true});
- delete state.cleanup;await atomic(statePath,JSON.stringify(state));
-}
 try {
  while(!stopping&&Date.now()/1000<state.deadline) {
   const status={time:Date.now()/1000,delivered_tiles:Object.keys(state.known).length,deadline:state.deadline,state:'running'};
   try {
-   if(config.supervisor) {
-    const args=config.supervisor;
-    status.generation=JSON.parse(await remote(['/usr/bin/env',
-      'EARTHCRAFT_BULK_ROOT='+args.bulk_root,'EARTHCRAFT_CLIENT_JAR='+args.client_jar,
-      ...(args.building_index?['EARTHCRAFT_BUILDING_INDEX='+args.building_index]:[]),
-      config.python,config.root+'/scripts/regional_supervisor.py','--ensure','--control',config.control,
-      '--bulk',config.bulk,'--frame',args.frame,'--illinois',args.illinois,'--reserve-gib','150',
-      '--base-workers',String(args.base_workers??1),'--scan-workers',String(args.scan_workers??1)]));
-    if(status.generation.state==='waiting_for_storage') {
-     status.state='waiting_for_storage';
-     throw new Error('External generation storage is unavailable; waiting for LaCie');
-    }
-   }
-   await cleanup();
    const disk=await fs.statfs(config.world);
    if(disk.bavail*disk.bsize<(config.reserve_gib??50)*2**30){status.state='storage_boundary';throw new Error('Local storage reserve reached');}
    if(!state.pending) {
     const legacy=(Array.isArray(config.legacy)?config.legacy:[config.legacy]).flatMap(directory=>['--legacy',directory]);
     const record=JSON.parse(await remote([config.python,config.root+'/scripts/regional_bundle.py','--control',config.control,
-      '--bulk',config.bulk,...legacy,'--limit',String(batchLimit)],JSON.stringify(state.known)+'\n'));
-    if(record.bytes>512*2**20||path.dirname(record.bundle)!==config.control+'/exports'||!/^batch-\d+\.tar$/.test(path.basename(record.bundle)))throw new Error('Export exceeded task bounds');
+      '--bulk',config.bulk,...legacy,'--limit','8'],JSON.stringify(state.known)+'\n'));
+    if(record.bytes>512*2**20||path.dirname(record.bundle)!==config.bulk+'/exports'||!/^batch-\d+\.tar$/.test(path.basename(record.bundle)))throw new Error('Export exceeded task bounds');
     state.pending=record;await atomic(statePath,JSON.stringify(state));
    }
    const record=state.pending;
@@ -131,7 +86,7 @@ try {
      }
      await atomic(path.join(replica,'session.lock'),Buffer.alloc(3));
      await atomic(path.join(local,'request.json'),JSON.stringify({originals,absent}));
-     const destination=config.control+'/deliveries/'+attempt;
+     const destination=config.bulk+'/deliveries/'+attempt;
      await remote([config.python,'-c',`from pathlib import Path; Path(${JSON.stringify(destination)}).mkdir(parents=True,exist_ok=True)`]);
      await transfer(local+'/',config.host+':'+destination+'/');
      await remote([config.python,config.root+'/scripts/regional_merge.py','--task',destination,'--bundle',record.bundle]);
@@ -140,7 +95,7 @@ try {
      if(JSON.stringify(result.originals)!==JSON.stringify(originals))throw new Error('Merge used another save snapshot');
      const files=Object.keys(result.changed);for(const name of files)safeName(name);
      const list=path.join(local,'changed-files.txt');await atomic(list,files.join('\n')+'\n');
-     await route();await command('/usr/bin/rsync',['-az','--timeout=120','-e',rsyncShell(),'--files-from='+list,config.host+':'+destination+'/current/',local+'/result/']);
+     await route();await command('/usr/bin/rsync',['-az','--timeout=120','--files-from='+list,config.host+':'+destination+'/current/',local+'/result/']);
      for(const [name,checksum] of Object.entries(originals))if(digest(await fs.readFile(path.join(config.world,name)))!==checksum)throw new Error('Save changed inside the session fence');
      for(const name of absent)if(await readOptional(path.join(config.world,name))!==null)throw new Error('Absent save file appeared inside fence');
      const backup=path.join(control,'installation-backups',attempt);await fs.mkdir(backup,{recursive:true});
@@ -151,32 +106,28 @@ try {
        const compressed=zlib.gzipSync(before,{level:1});await atomic(path.join(backup,name+'.gz'),compressed);
        if(digest(zlib.gunzipSync(await fs.readFile(path.join(backup,name+'.gz'))))!==digest(before))throw new Error('Private region backup differs');
       }
-      await installFile(path.join(config.world,name),path.join(local,'result',name),incoming);
+      await atomic(path.join(config.world,name),incoming);
       if(digest(await fs.readFile(path.join(config.world,name)))!==result.changed[name])throw new Error('Installed file differs');
      }
-     result.native_region_compression=Boolean(config.native_region_compression);
      await atomic(path.join(backup,'installation.json'),JSON.stringify(result,null,2));
-     await acknowledge(record,{destination,local,bundle:record.bundle});
+     for(const entry of record.entries)state.known[entry.tile]=entry.receipt_sha256;
+     await atomic(statePath,JSON.stringify(state));
      // Acknowledged transport replicas are disposable; verified private
      // pre-update backups and delivery reports stay in this local control.
-     await cleanup();
+     await remote([config.python,'-c',`import shutil; from pathlib import Path; shutil.rmtree(${JSON.stringify(destination)}); Path(${JSON.stringify(record.bundle)}).unlink()`]);
+     await fs.rm(local,{recursive:true});
     } finally {await releaseWorld();}
    } else {
-    await acknowledge(record,{bundle:record.bundle});await cleanup();
+    await remote([config.python,'-c',`from pathlib import Path; Path(${JSON.stringify(record.bundle)}).unlink()`]);
    }
-   failures=0;
-   status.batch_tiles=record.entries.length;
+   delete state.pending;state.batches++;await atomic(statePath,JSON.stringify(state));failures=0;
   } catch(error) {
    status.reason=error.message;
    if(error.message==='world_open')status.state='waiting_for_closed_world';
-   else if(!['storage_boundary','waiting_for_storage'].includes(status.state)){status.state='retrying';status.failures=++failures;}
+   else if(status.state!=='storage_boundary'){status.state='retrying';status.failures=++failures;}
   }
   status.delivered_tiles=Object.keys(state.known).length;await atomic(path.join(control,'publisher-status.json'),JSON.stringify(status));
   if(status.state==='storage_boundary'||failures>=10)break;
-  // Drain a generated backlog continuously. Empty queues/open saves/failures
-  // keep bounded polling so coordination does not consume the MacBook.
-  const pause=status.state==='running'&&status.batch_tiles===batchLimit?1:
-    status.state==='running'&&status.batch_tiles>0?5:Math.min(600,120*Math.max(1,failures));
-  for(let i=0;i<pause&&!stopping;i++)await new Promise(resolve=>setTimeout(resolve,1000));
+  for(let i=0;i<Math.min(600,120*Math.max(1,failures))&&!stopping;i++)await new Promise(resolve=>setTimeout(resolve,1000));
  }
 } finally {await releasePublisher();}

@@ -271,6 +271,14 @@ class Journal:
         return [{**dict(row),'stage':STAGES[row['stage']]} for row in self.db.execute(
             'SELECT stage,state,count(*) AS count FROM jobs GROUP BY stage,state ORDER BY stage,state')]
 
+    def has_claimable_sources(self,now=None):
+        """Read whether source work is eligible without creating a lease or attempt."""
+        now=time.time() if now is None else now
+        if not math.isfinite(now):raise ValueError('Invalid source eligibility time')
+        return self.db.execute("""SELECT 1 FROM jobs WHERE stage=0 AND
+            (state='pending' OR (state='running' AND expires<=?)) AND
+            COALESCE(not_before,0)<=? LIMIT 1""",(now,now)).fetchone() is not None
+
     def fail(self,job,receipt):
         """Retain a concrete failure and let other tiles advance; no fake success."""
         receipt=Path(receipt);raw=receipt.read_bytes();evidence=json.loads(raw)

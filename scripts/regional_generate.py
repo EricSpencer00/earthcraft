@@ -23,7 +23,8 @@ from pyproj import Transformer
 from shapely.geometry import box, shape
 from shapely.ops import transform
 
-from aws_terrain import prepare as terrain
+from aws_terrain import (MIN_PREPARATION_FREE_BYTES, preparation_free_bytes,
+                         prepare as terrain)
 from chicago_tiles import Journal, boundary_geometry, digest, tile_plan
 from metric_way_index import MetricWayIndex, build_index
 from metric_world import build
@@ -36,6 +37,33 @@ from regional_sources import validate as validate_sources
 from worker_lease import heartbeat
 
 _SCAN_COVERAGES = {}
+MIN_CONTROL_FREE_BYTES = 12 * 2**30
+
+
+def claim_base_work(journal, worker_id, available_bytes=None):
+    """Claim geometry first; wait for terrain capacity before charging a source attempt."""
+    job=journal.claim('geometry',worker_id,lease_seconds=3600)
+    if job is not None:return job,None
+    if not journal.has_claimable_sources():return None,None
+    free_bytes=preparation_free_bytes() if available_bytes is None else available_bytes
+    if free_bytes<MIN_PREPARATION_FREE_BYTES:
+        return None,{'available_bytes':free_bytes,'required_bytes':MIN_PREPARATION_FREE_BYTES}
+    return journal.claim('sources',worker_id,lease_seconds=3600),None
+
+
+def claim_lane_work(journal, lane, worker_id, control_free_bytes, source_available_bytes=None):
+    """Keep both lanes above the control reserve before claiming any attempt."""
+    if control_free_bytes < MIN_CONTROL_FREE_BYTES:
+        return None, 'control', {
+            'available_bytes':control_free_bytes,
+            'required_bytes':MIN_CONTROL_FREE_BYTES,
+        }
+    if lane == 'base':
+        job, source_wait = claim_base_work(journal, worker_id, source_available_bytes)
+        return job, 'source' if source_wait is not None else None, source_wait
+    if lane == 'scans':
+        return journal.claim('appearance',worker_id,lease_seconds=3600),None,None
+    raise ValueError('Unsupported worker lane')
 
 
 def supported_points(pieces,grid,surfaces):
@@ -400,17 +428,36 @@ def run(args):
             signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
             processed = 0
             consecutive_failures = 0
+            source_capacity_waiting = False
+            control_capacity_waiting = False
             while not stopping and processed < args.limit:
                 if not Path('/Volumes/LaCie').is_mount():
                     raise ValueError('LaCie unmounted during generation; stop bulk writes')
                 if shutil.disk_usage(bulk).free < args.reserve_gib*2**30:
                     raise ValueError('Regional bulk reserve reached; preserve existing artifacts')
-                if shutil.disk_usage(control).free < 12*2**30:
-                    raise ValueError('Regional control disk reserve reached')
-                job = journal.claim('appearance' if args.lane == 'scans' else 'geometry',
-                                    args.worker_id, lease_seconds=3600)
-                if job is None and args.lane == 'base':
-                    job = journal.claim('sources', args.worker_id, lease_seconds=3600)
+                job, wait_kind, capacity_wait = claim_lane_work(
+                    journal,args.lane,args.worker_id,shutil.disk_usage(control).free)
+                if wait_kind == 'control':
+                    if not control_capacity_waiting:
+                        print(json.dumps({'event':'waiting_for_control_capacity',
+                            'available_bytes':capacity_wait['available_bytes'],
+                            'required_bytes':capacity_wait['required_bytes']}),flush=True)
+                    control_capacity_waiting = True
+                    time.sleep(15);continue
+                if control_capacity_waiting:
+                    print(json.dumps({'event':'control_capacity_available'}),flush=True)
+                    control_capacity_waiting = False
+                if args.lane == 'base':
+                    if wait_kind == 'source':
+                        if not source_capacity_waiting:
+                            print(json.dumps({'event':'waiting_for_source_capacity',
+                                'available_bytes':capacity_wait['available_bytes'],
+                                'required_bytes':capacity_wait['required_bytes']}),flush=True)
+                        source_capacity_waiting=True
+                        time.sleep(15);continue
+                    if source_capacity_waiting and job is not None and job['stage']=='sources':
+                        print(json.dumps({'event':'source_capacity_available'}),flush=True)
+                        source_capacity_waiting=False
                 if job is None:
                     if args.lane == 'scans' and any(row['state'] != 'complete' and row['stage'] in ('sources', 'geometry')
                                                   for row in journal.summary()):
