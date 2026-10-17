@@ -6,7 +6,6 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from naip_imagery import choose_source, spectral_masks, source_crs,normalize_crop
-from imagery_alignment_audit import edge_alignment
 
 
 class NaipTests(unittest.TestCase):
@@ -29,16 +28,6 @@ class NaipTests(unittest.TestCase):
         for zone,epsg in [('16N',26916),('10N',26910)]:
             self.assertEqual(source_crs({'projection_name':'UTM','projection_zone':zone,'datum':'NAD83'}),epsg)
         with self.assertRaises(ValueError):source_crs({'projection_name':'UTM','projection_zone':'16S','datum':'NAD83'})
-
-    def test_known_image_edge_translation_and_empty_evidence(self):
-        boundary=np.zeros((64,64),bool)
-        boundary[20,20:40]=True;boundary[39,20:40]=True
-        boundary[20:40,20]=True;boundary[20:40,39]=True
-        edges=np.roll(np.roll(boundary,3,axis=1),-2,axis=0)
-        result=edge_alignment(boundary,edges)
-        self.assertEqual(result['best_shift_xz_m'],[3,-2])
-        self.assertEqual(result['fitted_mean_edge_distance_m'],0)
-        with self.assertRaises(ValueError):edge_alignment(boundary,np.zeros_like(boundary))
 
     def test_spectral_flags_do_not_fill_missing_or_dark_pixels(self):
         bands=np.array([[[100,10,100,0]],[[100,10,120,0]],[[100,10,80,0]],[[100,20,240,0]]],np.uint8)

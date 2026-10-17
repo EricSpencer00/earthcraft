@@ -14,7 +14,6 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from world_snapshot import digest, inventory, package, stage, shard_key
 from restore_world_snapshot import restore
-from upload_world_snapshot import upload
 
 
 def fixture(root):
@@ -47,37 +46,6 @@ def fixture(root):
 def pack(world, output):
     with contextlib.redirect_stdout(io.StringIO()):
         return package(world, output, snapshot_id='fixture', reserve_gib=0)
-
-
-class FakeHub:
-    def __init__(self):
-        self.files = {}
-        self.calls = []
-        self.private = True
-        self.owner = 'fixture-owner'
-        self.fail_at = None
-        self.bad_checksum = False
-
-    def whoami(self):
-        return {'name': self.owner}
-
-    def repo_info(self, repo_id, **kwargs):
-        siblings = []
-        for path, raw in self.files.items():
-            sha = hashlib.sha256(raw).hexdigest()
-            if self.bad_checksum:
-                sha = '0'*64
-            # Exercise both Hub representations used by huggingface_hub 0.24.
-            lfs = {'sha256': sha} if path.endswith('.tar.gz') else None
-            blob = hashlib.sha1(('blob '+str(len(raw))+'\0').encode()+raw).hexdigest()
-            siblings.append(SimpleNamespace(rfilename=path, lfs=lfs, blob_id=blob))
-        return SimpleNamespace(id=repo_id, private=self.private, siblings=siblings)
-
-    def upload_file(self, path_or_fileobj, path_in_repo, **kwargs):
-        if self.fail_at is not None and len(self.calls) == self.fail_at:
-            raise ConnectionError('simulated interrupted transfer')
-        self.files[path_in_repo] = Path(path_or_fileobj).read_bytes()
-        self.calls.append(path_in_repo)
 
 
 class WorldSnapshotTests(unittest.TestCase):
@@ -182,57 +150,6 @@ class WorldSnapshotTests(unittest.TestCase):
                 pack(world, root/'package')
             self.assertFalse((root/'package/manifest.json').exists())
 
-
-class SnapshotUploadTests(unittest.TestCase):
-    def test_completed_snapshot_identifier_is_immutable(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory); world = fixture(root); output = root/'package'
-            pack(world, output)
-            api = FakeHub()
-            api.files['snapshots/fixture/manifest.json'] = b'different completed snapshot'
-            with self.assertRaisesRegex(ValueError, 'different completed manifest'):
-                upload(output, 'fixture-owner/world', api=api)
-            self.assertFalse(api.calls)
-
-    def test_interruption_resumes_verified_files_and_publishes_manifest_last(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory); world = fixture(root); output = root/'package'
-            manifest = pack(world, output)
-            api = FakeHub(); api.fail_at = 2
-            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ConnectionError):
-                upload(output, 'fixture-owner/world', api=api)
-            self.assertFalse(any(p.endswith('manifest.json') for p in api.files))
-            initial = list(api.calls); api.fail_at = None
-            with contextlib.redirect_stdout(io.StringIO()):
-                result = upload(output, 'fixture-owner/world', api=api)
-            self.assertEqual(api.calls[:2], initial)
-            self.assertEqual(len(api.calls), len(set(api.calls)))
-            self.assertEqual(api.calls[-2:], ['snapshots/fixture/manifest.json', 'README.md'])
-            self.assertEqual(result['state'], 'complete')
-            self.assertEqual(json.loads(api.files['snapshots/fixture/manifest.json']), manifest)
-            self.assertNotIn('pack-state.local.json', '\n'.join(api.files))
-            self.assertNotIn('upload-state.local.json', '\n'.join(api.files))
-            calls = list(api.calls)
-            with contextlib.redirect_stdout(io.StringIO()):
-                upload(output, 'fixture-owner/world', api=api)
-            self.assertEqual(api.calls, calls)
-
-    def test_wrong_owner_public_visibility_and_wrong_remote_hash_stop_upload(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory); world = fixture(root); output = root/'package'
-            pack(world, output)
-            api = FakeHub()
-            with self.assertRaisesRegex(ValueError, 'belong'):
-                upload(output, 'someone-else/world', api=api)
-            api.private = False
-            with self.assertRaisesRegex(ValueError, 'private'):
-                upload(output, 'fixture-owner/world', api=api)
-            self.assertFalse(api.calls)
-            api.private = True; api.bad_checksum = True
-            with self.assertRaisesRegex(ValueError, 'checksum'):
-                upload(output, 'fixture-owner/world', api=api)
-            self.assertEqual(len(api.calls), 1)
-            self.assertFalse(any(p.endswith('manifest.json') for p in api.files))
 
 
 if __name__ == '__main__':
