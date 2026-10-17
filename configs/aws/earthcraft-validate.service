@@ -1,0 +1,15 @@
+# Check open contribution pull requests on the dataset and comment PASS/FAIL. Never merges.
+[Unit]
+Description=Earthcraft: validate open contribution pull requests on the dataset (comment only)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/earthcraft/vendor/minecraft-client-1.21.10.jar
+
+[Service]
+Type=oneshot
+User=ubuntu
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/local/sbin/earthcraft-pipeline validate
+TimeoutStartSec=2h
+MemoryMax=3G

@@ -1,0 +1,11 @@
+[Unit]
+Description=Earthcraft: validate contribution pull requests every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -556,7 +556,8 @@ class Worker:
         self.worker_id = args.worker_id
         self.control = args.control.resolve()
         self.scratch = args.scratch.resolve()
-        self.cache_root, self.gen = self.scratch / 'cache', self.scratch / 'gen'
+        self.cache_root = args.cache_root.resolve() if getattr(args, 'cache_root', None) else self.scratch / 'cache'
+        self.gen = self.scratch / 'gen'
         self.hf_scratch = self.gen / f'_hf-{self.worker_id}'
         self.exit_code = 0
         self.events = []
@@ -1026,6 +1027,8 @@ def build_parser():
     parser.add_argument('--scratch', type=Path, default=ROOT / 'runs/scratch',
                         help='parent of cache/ and gen/ (default runs/scratch)')
     parser.add_argument('--repo', default=hf_store.DEFAULT_REPO)
+    parser.add_argument('--cache-root', type=Path, default=None,
+                        help='source cache directory (default SCRATCH/cache); several runs may share one')
     parser.add_argument('--hf-python', type=Path, default=None,
                         help='interpreter with huggingface_hub for hf_store (or EARTHCRAFT_HF_PYTHON)')
     parser.add_argument('--source-revision', default=None, help='generator revision recorded in tile.json')

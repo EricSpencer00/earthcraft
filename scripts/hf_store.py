@@ -560,7 +560,7 @@ class Hub:
                                         repo_type=self.repo_type)
         return {item.path: self._remote(item) for item in items if hasattr(item, 'blob_id')}
 
-    def commit(self, repo, items, message, revision=None):
+    def commit(self, repo, items, message, revision=None, create_pr=False):
         operations = []
         for item in items:
             operation = self._op(path_in_repo=item.path_in_repo, path_or_fileobj=str(item.local))
@@ -568,8 +568,9 @@ class Hub:
                 raise RuntimeError(f'File changed before commit: {item.path_in_repo}')
             operations.append(operation)
         info = self.api.create_commit(repo, operations, commit_message=message, repo_type=self.repo_type,
-                                      revision=revision)
-        return {'oid': info.oid, 'url': info.commit_url}
+                                      revision=revision, create_pr=create_pr)
+        return {'oid': info.oid, 'url': info.commit_url, 'pr_url': getattr(info, 'pr_url', None),
+                'pr_num': getattr(info, 'pr_num', None)}
 
     def download(self, repo, path, revision, local_dir):
         return Path(self._download(repo_id=repo, filename=path, repo_type=self.repo_type,
@@ -638,6 +639,7 @@ class BatchCommitter:
         self.hub, self.repo_id, self.ledger, self.guard = hub, repo_id, ledger, guard
         self.retry, self.log, self.max_bytes, self.max_files = retry, log, max_bytes, max_files
         self.revision, self.label, self.expand, self.on_flushed = revision, label, expand, on_flushed
+        self.create_pr, self.pr = False, None  # True: the first commit opens a pull request, later ones extend it
         self.pending, self.stats = [], {'committed_files': 0, 'committed_bytes': 0, 'skipped_files': 0,
                                         'skipped_bytes': 0, 'commits': []}
 
@@ -713,11 +715,17 @@ class BatchCommitter:
         def attempt():
             if not self.pending:  # an ambiguous earlier attempt already committed everything
                 return None
+            if self.create_pr:
+                return self.hub.commit(self.repo_id, list(self.pending), message, revision=self.revision,
+                                       create_pr=True)
             return self.hub.commit(self.repo_id, list(self.pending), message, revision=self.revision)
 
         commit = self.retry.call(attempt, what='create_commit', before_retry=self._drop_present)
         if not self.pending or commit is None:
             return None
+        if self.create_pr and commit.get('pr_num') is not None:
+            self.pr = {'num': commit['pr_num'], 'url': commit.get('pr_url')}
+            self.revision, self.create_pr = f'refs/pr/{commit["pr_num"]}', False
         self.verify(self.pending, commit['oid'])
         for item in self.pending:
             self.ledger.record(item.path_in_repo, item.digest, commit['oid'], item.source)
@@ -1408,7 +1416,7 @@ def push_files(ctx, src, dest, include=(), exclude=()):
 BATCH_SCHEMA = 'earthcraft.hf-store-batch.v1'
 
 
-def push_batch(ctx, items, label):
+def push_batch(ctx, items, label, create_pr=False):
     """Commit files another guarded tool wrote, in bounded verified commits.
 
     `items` is a list of {path, local, sha256, bytes}. Each local file is
@@ -1425,10 +1433,14 @@ def push_batch(ctx, items, label):
         if entry['path'] in seen:
             raise ValueError(f'Duplicate path in batch: {entry["path"]}')
         seen.add(entry['path'])
-    ctx.check_destination()
+    if create_pr:  # a contributor proposes files to someone else's dataset; the owner reviews and merges
+        ctx.retry.call(lambda: ctx.hub.info(ctx.repo), what='repo_info')
+    else:
+        ctx.check_destination()
     key = hashlib.sha256(canonical_json(sorted((e['path'], e['sha256']) for e in items))).hexdigest()[:16]
     ledger = Ledger(ctx.guard, 'batch-' + key, ctx.repo)
     committer = ctx.committer(ledger, label)
+    committer.create_pr = bool(create_pr)
     for entry in items:
         local = Path(entry['local'])
         if local.is_symlink() or not local.is_file():
@@ -1445,7 +1457,7 @@ def push_batch(ctx, items, label):
             raise VerificationError(f'Batch path was not verified on the Hub: {entry["path"]}')
         files[entry['path']] = {'sha256': record['sha256'], 'bytes': record['bytes'], 'commit': record['commit']}
     ctx.guard.remove(ledger.path)
-    return {'files': files, 'commits': [c['oid'] for c in committer.stats['commits']],
+    return {'files': files, 'commits': [c['oid'] for c in committer.stats['commits']], 'pr': committer.pr,
             **{k: v for k, v in committer.stats.items() if k != 'commits'}}
 
 
@@ -1459,15 +1471,16 @@ class StoreClient:
     """
 
     def __init__(self, *, python=None, scratch=None, repo=DEFAULT_REPO, cap=GiB, min_free=None,
-                 ctx=None, run=subprocess.run, log=None):
+                 ctx=None, run=subprocess.run, log=None, create_pr=False):
         if ctx is None and (python is None or scratch is None):
             raise ValueError('A Hub context or an interpreter plus scratch root is required')
         self.python, self.scratch, self.repo, self.cap, self.min_free = python, scratch, repo, cap, min_free
         self.ctx, self.run, self.log = ctx, run, log or (lambda **_: None)
+        self.create_pr = create_pr
 
     def push(self, items, label):
         if self.ctx is not None:
-            return push_batch(self.ctx, items, label)
+            return push_batch(self.ctx, items, label, create_pr=self.create_pr)
         scratch = Path(self.scratch)
         scratch.mkdir(parents=True, exist_ok=True)
         manifest = scratch / f'batch-{os.getpid()}-{time.time_ns()}.json'
@@ -1476,7 +1489,7 @@ class StoreClient:
                    '--cap', str(int(self.cap))]
         if self.min_free is not None:
             command += ['--min-free', str(int(self.min_free))]
-        command += ['push-batch', '--manifest', str(manifest)]
+        command += ['push-batch', '--manifest', str(manifest)] + (['--create-pr'] if self.create_pr else [])
         try:
             completed = self.run(command, capture_output=True, text=True)
         finally:
@@ -2457,6 +2470,8 @@ def build_parser():
     batch = sub.add_parser('push-batch', help='commit caller-owned files listed in a batch manifest')
     batch.add_argument('--manifest', type=Path, required=True,
                        help='JSON {schema, label, items: [{path, local, sha256, bytes}]}')
+    batch.add_argument('--create-pr', action='store_true',
+                       help='open a pull request on the dataset instead of committing to main (contributors)')
     check = sub.add_parser('verify', help='re-check remote sizes/hashes for a manifest')
     check.add_argument('--manifest', required=True, help='local JSON or hf:<path in repo>')
     check.add_argument('--prefix', default='')
@@ -2489,7 +2504,7 @@ def main(argv=None, hub_factory=Hub):
             request = json.loads(args.manifest.read_text())
             if request.get('schema') != BATCH_SCHEMA:
                 raise SystemExit('Unsupported batch manifest schema')
-            result = push_batch(ctx, request['items'], request.get('label') or 'Batch')
+            result = push_batch(ctx, request['items'], request.get('label') or 'Batch', create_pr=args.create_pr)
         elif args.command == 'migrate':
             groups = {g.strip() for g in args.only.split(',') if g.strip()}
             unknown = groups - {'tiles', 'validations', 'snapshot', 'oakbrook', 'card'}

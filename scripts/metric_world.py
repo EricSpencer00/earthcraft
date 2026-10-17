@@ -435,6 +435,11 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         ground,footprint_union,surface,BLOCK['water'],buildings,point_cells)
     preview_spawn_safe = bool(surface[spawn_z,spawn_x] != BLOCK['water'])
     spawn = [spawn_x+.5,spawn_top+1,spawn_z+.5]
+    if 'Player' not in d:
+        # The published clean template has no player (sources/templates/v1). This synthetic single-player
+        # stand-in only positions the spawn view in the generated level.dat, which is never published.
+        d['Player'] = n.Compound({'Pos': n.List[n.Double]([0, 0, 0]), 'Rotation': n.List[n.Float]([0, 0]),
+                                  'Inventory': n.List[n.Compound]([]), 'abilities': n.Compound({})})
     player = d['Player']
     # Face the observed structure from the safe terrain spawn, without moving blocks.
     yaw = 0.0
