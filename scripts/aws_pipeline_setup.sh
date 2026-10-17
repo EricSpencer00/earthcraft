@@ -2,7 +2,9 @@
 # Earthcraft always-on pipeline host (AWS EC2, Ubuntu 24.04). See docs/AWS_PIPELINE.md.
 #
 # On the coordinator (MacBook, has the AWS CLI, the ssh alias and the private files):
-#   scripts/aws_pipeline_setup.sh launch            new spot instance; it bootstraps itself (private inputs from S3)
+#   scripts/aws_pipeline_setup.sh launch [--count N] [--dry-run]
+#                                                   N more identical spot boxes (default 1); every box is
+#                                                   re-tagged EarthcraftShard=i/T and picks up its share itself
 #   scripts/aws_pipeline_setup.sh push [HOST]       copy private inputs (client JAR, templates, frame), start
 # On the instance (cloud-init runs `bootstrap` as root; the units call the rest):
 #   aws_pipeline_setup.sh bootstrap                 packages, checkout, venv, units, control seed
@@ -40,7 +42,7 @@ bootstrap() {
   apt-get update -qq
   apt-get install -y -qq python3-venv python3-dev git build-essential sqlite3 curl >/dev/null
   mkdir -p "$ROOT" /etc/earthcraft && chown "$SVC_USER:$SVC_USER" "$ROOT"
-  [ -f "$ENV_FILE" ] || printf 'EARTHCRAFT_BRANCH=main\n' > "$ENV_FILE"
+  [ -f "$ENV_FILE" ] || printf 'EARTHCRAFT_BRANCH=main\nEARTHCRAFT_WORKERS=4\n' > "$ENV_FILE"
   if [ ! -d "$ROOT/.git" ]; then as_user git clone -q -b "$BRANCH" "$REPO_URL" "$ROOT"; fi
   [ -x "$PY" ] || as_user python3 -m venv "$ROOT/.venv"
   install_requirements
@@ -92,9 +94,16 @@ for key, path in targets.items():
 PYEOF
 }
 
+shard() {   # this box's share of the plan: instance tag EarthcraftShard (set by launch), else pipeline.env
+  local tag; tag=$(imds tags/instance/EarthcraftShard)
+  case "$tag" in */*) echo "$tag" ;; *) echo "${EARTHCRAFT_SHARD:-}" ;; esac
+}
+
 run() {
   cd "$ROOT"
   fetch_private
+  EARTHCRAFT_SHARD=$(shard); export EARTHCRAFT_SHARD
+  mkdir -p /run/earthcraft 2>/dev/null && echo "$EARTHCRAFT_SHARD" > /run/earthcraft/shard 2>/dev/null || true
   HF_TOKEN=$(hf_token); export HF_TOKEN
   export EARTHCRAFT_CLIENT_JAR=$JAR EARTHCRAFT_HF_PYTHON=$PY
   export EARTHCRAFT_STATUS_FILE=$ROOT/runs/status/pipeline.json
@@ -118,7 +127,13 @@ update() {
   fi
   local old new
   old=$(as_user git rev-parse HEAD); new=$(as_user git rev-parse FETCH_HEAD)
-  [ "$old" = "$new" ] && exit 0
+  if [ "$old" = "$new" ]; then
+    if [ -f /run/earthcraft/shard ] && [ "$(cat /run/earthcraft/shard)" != "$(shard)" ]; then
+      echo "shard changed to $(shard); restarting (the worker finishes its tile and commits its batch first)"
+      systemctl restart earthcraft-pipeline.service
+    fi
+    exit 0
+  fi
   if [ "$(as_user git rev-parse --abbrev-ref HEAD)" != "$branch" ]; then
     as_user git checkout -q -B "$branch" FETCH_HEAD
   else
@@ -143,7 +158,8 @@ status() {
   local out=${2:-}
   [ "${1:-}" = "--json" ] || out=""
   CONTROL=$CONTROL ROOT=$ROOT LIFECYCLE=$(imds instance-life-cycle) ACTION=$(imds spot/instance-action) \
-  INSTANCE=$(imds instance-id) AZ=$(imds placement/availability-zone) OUT=$out \
+  INSTANCE=$(imds instance-id) AZ=$(imds placement/availability-zone) OUT=$out SHARD=$(shard) \
+  WORKERS=${EARTHCRAFT_WORKERS:-1} \
   SERVICE=$(systemctl is-active earthcraft-pipeline 2>/dev/null || true) python3 - <<'PY'
 import json, os, shutil, sqlite3, subprocess, time
 from pathlib import Path
@@ -184,6 +200,7 @@ result = {
     'host': {'provider': 'aws-ec2', 'instance': os.environ['INSTANCE'], 'az': os.environ['AZ'],
              'lifecycle': os.environ['LIFECYCLE'], 'spot_interruption': os.environ['ACTION'] or None},
     'service': os.environ['SERVICE'], 'git_sha': sha,
+    'shard': os.environ['SHARD'] or None, 'workers': int(os.environ['WORKERS']),
     'tiles_published_logged': len(published), 'tiles_last_hour': hour, 'tiles_last_24h': day,
     'tiles_per_hour_24h': round(day / 24, 2), 'tiles_complete_journal': journal.get('2', {}).get('complete'),
     'last_commit': last_commit, 'last_tile': published[-1][1] if published else None,
@@ -196,7 +213,8 @@ if os.environ['OUT']:
     tmp = target.with_suffix('.tmp'); tmp.write_text(text + '\n'); tmp.replace(target)
 else:
     gib = 1 << 30
-    print(f"service {result['service']}  git {sha[:12]}  {result['host']['instance']} {result['host']['az']} "
+    print(f"service {result['service']}  git {sha[:12]}  workers {result['workers']}  shard {result['shard'] or 'all'}  "
+          f"{result['host']['instance']} {result['host']['az']} "
           f"({result['host']['lifecycle']}, interruption: {result['host']['spot_interruption'] or 'none'})")
     print(f"tiles: {hour} last hour, {day} last 24h, {len(published)} logged here; appearance complete in journal: "
           f"{result['tiles_complete_journal']}")
@@ -216,24 +234,53 @@ push() {   # on the coordinator: private inputs never go to the public repo or u
   ssh "$host" "sudo systemctl start earthcraft-pipeline && earthcraft-status"
 }
 
-launch() {   # on the coordinator: replacement instance from the existing key, SG and instance profile
-  local aws=${AWS:-$HOME/.local/bin/aws} r="--region $REGION" ami sg ud tags id ip
-  ami=$($aws $r ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
-  sg=$($aws $r ec2 describe-security-groups --group-names earthcraft-pipeline --query 'SecurityGroups[0].GroupId' --output text)
+launch() {   # on the coordinator: N more identical boxes from the existing key, SG and instance profile
+  local aws=${AWS:-$HOME/.local/bin/aws} r="--region $REGION" count=1 dry="" ami sg ud tags ids existing total i id
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --count) count=$2; shift 2 ;;
+      --dry-run) dry=echo; shift ;;
+      *) echo "launch: unknown option $1" >&2; return 64 ;;
+    esac
+  done
+  case "$count" in ''|*[!0-9]*|0) echo "launch: --count needs a positive number" >&2; return 64 ;; esac
   ud=$(dirname "$0")/../configs/aws/cloud-init.yaml
   tags='{Key=Project,Value=earthcraft},{Key=Owner,Value=EricSpencer00},{Key=Name,Value=earthcraft-pipeline}'
-  id=$($aws $r ec2 run-instances --image-id "$ami" --instance-type "${INSTANCE_TYPE:-m6a.large}" \
+  existing=$($aws $r ec2 describe-instances --filters Name=tag:Name,Values=earthcraft-pipeline \
+    Name=instance-state-name,Values=pending,running,stopping,stopped \
+    --query 'sort_by(Reservations[].Instances[], &LaunchTime)[].InstanceId' --output text 2>/dev/null || true)
+  if [ -n "$dry" ]; then
+    ami='<ubuntu-24.04-ami>'; sg='<earthcraft-pipeline-sg>'
+  else
+    ami=$($aws $r ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
+    sg=$($aws $r ec2 describe-security-groups --group-names earthcraft-pipeline --query 'SecurityGroups[0].GroupId' --output text)
+  fi
+  ids=$($dry $aws $r ec2 run-instances --count "$count" --image-id "$ami" --instance-type "${INSTANCE_TYPE:-m6a.large}" \
     --key-name earthcraft-pipeline --security-group-ids "$sg" --iam-instance-profile Name=earthcraft-pipeline \
-    ${SUBNET:+--subnet-id $SUBNET} --associate-public-ip-address --metadata-options HttpTokens=required \
+    ${SUBNET:+--subnet-id $SUBNET} --associate-public-ip-address \
+    --metadata-options HttpTokens=required,InstanceMetadataTags=enabled \
     --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":60,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
     --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"persistent","InstanceInterruptionBehavior":"stop"}}' \
     --user-data "file://$ud" \
     --tag-specifications "ResourceType=instance,Tags=[$tags]" "ResourceType=volume,Tags=[$tags]" \
       "ResourceType=spot-instances-request,Tags=[$tags]" "ResourceType=network-interface,Tags=[$tags]" \
-    --query 'Instances[0].InstanceId' --output text)
-  $aws $r ec2 wait instance-running --instance-ids "$id"
-  ip=$($aws $r ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-  echo "launched $id at $ip; set HostName $ip under 'Host earthcraft-aws' in ~/.ssh/config, then: $0 push"
+    --query 'Instances[].InstanceId' --output text)
+  [ -n "$dry" ] && { echo "$ids"; ids=$(seq -f 'i-new%g' 1 "$count" | tr '\n' ' '); }
+  # Deterministic shares: existing boxes keep their launch order, new ones follow. Each box reads its tag at
+  # service start; the update timer restarts a box whose tag changed (after its tile and batch finish).
+  total=$(( $(echo $existing | wc -w) + count )); i=0
+  for id in $existing $ids; do
+    if [ -n "$dry" ]; then echo $aws $r ec2 modify-instance-metadata-options --instance-id "$id" --instance-metadata-tags enabled
+    else $aws $r ec2 modify-instance-metadata-options --instance-id "$id" --instance-metadata-tags enabled >/dev/null; fi
+    $dry $aws $r ec2 create-tags --resources "$id" --tags "Key=EarthcraftShard,Value=$i/$total"
+    i=$((i + 1))
+  done
+  [ -n "$dry" ] && { echo "dry run: $count new box(es), $total shard(s); nothing launched"; return 0; }
+  $aws $r ec2 wait instance-running --instance-ids $ids
+  for id in $ids; do
+    echo "launched $id at $($aws $r ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+  done
+  echo "each box bootstraps itself (private inputs from S3) and claims only its shard; check with: ssh <ip> earthcraft-status"
 }
 
 cmd=${1:-}; shift || true

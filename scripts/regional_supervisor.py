@@ -29,6 +29,7 @@ import time
 
 import psutil
 
+from chicago_tiles import parse_shard, tile_shard
 from hf_store import DiskGuardError, GiB, parse_size
 from region_expansion import atomic
 from regional_cache import Footprint
@@ -72,6 +73,8 @@ def worker_command(args, owner):
         command += ['--hf-python', str(args.hf_python)]
     if args.footprints:
         command.append('--footprints')
+    if args.shard:
+        command += ['--shard', '%d/%d' % args.shard]
     return low_priority(command + ['--nice', '0'], args.qos)
 
 
@@ -87,17 +90,22 @@ def route_locality(args, env, logs):
             return None
 
 
-def pending_work(control, lane):
+def pending_work(control, lane, shard=None):
     journal = control / 'jobs.sqlite'
     if not journal.exists():
         return True
     with closing(sqlite3.connect(journal, timeout=20)) as db:  # WAL journal: a plain reader
+        db.create_function('tile_shard', 2, tile_shard, deterministic=True)
         if lane == 'base':
-            query = "SELECT count(*) FROM jobs WHERE stage=0 AND state IN ('pending','running')"
+            query = "SELECT count(*) FROM jobs j WHERE stage=0 AND state IN ('pending','running')"
         else:
             query = ("SELECT count(*) FROM jobs j WHERE stage=2 AND state IN ('pending','running') AND NOT EXISTS "
                      "(SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<2 AND p.state!='complete')")
-        return db.execute(query).fetchone()[0] > 0
+        params = ()
+        if shard:
+            query += ' AND tile_shard(j.tile, ?) = ?'
+            params = (shard[1], shard[0])
+        return db.execute(query, params).fetchone()[0] > 0
 
 
 def rotate(log):
@@ -135,6 +143,8 @@ def ensure(args):
             command += ['--hf-python', str(args.hf_python)]
         if args.footprints:
             command.append('--footprints')
+        if args.shard:
+            command += ['--shard', '%d/%d' % args.shard]
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.resolve()))
         logs = control / 'logs'
         logs.mkdir(exist_ok=True)
@@ -182,7 +192,7 @@ def run(args):
                         handles.pop(owner).close()
                         children.pop(owner)
                         if child.returncode == 0:
-                            if not pending_work(control, args.lane):
+                            if not pending_work(control, args.lane, args.shard):
                                 completed.add(owner)
                             else:
                                 next_start[owner] = time.time() + 15
@@ -236,7 +246,10 @@ def build_parser():
     parser.add_argument('--frame', type=Path, required=True)
     parser.add_argument('--scratch', type=Path, default=ROOT / 'runs/scratch')
     parser.add_argument('--lane', choices=('base', 'scans'), default='base')
-    parser.add_argument('--workers', type=int, default=1)
+    parser.add_argument('--workers', type=int, default=int(os.environ.get('EARTHCRAFT_WORKERS') or 1),
+                        help='concurrent tile workers (default EARTHCRAFT_WORKERS or 1)')
+    parser.add_argument('--shard', type=parse_shard, default=parse_shard(os.environ.get('EARTHCRAFT_SHARD')),
+                        help='i/N: this machine\'s deterministic share of the plan (default EARTHCRAFT_SHARD)')
     parser.add_argument('--hf-python', type=Path, default=None)
     parser.add_argument('--footprints', action='store_true')
     parser.add_argument('--cache-cap', type=parse_size, default=12 * GiB)
