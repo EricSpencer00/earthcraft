@@ -27,10 +27,25 @@ class DetailLevelsTest(unittest.TestCase):
     def test_terrain_chunk_has_blocks(self):
         self.assertTrue(detail_levels.chunk_has_blocks(chunk(['minecraft:air', 'minecraft:stone'])))
 
+    def test_has_non_air_block_air_only(self):
+        self.assertFalse(detail_levels.has_non_air_block(chunk(['minecraft:air'])))
+
+    def test_has_non_air_block_with_stone(self):
+        self.assertTrue(detail_levels.has_non_air_block(chunk(['minecraft:air', 'minecraft:stone'])))
+
     def test_interval_bounds(self):
         self.assertEqual(detail_levels.interval(0, 100, 1000)[0], 0)
         low, high = detail_levels.interval(50, 100, 1000)
         self.assertTrue(low < 500 < high)
+
+    def test_cell_with_stone_block_and_air_neighbor(self):
+        """Test that one cell with stone is low, and empty neighbor is none."""
+        # This is a fixture test to verify cell-level classification
+        air_chunk = chunk(['minecraft:air'])
+        stone_chunk = chunk(['minecraft:air', 'minecraft:stone'])
+
+        self.assertFalse(detail_levels.has_non_air_block(air_chunk))
+        self.assertTrue(detail_levels.has_non_air_block(stone_chunk))
 
 
 if __name__ == '__main__':

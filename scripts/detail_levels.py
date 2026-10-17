@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Compute a simple detail level for every 512 m tile (one Anvil region).
+"""Compute a simple detail level for every 256 m cell (16x16 chunks).
 
 Levels (owner's definitions):
-  none  - not tiled: no region data, or every chunk is an air-only placeholder.
-  low   - land + buildings from LiDAR (the base generator output).
+  none  - no chunks with non-air blocks.
+  low   - any chunk has a block other than air (from LiDAR base generator output).
   high  - low plus a street-level detail pass from detail/<layer>/v1 that has been
           applied to the world (listed in detail/applied.json, or the layer manifest
           has "applied_to_world": true).
-  hand  - hand-built (ArnisMC-style); only tiles listed in world/index/hand-tiles.json.
+  hand  - hand-built (ArnisMC-style); only cells listed in world/index/hand-tiles.json.
 
 Region bytes are streamed from the Hugging Face dataset with HTTP Range requests and
 parsed in memory; nothing but the small JSON output is written to disk. Only block
@@ -122,6 +122,14 @@ def palette_names(chunk_nbt: bytes) -> set[str]:
     return names
 
 
+def has_non_air_block(record: bytes) -> bool:
+    """Early-exit on first non-air block in palette."""
+    nbt = decode_chunk(record)
+    if nbt is None:
+        return False
+    return bool(palette_names(nbt) - AIR)
+
+
 def decode_chunk(record: bytes) -> bytes | None:
     length, kind = struct.unpack_from('>iB', record, 0)
     data = record[5:4 + length]
@@ -142,34 +150,73 @@ def chunk_has_blocks(record: bytes) -> bool | None:
     return bool(palette_names(nbt) - AIR)
 
 
-def region_content(url: str) -> str:
-    """Return 'low' if any chunk has non-air blocks, 'none' otherwise."""
+def region_cells(url: str, rx: int, rz: int) -> dict[tuple[int, int], str]:
+    """Return dict of (cell_x, cell_z) -> 'low'/'none' for each cell in region."""
     header = http(url, 0, 8191)
-    locations = []
+    # Group chunks by cell: (chunk_index) -> (cell_x, cell_z)
+    chunks_by_cell: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
     for i in range(1024):
         entry = int.from_bytes(header[4 * i:4 * i + 4], 'big')
         offset, sectors = entry >> 8, entry & 0xFF
         if offset and sectors:
-            locations.append((i, offset * 4096, sectors * 4096))
-    if not locations:
-        return 'none'
-    # Probe a few chunks (centre first, where buildings usually are) with small reads.
-    locations.sort(key=lambda item: abs(item[0] % 32 - 15.5) + abs(item[0] // 32 - 15.5))
-    for _, start, size in locations[:PROBE_CHUNKS]:
+            chunk_x = rx * 32 + (i % 32)
+            chunk_z = rz * 32 + (i // 32)
+            cell_x = chunk_x // 16
+            cell_z = chunk_z // 16
+            if (cell_x, cell_z) not in chunks_by_cell:
+                chunks_by_cell[(cell_x, cell_z)] = []
+            chunks_by_cell[(cell_x, cell_z)].append((i, offset * 4096, sectors * 4096))
+
+    if not chunks_by_cell:
+        # No chunks in any cell
+        return {(rx * 2, rz * 2): 'none', (rx * 2 + 1, rz * 2): 'none',
+                (rx * 2, rz * 2 + 1): 'none', (rx * 2 + 1, rz * 2 + 1): 'none'}
+
+    # Collect all chunk ranges (coalesce adjacent ones)
+    all_chunks = []
+    for cell_coords, chunks in chunks_by_cell.items():
+        all_chunks.extend(chunks)
+
+    # Sort by offset for efficient reading
+    all_chunks.sort(key=lambda x: x[1])
+
+    # Probe first few chunks with small reads
+    result: dict[tuple[int, int], str] = {}
+    probed_chunks = set()
+
+    all_chunks_sorted = sorted(all_chunks, key=lambda item: abs(item[0] % 32 - 15.5) + abs(item[0] // 32 - 15.5))
+    for idx, start, size in all_chunks_sorted[:PROBE_CHUNKS]:
         if chunk_has_blocks(http(url, start, start + size - 1)):
-            return 'low'
-    if len(locations) <= PROBE_CHUNKS:
-        return 'none'
-    # Looks like a placeholder: read the whole region once, in memory, to be sure.
-    body = http(url)
-    for _, start, size in locations[PROBE_CHUNKS:]:
-        if chunk_has_blocks(body[start:start + size]):
-            return 'low'
-    return 'none'
+            chunk_x = rx * 32 + (idx % 32)
+            chunk_z = rz * 32 + (idx // 32)
+            cell_x = chunk_x // 16
+            cell_z = chunk_z // 16
+            result[(cell_x, cell_z)] = 'low'
+            probed_chunks.add((cell_x, cell_z))
+
+    # If we didn't probe all chunks, read the whole region for the rest
+    if len(all_chunks) > PROBE_CHUNKS:
+        body = http(url)
+        for idx, start, size in all_chunks[PROBE_CHUNKS:]:
+            chunk_x = rx * 32 + (idx % 32)
+            chunk_z = rz * 32 + (idx // 32)
+            cell_x = chunk_x // 16
+            cell_z = chunk_z // 16
+            if (cell_x, cell_z) not in result:
+                if chunk_has_blocks(body[start:start + size]):
+                    result[(cell_x, cell_z)] = 'low'
+
+    # Mark all cells in this region (fill in empty ones)
+    for cx in range(rx * 2, (rx + 1) * 2):
+        for cz in range(rz * 2, (rz + 1) * 2):
+            if (cx, cz) not in result:
+                result[(cx, cz)] = 'none'
+
+    return result
 
 
-def applied_regions(base: str, revision: str) -> dict[str, list[str]]:
-    """Map 'r.X.Z' -> applied detail layers."""
+def applied_cells(base: str, revision: str) -> dict[tuple[int, int], list[str]]:
+    """Map (cell_x, cell_z) -> applied detail layers."""
     applied = json_or(f'{base}/detail/applied.json', {'layers': []})
     names = {(item['layer'], item.get('version', 'v1')) for item in applied.get('layers', [])}
     try:
@@ -182,11 +229,19 @@ def applied_regions(base: str, revision: str) -> dict[str, list[str]]:
             manifest = json_or(f'{base}/detail/{layer}/v1/manifest.json', {})
             if manifest.get('applied_to_world') is True:
                 names.add((layer, 'v1'))
-    result: dict[str, list[str]] = {}
+    result: dict[tuple[int, int], list[str]] = {}
     for layer, version in sorted(names):
         manifest = json_or(f'{base}/detail/{layer}/{version}/manifest.json', {})
-        for key in manifest.get('regions', {}):
-            result.setdefault(key, []).append(layer)
+        for key, cells_data in manifest.get('cells', {}).items():
+            for cell_key in cells_data if isinstance(cells_data, list) else []:
+                if isinstance(cell_key, str):
+                    parts = cell_key.split('_')
+                    if len(parts) == 2:
+                        try:
+                            cell_x, cell_z = int(parts[0]), int(parts[1])
+                            result.setdefault((cell_x, cell_z), []).append(layer)
+                        except ValueError:
+                            pass
     return result
 
 
@@ -227,42 +282,51 @@ def main(argv=None) -> int:
     revision = args.revision or json.loads(http(API))['sha']
     base = f'https://huggingface.co/datasets/{REPO}/resolve/{revision}'
     regions = json.loads(http(f'{base}/world/index/regions.json'))['regions']
-    hand = {str(t) for t in json_or(f'{base}/world/index/hand-tiles.json', {'tiles': []}).get('tiles', [])}
-    applied = applied_regions(base, revision)
+    hand_cells = {tuple(map(int, str(t).split('_'))) for t in json_or(f'{base}/world/index/hand-tiles.json', {'tiles': []}).get('tiles', []) if '_' in str(t)}
+    applied = applied_cells(base, revision)
 
     chosen = list(regions)
     if args.sample < 1:
         chosen = random.Random(args.seed).sample(chosen, round(len(regions) * args.sample))
-    tiles: dict[str, str] = {}
+    cells: dict[str, str] = {}
     errors: dict[str, str] = {}
     lock, done = threading.Lock(), [0]
 
     def work(region):
-        key = f"r.{region['x']}.{region['z']}"
-        if key in hand:
-            return key, 'hand'
-        level = 'none' if not region.get('chunks') else region_content(f"{base}/{region['path']}")
-        if level == 'low' and key in applied:
-            level = 'high'
-        return key, level
+        rx, rz = region['x'], region['z']
+        if not region.get('chunks'):
+            # No chunks in this region, all cells are empty
+            cell_levels = {(rx * 2 + dx, rz * 2 + dz): 'none' for dx in [0, 1] for dz in [0, 1]}
+        else:
+            cell_levels = region_cells(f"{base}/{region['path']}", rx, rz)
+
+        result = {}
+        for (cx, cz), level in cell_levels.items():
+            if (cx, cz) in hand_cells:
+                result[f"{cx}_{cz}"] = 'hand'
+            elif level == 'low' and (cx, cz) in applied:
+                result[f"{cx}_{cz}"] = 'high'
+            else:
+                result[f"{cx}_{cz}"] = level
+        return result
 
     with futures.ThreadPoolExecutor(max_workers=min(args.workers, 6)) as pool:
         jobs = {pool.submit(work, region): region for region in chosen}
         for job in futures.as_completed(jobs):
             region = jobs[job]
-            key = f"r.{region['x']}.{region['z']}"
             try:
-                key, level = job.result()
-                tiles[key] = level
+                cell_levels = job.result()
+                cells.update(cell_levels)
             except Exception as error:  # keep going; report failures
-                errors[key] = f'{type(error).__name__}: {error}'[:200]
+                region_key = f"r.{region['x']}.{region['z']}"
+                errors[region_key] = f'{type(error).__name__}: {error}'[:200]
             with lock:
                 done[0] += 1
                 if done[0] % 50 == 0:
                     print(f'{done[0]}/{len(chosen)}', file=sys.stderr, flush=True)
 
-    n = len(tiles)
-    counts = {level: sum(1 for v in tiles.values() if v == level) for level in LEVELS}
+    n = len(cells)
+    counts = {level: sum(1 for v in cells.values() if v == level) for level in LEVELS}
     output = {
         'schema': SCHEMA,
         'revision': revision,
@@ -270,19 +334,19 @@ def main(argv=None) -> int:
         'regions_total': len(regions),
         'sampled': None if args.sample >= 1 else args.sample,
         'seed': args.seed if args.sample < 1 else None,
-        'tile_size_m': 512,
+        'cell_size_m': 256,
         'levels': {
-            'none': 'Not tiled: no region data, or only empty placeholder chunks.',
+            'none': 'No chunks with non-air blocks.',
             'low': 'Land and buildings from LiDAR.',
             'high': 'LiDAR plus street-level detail (trees, street furniture, sidewalks, facades).',
             'hand': 'Hand-built (ArnisMC-style).',
         },
         'counts': counts,
-        'tiles': dict(sorted(tiles.items())),
+        'cells': dict(sorted(cells.items())),
     }
     if args.sample < 1 and n:
         output['estimated_totals'] = {
-            level: {'estimate': round(counts[level] / n * len(regions)), 'ci95': interval(counts[level], n, len(regions))}
+            level: {'estimate': round(counts[level] / n * len(regions) * 4), 'ci95': interval(counts[level], n, len(regions) * 4)}
             for level in LEVELS
         }
     if errors:

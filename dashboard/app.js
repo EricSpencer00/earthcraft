@@ -15,15 +15,14 @@ const color=name=>getComputedStyle(document.documentElement).getPropertyValue('-
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
 let cellBrowser=null;
-// Per-tile detail level (512 m tiles = Minecraft regions); map cells are 256 m.
+// Per-cell detail level (256 m cells = 16x16 chunks).
 const DETAIL_URL='https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/world/index/detail-levels.json';
 const DETAIL_LEVELS=['none','low','high','hand'];
 let detail=null;
 function detailLevel(index){
   const id=atlas?.cell_ids?.[index];
   if(!detail||!id)return null;
-  const [x,z]=id.split('_').map(Number);
-  return detail.tiles?.[`r.${Math.floor(x/2)}.${Math.floor(z/2)}`]||null;
+  return detail.cells?.[id]||null;
 }
 function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 function renderDetailCount(){
