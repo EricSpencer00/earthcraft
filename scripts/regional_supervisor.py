@@ -208,7 +208,7 @@ def run(args):
                     child.terminate()
             for child in children.values():
                 try:
-                    child.wait(timeout=240)
+                    child.wait(timeout=float(os.environ.get('EARTHCRAFT_STOP_TIMEOUT', 240)))
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()

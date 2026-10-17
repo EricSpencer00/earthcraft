@@ -1,0 +1,30 @@
+# Earthcraft regional generator on the AWS pipeline host. See docs/AWS_PIPELINE.md.
+[Unit]
+Description=Earthcraft regional pipeline (supervisor -> tiles/v2 on Hugging Face)
+Wants=network-online.target
+After=network-online.target
+# Private inputs are copied by `aws_pipeline_setup.sh push`; until then the unit does not start.
+ConditionPathExists=/opt/earthcraft/vendor/minecraft-client-1.21.10.jar
+ConditionPathExists=/opt/earthcraft/runs/chicago-adaptation-city-001/frame.json
+ConditionPathExists=/opt/earthcraft/runs/regional/control/templates
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=-/etc/earthcraft/pipeline.env
+ExecStart=/usr/local/sbin/earthcraft-pipeline run
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# SIGTERM to the supervisor only: it signals the worker, which finishes its tile and commits
+# its batch (never stopped mid-commit) within EARTHCRAFT_STOP_TIMEOUT (1800 s).
+KillMode=mixed
+TimeoutStopSec=2100
+Restart=always
+RestartSec=120
+MemoryMax=7G
+
+[Install]
+WantedBy=multi-user.target

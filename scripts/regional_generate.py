@@ -30,6 +30,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import fcntl
 import faulthandler
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,8 @@ from world_templates import chunk_template, height_template
 
 ROOT = Path(__file__).resolve().parents[1]
 EX_TEMPFAIL = 75  # the guard refused; the supervisor waits and retries
+STATUS_PATH = 'status/pipeline.json'  # optional host status, committed with a tile batch
+STATUS_INTERVAL = 3600
 CONTROL_ALLOWANCE = 512 * MiB
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
@@ -879,6 +882,9 @@ class Batch:
             return None
         items = [{key: value for key, value in item.items() if key != 'role'}
                  for _, package, _ in self.pending for item in package.items]
+        status = self.status_item()
+        if status:
+            items.append(status)
         tiles = [job['tile'] for job, _, _ in self.pending]
         label = f'Generate tiles/v2: {len(tiles)} tile(s) ' + ', '.join(tiles[:6]) + (' ...' if len(tiles) > 6 else '')
         for attempt in range(3):
@@ -909,8 +915,36 @@ class Batch:
             finally:
                 self.keeper.remove(job)
                 shutil.rmtree(self.worker.gen / job['tile'], ignore_errors=True)
+        if status:
+            atomic(self.worker.control / 'status-pushed.json', json.dumps(time.time()).encode())
+            Path(status['local']).unlink(missing_ok=True)
         self.pending, self.first = [], None
         return result
+
+    def status_item(self):
+        """At most hourly, ride a host status file (EARTHCRAFT_STATUS_FILE) along in this tile commit.
+
+        The file is snapshotted into tile scratch so the hash matches what is
+        committed; it never adds a commit of its own.
+        """
+        source = os.environ.get('EARTHCRAFT_STATUS_FILE')
+        if not source or not Path(source).is_file():
+            return None
+        marker = self.worker.control / 'status-pushed.json'
+        try:
+            if time.time() - float(json.loads(marker.read_text())) < STATUS_INTERVAL:
+                return None
+        except (OSError, ValueError):
+            pass
+        data = Path(source).read_bytes()
+        if len(data) > 64 * 1024:
+            return None
+        self.worker.footprint.check(len(data), 'status snapshot')
+        local = self.worker.gen / '_status-pipeline.json'
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(data)
+        return {'path': STATUS_PATH, 'local': str(local), 'sha256': hashlib.sha256(data).hexdigest(),
+                'bytes': len(data)}
 
 
 # --------------------------------------------------------------------------
