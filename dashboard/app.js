@@ -15,6 +15,43 @@ const color=name=>getComputedStyle(document.documentElement).getPropertyValue('-
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
 let cellBrowser=null;
+// Per-tile detail level (512 m tiles = Minecraft regions); map cells are 256 m.
+const DETAIL_URL='https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/world/index/detail-levels.json';
+const DETAIL_LEVELS=['none','low','high','hand'];
+let detail=null;
+function detailLevel(index){
+  const id=atlas?.cell_ids?.[index];
+  if(!detail||!id)return null;
+  const [x,z]=id.split('_').map(Number);
+  return detail.tiles?.[`r.${Math.floor(x/2)}.${Math.floor(z/2)}`]||null;
+}
+function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
+function renderDetailCount(){
+  const box=$('detail-count');
+  if(!detail){box.hidden=true;return;}
+  const sampled=Number(detail.sampled)>0&&Number(detail.sampled)<1;
+  const parts=[document.createTextNode('Detail:')];
+  for(const level of DETAIL_LEVELS){
+    const value=sampled?(detail.estimated_totals?.[level]?.estimate??0):(detail.counts?.[level]??0);
+    const item=document.createElement('span'),swatch=document.createElement('i');
+    swatch.className='lvl-'+level;swatch.setAttribute('aria-hidden','true');
+    item.append(swatch,level+' '+(sampled&&value?'~':'')+number(value));
+    parts.push(item);
+  }
+  box.replaceChildren(...parts);
+  box.title=sampled?'Estimated from a '+Math.round(detail.sampled*100)+'% sample of tiles. Cells not in the sample are shown plain.':'Counted over every tile.';
+  box.hidden=false;
+}
+async function loadDetail(){
+  try{
+    const response=await fetch(DETAIL_URL,{cache:'no-cache',signal:AbortSignal.timeout(10000)});
+    if(!response.ok)return;
+    const data=await response.json();
+    if(data?.schema!=='earthcraft.detail-levels.v1')return;
+    detail=data;renderDetailCount();
+    if(atlas){scheduleDraw();if(selectedIndex!==null)renderSelection();}
+  }catch{/* detail levels are optional */}
+}
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
@@ -155,11 +192,12 @@ function drawGeography(ctx,cssWidth,cssHeight){
     const record=atlas.records[cell.index];
     const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
     const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
-    ctx.fillStyle=colors[code]||colors[0];
-    ctx.globalAlpha=mapLayer==='appearance'?(complete?.8:.16):.28;
+    const level=mapLayer==='detail'?detailLevel(cell.index):null;
+    ctx.fillStyle=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
+    ctx.globalAlpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
     const points=cell.points.map(p=>({x:anchor.x+(p.x-first.nw.x)*scale,y:anchor.y+(p.y-first.nw.y)*scale}));
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();
-    if(w>5){ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.strokeStyle=colors[code];ctx.lineWidth=.6;ctx.stroke();}
+    if(w>5){ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.strokeStyle=mapLayer==='detail'?ctx.fillStyle:colors[code];ctx.lineWidth=.6;ctx.stroke();}
     if(cell.index===selectedIndex)selected=points;
     if(cell.index===hoverIndex)hover=points;
   }
@@ -174,11 +212,13 @@ function drawGeography(ctx,cssWidth,cssHeight){
 
 function setLayer(layer){
   mapLayer=layer;
-  for(const name of ['build','appearance'])$('layer-'+name).setAttribute('aria-pressed',String(layer===name));
+  for(const name of ['build','appearance','detail'])$('layer-'+name).setAttribute('aria-pressed',String(layer===name));
   if(atlas){renderLegend(atlas.source==='published',atlas.counts,atlas.area.id==='live');drawAtlas();}
   if(layer==='appearance'&&atlas?.source==='published'){
     const complete=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
     setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' in total');
+  }else if(layer==='detail'&&atlas?.source==='published'){
+    setMapMessage(detail?'Detail level of each 512 m tile':'Detail levels are not available yet');
   }else if(atlas)renderAtlas();
 }
 
@@ -332,7 +372,7 @@ function drawAtlas(){
       if(code<0)continue;
       if(atlas.source==='published'&&mapLayer==='appearance')code=['complete','verified'].includes(atlas.records[row*width+column]?.appearance_state)?2:1;
       if(left+(column+1)*cell<0||left+column*cell>cssWidth||top+(row+1)*cell<0||top+row*cell>cssHeight)continue;
-      ctx.fillStyle=colors[code]||colors[0];
+      ctx.fillStyle=atlas.source==='published'&&mapLayer==='detail'?detailColor(detailLevel(row*width+column)):colors[code]||colors[0];
       const gap=cell>=2?.5:0;
       ctx.fillRect(left+column*cell,top+row*cell,cell-gap,cell-gap);
     }
@@ -403,6 +443,11 @@ function drawAtlas(){
 }
 
 function renderLegend(isPublished,counts,live){
+  if(isPublished&&mapLayer==='detail'){
+    for(const id of ['outside','queued','source','finished','installed','running','failed'])$('legend-'+id).hidden=true;
+    return;
+  }
+  $('legend-outside').hidden=false;
   if(isPublished&&mapLayer==='appearance'){
     $('legend-outside-label').textContent='Not built yet';
     $('legend-source-label').textContent='Awaiting detail';
@@ -429,7 +474,7 @@ function renderAtlas(){
   $('coverage-note').textContent=!atlas?'Map unavailable':atlas.area.id==='world'?'Built so far · the Chicago area':'Build progress · the Chicago area';
   if(!atlas){
     geoSignature='';geoCells=[];document.body.dataset.map='grid';$('map-attribution').hidden=true;
-    for(const id of ['place-chicago','place-elmhurst','layer-appearance'])$(id).disabled=true;
+    for(const id of ['place-chicago','place-elmhurst','layer-appearance','layer-detail'])$(id).disabled=true;
     $('grid-size').textContent='Unavailable';
     $('grid-count').textContent='This view has no map yet.';
     $('chunk-count').textContent='Unavailable';
@@ -454,9 +499,9 @@ function renderAtlas(){
   const {area,counts}=atlas;
   prepareGeography();
   for(const id of ['place-chicago','place-elmhurst'])$(id).disabled=!geographic();
-  $('layer-appearance').disabled=atlas.source!=='published';
+  $('layer-appearance').disabled=atlas.source!=='published';$('layer-detail').disabled=atlas.source!=='published';
   if(atlas.source!=='published'){
-    mapLayer='build';$('layer-build').setAttribute('aria-pressed','true');$('layer-appearance').setAttribute('aria-pressed','false');
+    mapLayer='build';$('layer-build').setAttribute('aria-pressed','true');$('layer-appearance').setAttribute('aria-pressed','false');$('layer-detail').setAttribute('aria-pressed','false');
   }
   const widthBlocks=area.width_chunks*16,heightBlocks=area.height_chunks*16;
   const isPublished=atlas.source==='published',live=area.id==='live',queue=area.id==='queue';
@@ -624,6 +669,7 @@ function renderSelection(){
   const rows=[['Size',number(size)+' × '+number(size)+' m']];
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
+  if(detail&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
     dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
@@ -704,7 +750,7 @@ $('panel-toggle').onclick=()=>setPanel(document.body.dataset.panel!=='open');
 $('panel-close').onclick=()=>{setPanel(false);$('panel-toggle').focus();};
 $('about-open').onclick=()=>setPanel(true,'about');
 for(const id of ['world','cell'])$('tab-'+id).onclick=()=>setPanel(true,id);
-for(const id of ['build','appearance'])$('layer-'+id).onclick=()=>setLayer(id);
+for(const id of ['build','appearance','detail'])$('layer-'+id).onclick=()=>setLayer(id);
 for(const id of Object.keys(places))$('place-'+id).onclick=()=>goToPlace(id);
 $('clear-selection').onclick=()=>{clearSelection();$('map').focus();};
 $('refresh').onclick=refresh;
@@ -718,6 +764,7 @@ if(!localHost)for(const option of $('area').options)if(!['world','published'].in
 setPanel(false,'world');
 initializeBasemap();
 refresh();
+loadDetail();
 let ticks=0;
 setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
 
