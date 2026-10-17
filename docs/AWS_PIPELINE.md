@@ -33,7 +33,7 @@ the USGS bucket in the same region are free.
 /opt/earthcraft/vendor/minecraft-client-1.21.10.jar   private (block colours), copied by `push`
 /opt/earthcraft/runs/regional/control/                plan, journal, catalogs, templates (private), logs
 /opt/earthcraft/runs/chicago-adaptation-city-001/frame.json
-/opt/earthcraft/runs/scratch/{cache,gen}              guarded: cache cap 24 GiB, footprint 32 GiB, free floor 10 GiB
+/opt/earthcraft/runs/scratch/{cache,gen}              guarded: cache cap 20 GiB, footprint cache + 5 GiB per worker + 1 GiB, free floor 10 GiB
 /opt/earthcraft/runs/status/pipeline.json             host status, refreshed every 10 min
 ```
 

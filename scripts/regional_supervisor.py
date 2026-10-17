@@ -78,6 +78,18 @@ def worker_command(args, owner):
     return low_priority(command + ['--nice', '0'], args.qos)
 
 
+def route_locality(args, env, logs):
+    """Rank pending tiles so tiles sharing source files run together (once per plan; see regional_generate)."""
+    command = [sys.executable, '-u', str(Path(__file__).with_name('regional_generate.py')), '--route-locality',
+               '--control', str(args.control.resolve()), '--frame', str(args.frame.resolve()),
+               '--scratch', str(args.scratch.resolve()), '--nice', '0']
+    with (logs / 'supervisor-route.log').open('a') as log:
+        try:
+            return subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=3600).returncode
+        except subprocess.TimeoutExpired:
+            return None
+
+
 def pending_work(control, lane, shard=None):
     journal = control / 'jobs.sqlite'
     if not journal.exists():
@@ -163,6 +175,8 @@ def run(args):
         signal.signal(signal.SIGINT, stop)
         workers = [f'{args.lane}-{i}' for i in range(1, args.workers + 1)]
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.resolve()))
+        if (control / 'plan.json').exists() and (control / 'jobs.sqlite').exists():
+            route_locality(args, env, logs)
         started = time.time()
         deadline_path = control / 'supervisor-deadline.json'
         deadline = json.loads(deadline_path.read_text()) if deadline_path.exists() else started + 45 * 86400
