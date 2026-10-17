@@ -127,8 +127,10 @@ update() {
   if ! as_user git fetch -q origin "$branch" 2>/dev/null; then
     branch=main; as_user git fetch -q origin main     # a merged-and-deleted feature branch falls back to main
   fi
-  local old new
-  old=$(as_user git rev-parse HEAD); new=$(as_user git rev-parse FETCH_HEAD)
+  # Compare against the last fully deployed commit, not HEAD: a deploy that failed halfway
+  # (after the fast-forward) is finished on the next tick instead of being skipped forever.
+  local old new deployed=/var/lib/earthcraft/deployed
+  old=$(cat "$deployed" 2>/dev/null || as_user git rev-parse HEAD); new=$(as_user git rev-parse FETCH_HEAD)
   if [ "$old" = "$new" ]; then
     if [ -f /run/earthcraft/shard ] && [ "$(cat /run/earthcraft/shard)" != "$(shard)" ]; then
       echo "shard changed to $(shard); restarting (the worker finishes its tile and commits its batch first)"
@@ -142,12 +144,13 @@ update() {
     as_user git merge -q --ff-only FETCH_HEAD
   fi
   if ! as_user git diff --quiet "$old" "$new" -- 'requirements*.txt'; then install_requirements; fi
-  if ! as_user git diff --quiet "$old" "$new" -- configs/aws scripts/aws_pipeline_setup.sh; then
+  if ! as_user git diff --quiet "$old" "$new" -- configs/aws scripts/aws_pipeline_setup.sh || ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline; then
     install -m 0755 scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline
     install -m 0644 configs/aws/*.service configs/aws/*.timer /etc/systemd/system/
     systemctl daemon-reload
     for timer in configs/aws/*.timer; do systemctl enable --now "$(basename "$timer")" 2>/dev/null || true; done
   fi
+  mkdir -p "$(dirname "$deployed")"; echo "$new" > "$deployed"
   echo "updated $old -> $new; restarting (SIGTERM: the worker finishes its tile and commits its batch first)"
   systemctl restart earthcraft-pipeline.service
 }
