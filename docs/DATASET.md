@@ -14,7 +14,8 @@ Pin a commit when you read it, and read every other file at that same commit.
 | `tiles/` | Every generated 512 m tile, one folder per tile. |
 | `detail/` | Detail layers (trees, streets, buildings, water) as block edits. |
 | `qa/` | Visual QA runs: rendered samples and scores. |
-| `sources/` | Indexes built from source data (OSM roads, building footprints). |
+| `sources/` | Indexes built from source data (OSM roads, building footprints) and the player-free world templates (`sources/templates/v1/`). |
+| `contributions/` | One manifest per merged compute contribution (who, git SHA, tiles, SHA-256s). |
 | `archive/` | Install backups and old worker state. |
 | `snapshots/`, `releases/` | Older full-save snapshot and earlier releases. |
 

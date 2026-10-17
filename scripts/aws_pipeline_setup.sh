@@ -10,6 +10,7 @@
 #   aws_pipeline_setup.sh bootstrap                 packages, checkout, venv, units, control seed
 #   aws_pipeline_setup.sh run                       service entry: token from SSM, exec the supervisor
 #   aws_pipeline_setup.sh update                    timer: fast-forward, reinstall, graceful restart
+#   aws_pipeline_setup.sh validate                  timer: check open contribution PRs, comment (never merges)
 #   aws_pipeline_setup.sh status [--json FILE]      tiles done, tiles/hour, last commit, disk, spot
 set -euo pipefail
 
@@ -51,12 +52,13 @@ bootstrap() {
   install -m 0755 "$ROOT/scripts/aws_pipeline_setup.sh" /usr/local/sbin/earthcraft-pipeline
   ln -sf /usr/local/sbin/earthcraft-pipeline /usr/local/bin/earthcraft-status
   for unit in earthcraft-pipeline.service earthcraft-update.service earthcraft-update.timer \
-              earthcraft-status.service earthcraft-status.timer; do
+              earthcraft-status.service earthcraft-status.timer \
+              earthcraft-validate.service earthcraft-validate.timer; do
     install -m 0644 "$ROOT/configs/aws/$unit" /etc/systemd/system/
   done
   systemctl daemon-reload
-  systemctl enable earthcraft-update.timer earthcraft-status.timer earthcraft-pipeline.service
-  systemctl start earthcraft-update.timer earthcraft-status.timer
+  systemctl enable earthcraft-update.timer earthcraft-status.timer earthcraft-validate.timer earthcraft-pipeline.service
+  systemctl start earthcraft-update.timer earthcraft-status.timer earthcraft-validate.timer
   # Control state: keep what exists; otherwise seed from the archived worker on the dataset.
   if [ ! -f "$CONTROL/plan.json" ] && [ -f "$FRAME" ]; then
     as_user "$PY" "$ROOT/scripts/regional_generate.py" --control "$CONTROL" --frame "$FRAME" --min-free 10GiB --seed-control
@@ -144,9 +146,19 @@ update() {
     install -m 0755 scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline
     install -m 0644 configs/aws/*.service configs/aws/*.timer /etc/systemd/system/
     systemctl daemon-reload
+    for timer in configs/aws/*.timer; do systemctl enable --now "$(basename "$timer")" 2>/dev/null || true; done
   fi
   echo "updated $old -> $new; restarting (SIGTERM: the worker finishes its tile and commits its batch first)"
   systemctl restart earthcraft-pipeline.service
+}
+
+validate() {   # timer: comment PASS/FAIL on open contribution pull requests; the owner merges
+  cd "$ROOT"
+  HF_TOKEN=$(hf_token); export HF_TOKEN
+  export EARTHCRAFT_CLIENT_JAR=$JAR PYTHONPATH=$ROOT/scripts
+  # The spot check shares the pipeline's source cache (same cap as the pipeline, see run), so it adds no second copy of the indexes.
+  "$PY" -u scripts/validate_contributions.py --spot-workdir "$ROOT/runs/scratch/validate" \
+    --spot-cache-dir "$ROOT/runs/scratch/cache" --spot-cache-cap "${EARTHCRAFT_CACHE_GIB:-20}GiB" "$@"
 }
 
 imds() {
@@ -285,7 +297,7 @@ launch() {   # on the coordinator: N more identical boxes from the existing key,
 
 cmd=${1:-}; shift || true
 case "$cmd" in
-  bootstrap|run|update|launch|push) "$cmd" "$@" ;;
+  bootstrap|run|update|launch|push|validate) "$cmd" "$@" ;;
   status) status "$@" ;;
   *) if [ "$(basename "$0")" = earthcraft-status ]; then status "$cmd" "$@"; else sed -n 2,12p "$0"; exit 64; fi ;;
 esac

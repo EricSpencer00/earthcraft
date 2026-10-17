@@ -27,9 +27,15 @@ First time on a new machine:
 ```
 
 This copies the plan and job list from the dataset's
-`archive/mini-worker-20260929/`. The two world templates go in
-`runs/regional/control/templates/` (they are not published, because their
-`level.dat` holds a player).
+`archive/mini-worker-20260929/`. The world templates go in
+`runs/regional/control/templates/`: fetch the public, player-free copy with
+`scripts/clean_templates.py fetch --out runs/regional/control/templates`
+(it produces byte-identical tiles).
+
+Anyone can also contribute compute through dataset pull requests:
+`scripts/contribute.py` (see [CONTRIBUTING.md](../CONTRIBUTING.md)). A
+validator on the AWS host (`earthcraft-validate.timer`, every 30 min) checks
+each open pull request and comments PASS or FAIL; it never merges.
 
 Run, check, stop:
 

@@ -1,0 +1,6 @@
+# Everything contribute.py needs: the regional generator plus the Hugging Face client.
+-r requirements-chicago.txt
+-r requirements-lidar.txt
+scipy==1.17.1
+huggingface_hub==1.8.0
+hf_xet
