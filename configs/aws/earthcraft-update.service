@@ -1,0 +1,9 @@
+[Unit]
+Description=Earthcraft: fast-forward /opt/earthcraft and restart the pipeline gracefully if main moved
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/earthcraft/pipeline.env
+ExecStart=/usr/local/sbin/earthcraft-pipeline update

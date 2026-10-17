@@ -208,7 +208,7 @@ def run(args):
                     child.terminate()
             for child in children.values():
                 try:
-                    child.wait(timeout=240)
+                    child.wait(timeout=float(os.environ.get('EARTHCRAFT_STOP_TIMEOUT', 240)))
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
@@ -239,8 +239,8 @@ def build_parser():
 if __name__ == '__main__':
     parser = build_parser()
     args = parser.parse_args()
-    if not 1 <= args.workers <= 2:
-        parser.error('Use one or two workers on the MacBook')
+    if not 1 <= args.workers <= 8:
+        parser.error('Use between one and eight workers')
     if args.ensure:
         print(json.dumps(ensure(args)))
     else:

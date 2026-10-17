@@ -1,0 +1,7 @@
+[Unit]
+Description=Earthcraft: write runs/status/pipeline.json (committed hourly with the next tile batch)
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/usr/local/sbin/earthcraft-pipeline status --json /opt/earthcraft/runs/status/pipeline.json
