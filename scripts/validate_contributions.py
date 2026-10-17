@@ -208,6 +208,10 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true', help='print reports, do not comment')
     parser.add_argument('--force', action='store_true', help='judge again even if this head has a verdict')
     args = parser.parse_args(argv)
+    import hf_store
+    guard = hf_store.DiskGuard(args.spot_workdir / 'hf', hf_store.GiB, floor_bytes=2 * hf_store.GiB)
+    guard.ensure_dir()
+    hf_store.bound_hf_environment(guard)  # keep the client's caches inside guarded scratch
     from huggingface_hub import HfApi
     api = HfApi()
     reader = DatasetReader(args.repo)

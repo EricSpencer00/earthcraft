@@ -260,9 +260,14 @@ def main(argv=None):
 
     if not args.tiles or not 1 <= args.tiles <= contributions.MAX_TILES:
         raise SystemExit(f'Pass --tiles N (1-{contributions.MAX_TILES})')
+    from chicago_tiles import digest
+    import hf_store
+    # Bound the Hugging Face client's caches inside workdir/hf before the client is imported.
+    store = PullRequestStore(workdir, args.repo, None, args.source_revision or hf_store.git_revision(ROOT),
+                             digest(plan))
     from huggingface_hub import HfApi
     api = HfApi()
-    user = None if args.dry_run else api.whoami()['name']
+    store.user = None if args.dry_run else api.whoami()['name']
     on_hub = contributions.tiles_on_hub(api, args.repo)
     in_prs = contributions.tiles_in_open_pull_requests(api, args.repo)
     chosen = pick(plan, args.tiles, on_hub=on_hub, in_prs=in_prs, pending=pending_in_journal(control), shard=shard,
@@ -270,10 +275,6 @@ def main(argv=None):
     log(event='tiles_picked', tiles=chosen, on_hub=len(on_hub), in_open_prs=len(in_prs))
     if not chosen or args.dry_run:
         return 0
-    from chicago_tiles import digest
-    import hf_store
-    store = PullRequestStore(workdir, args.repo, user, args.source_revision or hf_store.git_revision(ROOT),
-                             digest(plan))
     code = regional_generate.Worker(worker_args(control, frame, workdir, chosen, args), reader=reader,
                                     store=store).run()
     if not args.keep_workdir:
