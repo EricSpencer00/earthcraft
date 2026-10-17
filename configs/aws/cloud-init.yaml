@@ -1,6 +1,7 @@
 #cloud-config
 # User data for a fresh earthcraft-pipeline instance (scripts/aws_pipeline_setup.sh launch).
 # Public bootstrap only: no token, no private files. The HF token comes from SSM at service
-# start; the client JAR, templates and frame arrive by `aws_pipeline_setup.sh push`.
+# start; the client JAR, templates and frame are fetched from the private S3 bucket by the
+# instance role (read-only) when the service starts.
 runcmd:
   - [bash, -c, "curl -fsSL https://raw.githubusercontent.com/EricSpencer00/earthcraft/main/scripts/aws_pipeline_setup.sh -o /root/earthcraft-setup.sh && bash /root/earthcraft-setup.sh bootstrap > /var/log/earthcraft-bootstrap.log 2>&1"]

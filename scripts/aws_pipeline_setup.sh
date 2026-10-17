@@ -2,7 +2,7 @@
 # Earthcraft always-on pipeline host (AWS EC2, Ubuntu 24.04). See docs/AWS_PIPELINE.md.
 #
 # On the coordinator (MacBook, has the AWS CLI, the ssh alias and the private files):
-#   scripts/aws_pipeline_setup.sh launch            new spot instance with cloud-init, then `push`
+#   scripts/aws_pipeline_setup.sh launch            new spot instance; it bootstraps itself (private inputs from S3)
 #   scripts/aws_pipeline_setup.sh push [HOST]       copy private inputs (client JAR, templates, frame), start
 # On the instance (cloud-init runs `bootstrap` as root; the units call the rest):
 #   aws_pipeline_setup.sh bootstrap                 packages, checkout, venv, units, control seed
@@ -69,8 +69,30 @@ sys.stdout.write(value.strip())
 PY
 }
 
+fetch_private() {   # client JAR, world templates and frame from the private S3 bucket, via the instance role
+  [ -f "$JAR" ] && [ -f "$FRAME" ] && [ -d "$CONTROL/templates" ] && return 0
+  BUCKET=${EARTHCRAFT_PRIVATE_BUCKET:-earthcraft-pipeline-private-971966099666} \
+  JAR="$JAR" FRAME="$FRAME" TEMPLATES="$CONTROL/templates" "$PY" - <<'PYEOF'
+import os, boto3
+s3 = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'us-west-2'))
+bucket = os.environ['BUCKET']
+targets = {'private/minecraft-client-1.21.10.jar': os.environ['JAR'], 'private/frame.json': os.environ['FRAME']}
+for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix='private/templates/'):
+    for item in page.get('Contents', []):
+        targets[item['Key']] = os.path.join(os.environ['TEMPLATES'], item['Key'][len('private/templates/'):])
+for key, path in targets.items():
+    if os.path.exists(path):
+        continue
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    s3.download_file(bucket, key, path + '.part')
+    os.replace(path + '.part', path)
+    print('fetched', key)
+PYEOF
+}
+
 run() {
   cd "$ROOT"
+  fetch_private
   HF_TOKEN=$(hf_token); export HF_TOKEN
   export EARTHCRAFT_CLIENT_JAR=$JAR EARTHCRAFT_HF_PYTHON=$PY
   export EARTHCRAFT_STATUS_FILE=$ROOT/runs/status/pipeline.json
