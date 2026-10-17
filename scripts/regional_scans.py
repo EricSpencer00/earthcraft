@@ -150,6 +150,29 @@ def discover(destination):
     return catalog
 
 
+def same_crs(returned, frame_crs, bounds, tolerance=1e-3):
+    """The service's CRS is the frozen frame's, possibly under ESRI names.
+
+    ArcGIS ImageServer echoes the requested custom transverse Mercator as ESRI
+    WKT ('D_Unknown_based_on_WGS_84_ellipsoid'), which pyproj does not call
+    equal to the frame's WKT2 although every parameter matches. Accept it only
+    when the PROJ definitions are identical and the grid's corners map onto
+    themselves within a millimetre.
+    """
+    returned, frame_crs = CRS(returned), CRS(frame_crs)
+    if returned.equals(frame_crs, ignore_axis_order=True):
+        return True
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')  # to_proj4() warns that WKT detail is dropped; parameters are compared
+        if returned.to_proj4() != frame_crs.to_proj4():
+            return False
+    from pyproj import Transformer
+    xs, ys = [bounds[0], bounds[2], bounds[0], bounds[2]], [bounds[1], bounds[1], bounds[3], bounds[3]]
+    tx, ty = Transformer.from_crs(returned, frame_crs, always_xy=True).transform(xs, ys)
+    return max(max(abs(a - b) for a, b in zip(tx, xs)), max(abs(a - b) for a, b in zip(ty, ys))) <= tolerance
+
+
 def sample_surface(layer, grid, destination):
     if layer.get('kind')=='original-arcgrid-zip':
         from regional_arcgrid import sample
@@ -168,7 +191,7 @@ def sample_surface(layer, grid, destination):
         expected = rasterio.transform.from_origin(grid['west'], grid['north'], 1, 1)
         if raster.count != 1 or raster.shape != (size, size) or not raster.transform.almost_equals(expected):
             raise ValueError('Scan export returned another pixel grid')
-        if not CRS(raster.crs).equals(CRS(grid['crs']), ignore_axis_order=True):
+        if not same_crs(raster.crs, grid['crs'], bounds):
             raise ValueError('Scan raster CRS differs from frozen world')
         array = raster.read(1, masked=True).filled(np.nan).astype(np.float32)
     array *= layer['metres_per_vertical_unit']

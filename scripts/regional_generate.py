@@ -37,6 +37,7 @@ from pathlib import Path
 import shutil
 import signal
 import sys
+import threading
 import time
 import traceback
 import urllib.parse
@@ -81,6 +82,7 @@ SEED_FILES = ('plan.json', 'jobs.sqlite', 'scans/catalog.json', 'point-surveys/c
               'will2021/catalog.json', 'metro.geojson', 'metro.geojson.receipt.json', 'kenosha.geojson',
               'kenosha.geojson.receipt.json')
 COVERAGE_SCHEMA = 'earthcraft.way-index-coverage.v1'
+ROUTE_VERSION = 1  # bump when locality_route() changes; workers re-rank pending tiles once
 _SCAN_COVERAGES = {}
 
 
@@ -202,6 +204,126 @@ def select_pair(tile, frame, catalog):
         if area > 0:
             candidates.append((area, pair['year'], -layer['native_pixel_size'], pair['county'], pair))
     return max(candidates, key=lambda entry: entry[:4])[-1] if candidates else None
+
+
+def tile_grid(tile, frame):
+    return {'crs': frame['crs'], 'west': tile['west'], 'north': tile['north'], 'size': tile['size']}
+
+
+def grid_members(tile, frame, catalog):
+    """(pair, {'dtm': [...], 'dsm': [...]}) when the tile's scan pair is an original ArcGrid archive, else (pair, None)."""
+    pair = select_pair(tile, frame, catalog)
+    if pair is None:
+        return None, None
+    from regional_arcgrid import wanted_members
+    members = {}
+    for kind in ('dtm', 'dsm'):
+        layer = pair.get(kind) or {}
+        if layer.get('kind') != 'original-arcgrid-zip':
+            return pair, None
+        members[kind] = wanted_members(layer, tile_grid(tile, frame))
+    return pair, members
+
+
+def locality_route(plan, frame, catalog, tile_ids):
+    """Dispatch order that keeps tiles sharing source files together.
+
+    An original county ArcGrid member is a full-width strip (Will: 31 km x
+    0.9 km, ~1.2 GB inflated), so every tile reading the same members runs
+    back to back while those members sit in the cache; groups follow each
+    other north to south so consecutive groups share a strip. ArcGrid tiles
+    go first because they gain from neighbours working the same strip; every
+    other tile follows in row-major order (north to south, west to east).
+    """
+    position = {tile['id']: index for index, tile in
+                enumerate(sorted(plan['tiles'], key=lambda tile: (-tile['north'], tile['west'])))}
+    tiles = {tile['id']: tile for tile in plan['tiles']}
+    groups, rest = {}, []
+    for tile_id in tile_ids:
+        pair, members = grid_members(tiles[tile_id], frame, catalog)
+        if members:
+            groups.setdefault((pair['county'], tuple(members['dtm']), tuple(members['dsm'])), []).append(tile_id)
+        else:
+            rest.append(tile_id)
+    route = []
+    for key in sorted(groups, key=lambda key: (key[0], min(position[tile] for tile in groups[key]))):
+        route += sorted(groups[key], key=position.__getitem__)
+    return route + sorted(rest, key=position.__getitem__), len(groups)
+
+
+def apply_locality_route(control, plan, frame, catalog, log=print):
+    """Rank pending tiles by locality_route() once per plan and scheduler version (idempotent)."""
+    control = Path(control)
+    marker = control / 'route-locality.json'
+    plan_sha = digest(plan)
+    if marker.exists():
+        record = json.loads(marker.read_text())
+        if record.get('plan_sha256') == plan_sha and record.get('version') == ROUTE_VERSION:
+            return record
+    journal = Journal(control / 'jobs.sqlite', plan)
+    try:
+        pending = [row[0] for row in journal.db.execute(
+            "SELECT tile FROM jobs WHERE stage=0 AND state='pending' ORDER BY tile")]
+        started = time.monotonic()
+        route, groups = locality_route(plan, frame, catalog, pending)
+        changed = journal.prioritize_tiles(route, 'locality-v%d' % ROUTE_VERSION,
+                                           stages=('sources', 'geometry', 'appearance')) if route else 0
+    finally:
+        journal.close()
+    record = {'plan_sha256': plan_sha, 'version': ROUTE_VERSION, 'tiles': len(route), 'arcgrid_groups': groups,
+              'rows_ranked': changed, 'seconds': round(time.monotonic() - started, 1), 'created_utc': utc_now()}
+    atomic(marker, json.dumps(record).encode())
+    log(json.dumps({'event': 'locality_route', **record}))
+    return record
+
+
+class Prefetcher:
+    """Fetch the ArcGrid members of the next queued tiles while this tile computes.
+
+    Runs in one background thread per worker. Members land in the shared LRU
+    cache under their per-member lock, so a worker that needs a member being
+    prefetched waits for it instead of downloading it again.
+    """
+
+    def __init__(self, worker, ctx, depth=6, limit=2):
+        self.worker, self.ctx, self.depth, self.limit = worker, ctx, depth, limit
+        self.thread, self.stop = None, threading.Event()
+
+    def kick(self, journal, current):
+        if self.thread is not None and self.thread.is_alive():
+            return
+        now = time.time()
+        upcoming = [row[0] for row in journal.db.execute(
+            "SELECT tile FROM jobs WHERE stage=0 AND state='pending' AND COALESCE(not_before,0)<=? AND tile!=? "
+            "ORDER BY CASE WHEN route_rank IS NULL THEN 1 ELSE 0 END, route_rank, priority, tile LIMIT ?",
+            (now, current, self.depth))]
+        if upcoming:
+            self.thread = threading.Thread(target=self.run, args=(upcoming,), name='grid-prefetch', daemon=True)
+            self.thread.start()
+
+    def run(self, upcoming):
+        from regional_arcgrid import prefetch
+        fetched = 0
+        for tile_id in upcoming:
+            tile = self.worker.tiles.get(tile_id)
+            if tile is None or self.stop.is_set() or fetched >= self.limit:
+                break
+            try:
+                pair, members = grid_members(tile, self.ctx['frame'], self.ctx['catalog'])
+                if not members:
+                    continue
+                for kind in ('dtm', 'dsm'):
+                    names = prefetch(pair[kind], tile_grid(tile, self.ctx['frame']), limit=self.limit - fetched,
+                                     stop=self.stop)
+                    fetched += len(names)
+                    if names:
+                        self.worker.log(event='grid_prefetched', tile=tile_id, kind=kind, members=names)
+            except Exception as error:  # noqa: BLE001 - prefetch is an optimisation; the tile fetches what it needs
+                self.worker.log(event='grid_prefetch_failed', tile=tile_id, reason=str(error)[:200])
+                break
+
+    def close(self):
+        self.stop.set()
 
 
 def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, cook_catalog=None, will_catalog=None,
@@ -434,6 +556,18 @@ class IndexSet:
         if local.exists() and receipt.exists():
             regional_cache.touch(local)
             return local
+        if self.index_dir is None:
+            # Workers share the cache: one downloads an index, the others wait and reuse it.
+            local.parent.mkdir(parents=True, exist_ok=True)
+            with (local.parent / f'.{name}.fetch.lock').open('a+') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if local.exists() and receipt.exists():
+                    regional_cache.touch(local)
+                    return local
+                return self._fetch(name, local, receipt)
+        return self._fetch(name, local, receipt)
+
+    def _fetch(self, name, local, receipt):
         if self.index_dir is not None:
             raise IndexUnavailable(f'{local} is missing')
         data, receipts = f'{INDEX_PREFIX}/{name}.sqlite', [f'{INDEX_PREFIX}/{name}.json', f'{LEGACY_CONTROL}/{name}.json']
@@ -561,6 +695,7 @@ class Worker:
         self.exit_code = 0
         self.events = []
         self.tile_peaks = {}
+        self.prefetcher = None
 
     # -- logging
     def log(self, **event):
@@ -730,6 +865,8 @@ class Worker:
             self.cache.begin_tile()
             self.footprint.peak_detail.pop('tile', None)
             self.log(event='tile_start', tile=tile['id'], lane=job['lane'], stages=job['stages'])
+            if self.prefetcher is not None:
+                self.prefetcher.kick(journal, tile['id'])
             with self.footprint.watch(interval=self.args.watch_seconds, extra={'tile': (root, self.args.tile_cap)}):
                 receipts, failures, delivered, lq = generate_tile(tile, job, root, ctx)
                 self.footprint._record(0, self.footprint.free(), {'tile': regional_cache.entry_bytes(root)})
@@ -807,6 +944,8 @@ class Worker:
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
                        'footprints': a.footprints, **self.catalogs()}
+                if a.prefetch:
+                    self.prefetcher = Prefetcher(self, ctx)
                 processed = consecutive = deferred_run = 0
                 outcomes = {}
                 while not self.stopping and processed < a.limit:
@@ -843,6 +982,8 @@ class Worker:
                         batch.flush()
                     except Exception as error:  # noqa: BLE001 - leases expire; the next run adopts or redoes
                         self.log(event='final_flush_failed', reason=str(error)[:300])
+                if self.prefetcher is not None:
+                    self.prefetcher.close()
                 keeper.close()
                 indexes.close()
                 journal_summary = journal.summary()
@@ -1051,7 +1192,11 @@ def build_parser():
     parser.add_argument('--no-wait', action='store_true', help='exit instead of pausing when the guard refuses')
     parser.add_argument('--no-adopt', action='store_true')
     parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--no-prefetch', dest='prefetch', action='store_false',
+                        help='do not fetch the next tiles\' ArcGrid members in the background')
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--route-locality', action='store_true',
+                      help='rank pending tiles so tiles sharing source files run together (idempotent)')
     mode.add_argument('--status', action='store_true')
     mode.add_argument('--prepare', action='store_true')
     mode.add_argument('--index-coverage', action='store_true')
@@ -1072,6 +1217,14 @@ def main(argv=None):
         os.nice(args.nice)
     if args.status:
         return status(args)
+    if args.route_locality:
+        from regional_arcgrid import localize
+        control = args.control.resolve()
+        plan = json.loads((control / 'plan.json').read_text())
+        scans = control / 'scans' / 'catalog.json'
+        catalog = localize(json.loads(scans.read_text()), args.scratch.resolve() / 'cache') if scans.exists() else {'sources': []}
+        apply_locality_route(control, plan, plan['frame'], catalog)
+        return 0
     if args.prepare:
         return prepare(args)
     if args.seed_control:
