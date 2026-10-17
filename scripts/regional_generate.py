@@ -312,6 +312,10 @@ class Prefetcher:
                 pair, members = grid_members(tile, self.ctx['frame'], self.ctx['catalog'])
                 if not members:
                     continue
+                cache = self.worker.cache
+                largest = max(pair[kind]['members'][name]['bytes'] for kind in members for name in members[kind])
+                if cache.used(fresh=True) + largest > 0.8 * cache.cap:
+                    break  # never crowd running tiles out of the cache for a guess about the next one
                 for kind in ('dtm', 'dsm'):
                     names = prefetch(pair[kind], tile_grid(tile, self.ctx['frame']), limit=self.limit - fetched,
                                      stop=self.stop)
@@ -890,7 +894,20 @@ class Worker:
                      files=len(package.items), bytes=package.bytes, seconds=round(time.monotonic() - started, 1),
                      tile_scratch_peak_bytes=self.tile_peaks[tile['id']])
             return 'packaged'
-        except (CacheCapacityError, TileCapacityError) as error:
+        except CacheCapacityError as error:
+            if not self.cache.others_active():  # this tile alone needs more than the cap: fail it, move on
+                self.fail_tile(journal, keeper, job, root, error)
+                self.footprint.clear_breach()
+                return 'capacity'
+            # Other running tiles pin the cache (large ArcGrid strips): wait for them, do not fail this tile.
+            self.release(journal, keeper, job, root, error, 'tile_paused_cache')
+            self.footprint.clear_breach()
+            for _ in range(60):
+                if self.stopping:
+                    break
+                time.sleep(1)
+            return 'paused'
+        except TileCapacityError as error:
             self.fail_tile(journal, keeper, job, root, error)
             self.footprint.clear_breach()
             return 'capacity'
