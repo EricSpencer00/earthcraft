@@ -9,7 +9,7 @@ from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from regional_arcgrid import grid_layout,tile_members,publisher_reference,original_member,BufferedRangeReader
+from regional_arcgrid import grid_layout,tile_members,publisher_reference,original_member,BufferedRangeReader,fetch_member
 from http_zip_range import RangeReader
 
 
@@ -54,26 +54,55 @@ class RegionalArcGridTests(unittest.TestCase):
         self.assertAlmostEqual(publisher_reference(xml(6360))[2],1200/3937)
         with self.assertRaises(ValueError):publisher_reference(xml(0))
 
+    @staticmethod
+    def archive(root,raw,compression=zipfile.ZIP_DEFLATED):
+        archive_path=root/'original.zip'
+        with zipfile.ZipFile(archive_path,'w',compression) as archive:
+            archive.writestr('grid/hdr.adf',b'header');archive.writestr('grid/w001001.adf',raw)
+        with zipfile.ZipFile(archive_path) as archive:
+            info=archive.getinfo('grid/w001001.adf')
+            member={'name':info.filename,'bytes':info.file_size,'compressed_bytes':info.compress_size,
+                    'crc32':info.CRC,'offset':info.header_offset,'compression':info.compress_type}
+        data=archive_path.read_bytes()
+        layer={'members':{'w001001.adf':member},'cache':str(root/'cache'),
+               'archive_url':'https://publisher.example/original.zip','archive_etag':'verified-original',
+               'archive_bytes':len(data)}
+        calls=[]
+        def get_range(url,start,end,etag,length,**_):
+            assert etag=='verified-original' and length==len(data) and end-start<16*2**20
+            calls.append((start,end));return data[start:end+1]
+        return layer,member,get_range,calls
+
     def test_original_member_version_crc_and_cache_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);archive_path=root/'original.zip'
-            raw=b'original scan grid bytes'*500
-            with zipfile.ZipFile(archive_path,'w',zipfile.ZIP_DEFLATED) as archive:archive.writestr('grid/w001001.adf',raw)
-            class Reader(io.BytesIO):
-                def __init__(self,*args,**kwargs):
-                    super().__init__(archive_path.read_bytes());self.length=len(self.getvalue());self.etag='verified-original'
-            with zipfile.ZipFile(archive_path) as archive:
-                info=archive.getinfo('grid/w001001.adf')
-                member={'name':info.filename,'bytes':info.file_size,'compressed_bytes':info.compress_size,
-                        'crc32':info.CRC,'offset':info.header_offset,'compression':info.compress_type}
-            layer={'members':{'w001001.adf':member},'cache':str(root/'cache'),
-                   'archive_url':'https://publisher.example/original.zip','archive_etag':'verified-original',
-                   'archive_bytes':archive_path.stat().st_size}
-            with patch('regional_arcgrid.BufferedRangeReader',Reader):
+            root=Path(directory);raw=b'original scan grid bytes'*500
+            layer,_,get_range,_=self.archive(root,raw)
+            with patch('source_http.get_range',get_range):
                 path,receipt=original_member(layer,'w001001.adf',reserve_bytes=0)
                 self.assertEqual(path.read_bytes(),raw);self.assertTrue(receipt['zip_crc32_verified'])
                 path.write_bytes(raw[:-1]+b'!')
                 with self.assertRaisesRegex(ValueError,'bytes changed'):original_member(layer,'w001001.adf',reserve_bytes=0)
+                (root/'cache'/'w001001.adf.receipt.json').unlink()  # half-evicted unit: fetched again
+                path,_=original_member(layer,'w001001.adf',reserve_bytes=0)
+                self.assertEqual(path.read_bytes(),raw)
+
+    def test_parallel_ranges_are_consumed_in_order_and_crc_checked(self):
+        import random
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);raw=random.Random(7).randbytes(300_000)*3
+            for compression in (zipfile.ZIP_DEFLATED,zipfile.ZIP_STORED):
+                layer,member,get_range,calls=self.archive(root,raw,compression)
+                with patch('source_http.get_range',get_range):
+                    output=io.BytesIO()
+                    digest,count,_=fetch_member(layer,member,output,chunk=4096,connections=3,log=lambda **_:None)
+                    self.assertEqual(output.getvalue(),raw);self.assertEqual(count,len(raw))
+                    self.assertGreater(len(calls),20)
+                    bad=dict(member,crc32=member['crc32']^1)
+                    with self.assertRaisesRegex(ValueError,'CRC'):
+                        fetch_member(layer,bad,io.BytesIO(),chunk=65536,connections=2,log=lambda **_:None)
+                    moved=dict(member,offset=member['offset']+1)
+                    with self.assertRaisesRegex(ValueError,'local header'):
+                        fetch_member(layer,moved,io.BytesIO(),log=lambda **_:None)
 
 
 if __name__=='__main__':unittest.main()

@@ -29,8 +29,10 @@ BRANCH=${EARTHCRAFT_BRANCH:-main}
 as_user() { if [ "$(id -un)" = "$SVC_USER" ]; then "$@"; else runuser -u "$SVC_USER" -- "$@"; fi; }
 
 install_requirements() {
+  local reqs=() r
+  for r in "${REQS[@]}"; do [ -f "$ROOT/$r" ] && reqs+=(-r "$r"); done   # skip files a branch does not have
   as_user "$PY" -m pip install -q -U pip
-  (cd "$ROOT" && as_user "$PY" -m pip install -q $(printf -- '-r %s ' "${REQS[@]}") "${EXTRA_PKGS[@]}")
+  (cd "$ROOT" && as_user "$PY" -m pip install -q "${reqs[@]}" "${EXTRA_PKGS[@]}")
 }
 
 bootstrap() {
@@ -99,9 +101,12 @@ run() {
   export EARTHCRAFT_STOP_TIMEOUT=${EARTHCRAFT_STOP_TIMEOUT:-1800}
   [ -f "$CONTROL/plan.json" ] || "$PY" scripts/regional_generate.py --control "$CONTROL" --frame "$FRAME" \
       --min-free 10GiB --seed-control
+  # Source cache: ~10 GiB of way/footprint indexes plus room for ~8 inflated ArcGrid strips (1.2 GB each).
+  # Footprint = cache + per worker (3 GiB tile + 1 GiB batch + 1 GiB upload scratch) + control.
+  local workers=${EARTHCRAFT_WORKERS:-1} cache_gib=${EARTHCRAFT_CACHE_GIB:-20}
   exec "$PY" -u scripts/regional_supervisor.py --control "$CONTROL" --frame "$FRAME" \
-    --scratch "$ROOT/runs/scratch" --hf-python "$PY" --footprints --workers "${EARTHCRAFT_WORKERS:-1}" \
-    --cache-cap "${EARTHCRAFT_CACHE_CAP:-12GiB}" --footprint-cap "${EARTHCRAFT_FOOTPRINT_CAP:-34GiB}" \
+    --scratch "$ROOT/runs/scratch" --hf-python "$PY" --footprints --workers "$workers" \
+    --cache-cap "${cache_gib}GiB" --footprint-cap "${EARTHCRAFT_FOOTPRINT_CAP:-$((cache_gib + 5 * workers + 1))GiB}" \
     --min-free "${EARTHCRAFT_MIN_FREE:-10GiB}" --tile-cap 3GiB --batch-tiles "${EARTHCRAFT_BATCH_TILES:-8}"
 }
 

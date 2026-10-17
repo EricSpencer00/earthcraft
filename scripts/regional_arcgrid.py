@@ -5,7 +5,10 @@ Only intersecting native grid files are fetched, with original CRCs and hashes;
 GDAL decodes their values without a rendered image or an invented roof model.
 """
 import argparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -13,8 +16,10 @@ from pathlib import Path
 import copy
 import re
 import struct
+import time
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 
 import numpy as np
 from pyproj import CRS, Transformer
@@ -25,6 +30,7 @@ from shapely.geometry import box
 from shapely.ops import transform
 
 from http_zip_range import RangeReader
+import source_http
 from regional_scans import frozen_get, SURVEY_FOOT
 from region_expansion import atomic, sha
 import regional_cache
@@ -134,12 +140,68 @@ def index_archive(url,destination,prefix,cache,reference,datum,factor):
     atomic(destination,json.dumps(record,indent=2).encode());return record
 
 
+def _local_data_start(layer,entry):
+    """Offset of a member's payload: its local header is 30 bytes + name + extra field."""
+    offset=entry['offset']
+    head=source_http.get_range(layer['archive_url'],offset,min(offset+4095,layer['archive_bytes']-1),layer['archive_etag'],layer['archive_bytes'])
+    if head[:4]!=b'PK\x03\x04':raise ValueError('Original grid ZIP local header missing')
+    name_length,extra_length=struct.unpack('<2H',head[26:30])
+    if head[30:30+name_length].decode('utf-8','replace')!=entry['name']:raise ValueError('Original grid ZIP directory changed')
+    return offset+30+name_length+extra_length
+
+
+def fetch_member(layer,entry,output,chunk=source_http.MAX_RANGE,connections=None,log=None):
+    """Stream one ZIP member with parallel bounded ranges; returns (sha256, bytes, crc32).
+
+    Ranges are fetched by at most ``connections`` threads (each also holds a
+    machine-wide host slot), consumed strictly in order, inflated, CRC-checked
+    against the frozen ZIP directory and written once.
+    """
+    connections=connections or source_http.connections()
+    start=_local_data_start(layer,entry);total=entry['compressed_bytes']
+    if start+total>layer['archive_bytes']:raise ValueError('Original grid member exceeds archive')
+    spans=[(start+at,min(start+at+chunk,start+total)-1) for at in range(0,total,chunk)]
+    inflate=zlib.decompressobj(-15) if entry['compression']==8 else None
+    digest=hashlib.sha256();crc=0;count=0;began=time.monotonic()
+
+    def get(span):
+        return source_http.get_range(layer['archive_url'],span[0],span[1],layer['archive_etag'],layer['archive_bytes'])
+
+    def emit(raw):
+        nonlocal crc,count
+        count+=len(raw)
+        if count>entry['bytes']:raise ValueError('Original grid decompression exceeded indexed length')
+        crc=zlib.crc32(raw,crc);digest.update(raw);output.write(raw)
+
+    with ThreadPoolExecutor(max_workers=connections,thread_name_prefix='grid-range') as pool:
+        pending=deque()
+        for span in spans:
+            pending.append(pool.submit(get,span))
+            if len(pending)<=connections:continue
+            raw=pending.popleft().result()
+            emit(inflate.decompress(raw) if inflate else raw)
+        while pending:
+            raw=pending.popleft().result()
+            emit(inflate.decompress(raw) if inflate else raw)
+    if inflate:emit(inflate.flush())
+    if count!=entry['bytes']:raise ValueError('Original grid member truncated')
+    if crc!=entry['crc32']:raise ValueError('Original grid member CRC differs from ZIP directory')
+    seconds=time.monotonic()-began
+    (log or _log)(event='grid_member_fetched',member=entry['name'],compressed_bytes=total,bytes=count,
+                  seconds=round(seconds,1),mb_per_s=round(total/2**20/max(seconds,1e-3),2),connections=connections)
+    return digest.hexdigest(),count,crc
+
+
+def _log(**event):
+    print(json.dumps(event,sort_keys=True),flush=True)
+
+
 def original_member(layer,name,reserve_bytes=150*2**30):
     entry=layer['members'][name];root=Path(layer['cache']);root.mkdir(parents=True,exist_ok=True)
     path=root/name;proof=root/(name+'.receipt.json')
     with (root/(name+'.lock')).open('a+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        if path.exists() or proof.exists():
+        if path.exists() and proof.exists():
             record=json.loads(proof.read_text())
             identity=(path.stat().st_size,path.stat().st_mtime_ns,path.stat().st_ctime_ns)
             if record['member']!=entry or record['archive_etag']!=layer['archive_etag']:raise ValueError('Original grid cache identity differs')
@@ -148,29 +210,29 @@ def original_member(layer,name,reserve_bytes=150*2**30):
                 _VERIFIED[str(path)]=identity
             regional_cache.touch(path)
             return path,record
+        # A half-evicted unit (member without receipt or receipt without member) is refetched.
+        path.unlink(missing_ok=True);proof.unlink(missing_ok=True)
         regional_cache.admit(path,entry['bytes']+2**20,what='grid member '+name,
             legacy_reserve=reserve_bytes+entry['bytes']+2**30,legacy_message='Preserve original grid cache storage reserve')
-        reader=BufferedRangeReader(layer['archive_url'],budget=entry['compressed_bytes']+32*2**20)
-        if reader.etag!=layer['archive_etag'] or reader.length!=layer['archive_bytes']:raise ValueError('Remote grid archive version changed')
-        temporary=path.with_name(name+'.partial');digest=hashlib.sha256();count=0
-        with zipfile.ZipFile(reader) as archive:
-            info=archive.getinfo(entry['name'])
-            if (info.file_size,info.compress_size,info.CRC,info.header_offset,info.compress_type)!=(
-                entry['bytes'],entry['compressed_bytes'],entry['crc32'],entry['offset'],entry['compression']):
-                raise ValueError('Original grid ZIP directory changed')
-            with archive.open(info) as source,temporary.open('wb') as output:
-                while raw:=source.read(2**20):
-                    count+=len(raw)
-                    if count>entry['bytes']:raise ValueError('Original grid decompression exceeded indexed length')
-                    digest.update(raw);output.write(raw)
-        if count!=entry['bytes']:raise ValueError('Original grid member truncated')
-        record={'member':entry,'archive_url':layer['archive_url'],'archive_etag':reader.etag,
-                'sha256':digest.hexdigest(),'bytes':count,'zip_crc32_verified':True}
+        temporary=path.with_name(name+'.partial')
+        try:
+            with temporary.open('wb') as output:
+                digest,count,_=fetch_member(layer,entry,output)
+        except BaseException:
+            temporary.unlink(missing_ok=True);raise
+        record={'member':entry,'archive_url':layer['archive_url'],'archive_etag':layer['archive_etag'],
+                'sha256':digest,'bytes':count,'zip_crc32_verified':True}
         temporary.replace(path);atomic(proof,json.dumps(record,indent=2).encode());return path,record
 
 
-def sample(layer,grid,destination):
-    native=Transformer.from_crs(grid['crs'],6455,always_xy=True)
+@functools.lru_cache(maxsize=8)
+def _to_native(crs):
+    return Transformer.from_crs(crs,6455,always_xy=True)
+
+
+def wanted_members(layer,grid):
+    """Every original member that sample() reads for this grid, in fetch order."""
+    crs=grid['crs'];native=_to_native(crs) if isinstance(crs,(str,int)) else Transformer.from_crs(crs,6455,always_xy=True)
     size=grid['size'];bounds=transform(native.transform,box(grid['west'],grid['north']-size,
                          grid['west']+size,grid['north']).segmentize(16)).bounds
     margin=2*max(layer['layout']['pixel_size'])
@@ -184,9 +246,27 @@ def sample(layer,grid,destination):
         anchors=[name for name in layer['members'] if re.fullmatch(r'[wz]0010\d\d\.adf',name)]
         if not anchors:raise ValueError('Original grid lacks a GDAL identification member')
         wanted.append(min(anchors,key=lambda name:layer['members'][name]['compressed_bytes']))
-    wanted+=['hdr.adf','dblbnd.adf','prj.adf','sta.adf'];proofs={}
-    for name in wanted:
-        if name not in layer['members']:continue # Publisher absent files are explicit NoData.
+    wanted+=['hdr.adf','dblbnd.adf','prj.adf','sta.adf']
+    return [name for name in wanted if name in layer['members']]  # publisher-absent files are explicit NoData
+
+
+def cached(layer,name):
+    root=Path(layer['cache']);return (root/name).exists() and (root/(name+'.receipt.json')).exists()
+
+
+def prefetch(layer,grid,limit=None,stop=None):
+    """Fetch a grid's missing members into the cache ahead of time; returns the names fetched."""
+    fetched=[]
+    for name in wanted_members(layer,grid):
+        if (stop is not None and stop.is_set()) or (limit is not None and len(fetched)>=limit):break
+        if not cached(layer,name):
+            original_member(layer,name);fetched.append(name)
+    return fetched
+
+
+def sample(layer,grid,destination):
+    size=grid['size'];proofs={}
+    for name in wanted_members(layer,grid):
         path,record=original_member(layer,name);proofs[name]=record
     expected=rasterio.transform.from_origin(grid['west'],grid['north'],1,1)
     with rasterio.open(Path(layer['cache'])/'hdr.adf') as source:

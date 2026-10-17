@@ -82,11 +82,15 @@ def fetch_tile(cache,zoom,x,y):
     path=cache/f'{zoom}-{x}-{y}.png';manifest=path.with_suffix('.json')
     url=f'{BUCKET}/terrarium/{zoom}/{x}/{y}.png'
     if path.exists() or manifest.exists():
-        record=json.loads(manifest.read_text())
-        if record['url']!=url or digest(path)!=record['sha256']:
-            raise ValueError('Frozen AWS tile cache mismatch')
-        regional_cache.touch(path)
-        return path,record
+        try:
+            record=json.loads(manifest.read_text())
+            if record['url']!=url or digest(path)!=record['sha256']:
+                raise ValueError('Frozen AWS tile cache mismatch')
+            regional_cache.touch(path)
+            return path,record
+        except (FileNotFoundError,json.JSONDecodeError):
+            # Another worker evicted or is still writing this unit: fetch it again.
+            if regional_cache.active() is None:raise
     # Public HTTPS only; urllib does not load AWS credentials or sign requests.
     with urllib.request.urlopen(url,timeout=30) as response:
         if response.status!=200:raise ValueError('Incomplete terrain tile')
@@ -100,12 +104,13 @@ def fetch_tile(cache,zoom,x,y):
         if image.size!=(256,256) or image.mode!='RGB':raise ValueError('Unexpected Terrarium tile')
         image.verify()
     regional_cache.admit(path,len(raw)+8192,what=path.name)
-    path.write_bytes(raw)
+    staging=path.with_name(f'.{path.name}.{os.getpid()}.part');staging.write_bytes(raw);staging.replace(path)
     record={'url':url,'sha256':digest(path),'bytes':len(raw),'headers':headers,
         'retrieved_utc':datetime.now(timezone.utc).isoformat(),'requester_pays':False,
         'aws_credentials_used':False,'registry':REGISTRY,'attribution_url':ATTRIBUTION,
         'capture_date':None,'capture_date_note':'Not supplied in tile response; HTTP modification date is not capture date.'}
-    manifest.write_text(json.dumps(record,indent=2))
+    staging=manifest.with_name(f'.{manifest.name}.{os.getpid()}.part')
+    staging.write_text(json.dumps(record,indent=2));staging.replace(manifest)
     return path,record
 
 

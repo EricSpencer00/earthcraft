@@ -281,6 +281,12 @@ class SourceCache:
         with self._db_lock:
             self._db.execute('DELETE FROM active WHERE owner=?', (self.owner,))
 
+    def others_active(self):
+        """True when another live worker has a tile running (its units are pinned)."""
+        self.protected_since()  # prunes dead owners
+        with self._db_lock:
+            return self._db.execute('SELECT count(*) FROM active WHERE owner!=?', (self.owner,)).fetchone()[0] > 0
+
     def protected_since(self):
         """Oldest start among live tiles; units used after it are pinned."""
         oldest = None

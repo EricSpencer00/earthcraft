@@ -48,6 +48,16 @@ progress. Failed tiles retry with backoff; `--requeue-failed` puts them back in
 the queue. `configs/earthcraft-regional-generator.plist` is a launchd template
 for running the supervisor at login.
 
+Source downloads. Will and Kendall terrain comes from county ArcGrid ZIPs
+on the ISGS clearinghouse; one ZIP member is a 31 km east-west strip
+(~1.2 GB inflated). Members are fetched once with parallel 16 MiB range
+requests, kept in the LRU cache and shared by every worker. All workers on a
+machine share at most `EARTHCRAFT_HOST_CONNECTIONS` (default 4) connections
+per source host, with exponential backoff on 429/5xx. At start the supervisor
+ranks pending tiles so tiles reading the same strip run back to back
+(`--route-locality`, once per plan), and each worker prefetches the next
+tiles' members while its current tile computes.
+
 ## 2. Install into the save
 
 Quit Minecraft to the title screen first. The installer refuses while the game
