@@ -1066,8 +1066,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if not 1 <= args.workers <= 2:
-        raise SystemExit('Use one or two workers on the MacBook')
+    if not 1 <= args.workers <= 8:
+        raise SystemExit('Use between one and eight workers')
     if args.nice:
         os.nice(args.nice)
     if args.status:

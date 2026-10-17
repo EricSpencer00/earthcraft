@@ -79,8 +79,8 @@ run() {
       --min-free 10GiB --seed-control
   exec "$PY" -u scripts/regional_supervisor.py --control "$CONTROL" --frame "$FRAME" \
     --scratch "$ROOT/runs/scratch" --hf-python "$PY" --footprints --workers "${EARTHCRAFT_WORKERS:-1}" \
-    --cache-cap "${EARTHCRAFT_CACHE_CAP:-24GiB}" --footprint-cap "${EARTHCRAFT_FOOTPRINT_CAP:-32GiB}" \
-    --min-free "${EARTHCRAFT_MIN_FREE:-10GiB}" --tile-cap 4GiB --batch-tiles "${EARTHCRAFT_BATCH_TILES:-8}"
+    --cache-cap "${EARTHCRAFT_CACHE_CAP:-12GiB}" --footprint-cap "${EARTHCRAFT_FOOTPRINT_CAP:-34GiB}" \
+    --min-free "${EARTHCRAFT_MIN_FREE:-10GiB}" --tile-cap 3GiB --batch-tiles "${EARTHCRAFT_BATCH_TILES:-8}"
 }
 
 update() {
