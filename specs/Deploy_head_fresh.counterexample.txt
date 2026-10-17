@@ -1,0 +1,235 @@
+TLC counterexample for Deploy.tla, config Deploy_head_fresh.cfg (Converges violated).
+
+Error: Temporal properties were violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 0
+/\ old = 0
+/\ step = "idle"
+/\ running = 0
+/\ marker = -1
+/\ head = 0
+/\ fetched = 0
+
+State 2: <Push line 52, col 9 to line 54, col 92 of module Deploy>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 1
+/\ old = 0
+/\ step = "idle"
+/\ running = 0
+/\ marker = -1
+/\ head = 0
+/\ fetched = 0
+
+State 3: <Try line 64, col 10 to line 66, col 99 of module Deploy>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 1
+/\ old = 0
+/\ step = "decide"
+/\ running = 0
+/\ marker = -1
+/\ head = 0
+/\ fetched = 1
+
+State 4: <Decide line 72, col 11 to line 75, col 91 of module Deploy>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 1
+/\ old = 0
+/\ step = "ff"
+/\ running = 0
+/\ marker = -1
+/\ head = 0
+/\ fetched = 1
+
+State 5: <Try line 77, col 16 to line 78, col 106 of module Deploy>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 1
+/\ old = 0
+/\ step = "reqs"
+/\ running = 0
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 6: <Push line 52, col 9 to line 54, col 92 of module Deploy>
+/\ launcher = 0
+/\ reqs = 0
+/\ failures = 0
+/\ remote = 2
+/\ old = 0
+/\ step = "reqs"
+/\ running = 0
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 7: <Try line 80, col 16 to line 81, col 108 of module Deploy>
+/\ launcher = 0
+/\ reqs = 1
+/\ failures = 0
+/\ remote = 2
+/\ old = 0
+/\ step = "launcher"
+/\ running = 0
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 8: <Try line 84, col 20 to line 86, col 112 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 0
+/\ remote = 2
+/\ old = 0
+/\ step = "restart"
+/\ running = 0
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 9: <Try line 92, col 12 to line 95, col 96 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 0
+/\ remote = 2
+/\ old = 0
+/\ step = "idle"
+/\ running = 1
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 10: <Try line 64, col 10 to line 66, col 99 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 1
+/\ remote = 2
+/\ old = 0
+/\ step = "idle"
+/\ running = 1
+/\ marker = -1
+/\ head = 1
+/\ fetched = 1
+
+State 11: <Try line 64, col 10 to line 66, col 99 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 1
+/\ remote = 2
+/\ old = 0
+/\ step = "decide"
+/\ running = 1
+/\ marker = -1
+/\ head = 1
+/\ fetched = 2
+
+State 12: <Decide line 72, col 11 to line 75, col 91 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 1
+/\ remote = 2
+/\ old = 1
+/\ step = "ff"
+/\ running = 1
+/\ marker = -1
+/\ head = 1
+/\ fetched = 2
+
+State 13: <Try line 77, col 16 to line 78, col 106 of module Deploy>
+/\ launcher = 1
+/\ reqs = 1
+/\ failures = 1
+/\ remote = 2
+/\ old = 1
+/\ step = "reqs"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 14: <Try line 80, col 16 to line 81, col 108 of module Deploy>
+/\ launcher = 1
+/\ reqs = 2
+/\ failures = 1
+/\ remote = 2
+/\ old = 1
+/\ step = "launcher"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 15: <Try line 84, col 20 to line 86, col 112 of module Deploy>
+/\ launcher = 2
+/\ reqs = 2
+/\ failures = 1
+/\ remote = 2
+/\ old = 1
+/\ step = "restart"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 16: <Try line 92, col 12 to line 95, col 96 of module Deploy>
+/\ launcher = 2
+/\ reqs = 2
+/\ failures = 2
+/\ remote = 2
+/\ old = 1
+/\ step = "idle"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 17: <Try line 64, col 10 to line 66, col 99 of module Deploy>
+/\ launcher = 2
+/\ reqs = 2
+/\ failures = 2
+/\ remote = 2
+/\ old = 1
+/\ step = "decide"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 18: <Decide line 72, col 11 to line 75, col 91 of module Deploy>
+/\ launcher = 2
+/\ reqs = 2
+/\ failures = 2
+/\ remote = 2
+/\ old = 2
+/\ step = "idle"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+State 19: <Try line 64, col 10 to line 66, col 99 of module Deploy>
+/\ launcher = 2
+/\ reqs = 2
+/\ failures = 2
+/\ remote = 2
+/\ old = 2
+/\ step = "decide"
+/\ running = 1
+/\ marker = -1
+/\ head = 2
+/\ fetched = 2
+
+Back to state 18: <Decide line 72, col 11 to line 75, col 91 of module Deploy>

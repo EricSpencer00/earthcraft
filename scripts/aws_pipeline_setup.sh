@@ -129,8 +129,11 @@ update() {
   fi
   # Compare against the last fully deployed commit, not HEAD: a deploy that failed halfway
   # (after the fast-forward) is finished on the next tick instead of being skipped forever.
+  # No marker means no deploy was ever recorded: redeploy everything once (falling back to
+  # HEAD would skip a box whose HEAD was fast-forwarded by a failed tick). The marker is
+  # written only after the restart succeeded. Verified in specs/Deploy.tla (mode "fixed").
   local old new deployed=/var/lib/earthcraft/deployed
-  old=$(cat "$deployed" 2>/dev/null || as_user git rev-parse HEAD); new=$(as_user git rev-parse FETCH_HEAD)
+  old=$(cat "$deployed" 2>/dev/null || echo none); new=$(as_user git rev-parse FETCH_HEAD)
   if [ "$old" = "$new" ]; then
     if [ -f /run/earthcraft/shard ] && [ "$(cat /run/earthcraft/shard)" != "$(shard)" ]; then
       echo "shard changed to $(shard); restarting (the worker finishes its tile and commits its batch first)"
@@ -143,16 +146,17 @@ update() {
   else
     as_user git merge -q --ff-only FETCH_HEAD
   fi
-  if ! as_user git diff --quiet "$old" "$new" -- 'requirements*.txt'; then install_requirements; fi
-  if ! as_user git diff --quiet "$old" "$new" -- configs/aws scripts/aws_pipeline_setup.sh || ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline; then
+  changed() { [ "$old" = none ] || ! as_user git cat-file -e "$old^{commit}" 2>/dev/null || ! as_user git diff --quiet "$old" "$new" -- "$@"; }
+  if changed 'requirements*.txt'; then install_requirements; fi
+  if changed configs/aws scripts/aws_pipeline_setup.sh || ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline; then
     install -m 0755 scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline
     install -m 0644 configs/aws/*.service configs/aws/*.timer /etc/systemd/system/
     systemctl daemon-reload
     for timer in configs/aws/*.timer; do systemctl enable --now "$(basename "$timer")" 2>/dev/null || true; done
   fi
-  mkdir -p "$(dirname "$deployed")"; echo "$new" > "$deployed"
   echo "updated $old -> $new; restarting (SIGTERM: the worker finishes its tile and commits its batch first)"
   systemctl restart earthcraft-pipeline.service
+  mkdir -p "$(dirname "$deployed")"; echo "$new" > "$deployed.tmp"; mv "$deployed.tmp" "$deployed"
 }
 
 validate() {   # timer: comment PASS/FAIL on open contribution pull requests; the owner merges

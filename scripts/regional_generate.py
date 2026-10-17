@@ -210,6 +210,15 @@ def tile_grid(tile, frame):
     return {'crs': frame['crs'], 'west': tile['west'], 'north': tile['north'], 'size': tile['size']}
 
 
+def grid_need(tile, frame, catalog):
+    """{cache path: bytes admitted} of every original ArcGrid member the tile reads (empty when none)."""
+    pair, members = grid_members(tile, frame, catalog)
+    if not members:
+        return {}
+    return {Path(pair[kind]['cache']) / name: pair[kind]['members'][name]['bytes'] + 2**20
+            for kind in members for name in members[kind]}
+
+
 def grid_members(tile, frame, catalog):
     """(pair, {'dtm': [...], 'dsm': [...]}) when the tile's scan pair is an original ArcGrid archive, else (pair, None)."""
     pair = select_pair(tile, frame, catalog)
@@ -854,6 +863,19 @@ class Worker:
         self.log(event='tile_adopted', tile=job['tile'], stages=job['stages'], commit=commit)
         return True
 
+    def reserve_grid(self, job, need, poll=5.0):
+        """Wait (holding no pins) until the tile's whole ArcGrid member set is reserved; False when stopping."""
+        units = self.cache.enqueue(need)
+        logged = False
+        while not self.cache.try_grant(what=f"tile {job['tile']}"):
+            if self.stopping:
+                return False
+            if not logged:
+                self.log(event='tile_waiting_cache', tile=job['tile'], units=len(units), bytes=sum(units.values()))
+                logged = True
+            time.sleep(poll)
+        return True
+
     def process(self, journal, keeper, batch, job, ctx):
         tile = self.tiles[job['tile']]
         root = self.gen / tile['id']
@@ -864,6 +886,15 @@ class Worker:
                     return 'adopted'
             except Exception as error:  # noqa: BLE001 - adoption is an optimisation; generate instead
                 self.log(event='adopt_check_failed', tile=tile['id'], reason=str(error)[:200])
+            try:
+                need = grid_need(tile, ctx['frame'], ctx.get('catalog') or {'sources': []})
+            except Exception as error:  # noqa: BLE001 - the tile itself reports a bad grid; just do not reserve
+                need = {}
+                self.log(event='grid_need_failed', tile=tile['id'], reason=str(error)[:200])
+            if need and not self.reserve_grid(job, need):
+                self.release(journal, keeper, job, root, CacheCapacityError('stopping while waiting for cache'),
+                             'tile_paused_cache')
+                return 'paused'
             if root.exists():
                 shutil.rmtree(root)
             root.mkdir(parents=True)

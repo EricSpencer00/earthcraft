@@ -1,0 +1,299 @@
+TLC counterexample for CacheLeases with Fix = FALSE (CacheLeasesBuggy.cfg, MCCacheLeases.tla).
+States 17..29 repeat forever ("Back to state 17"): w1 and w3 keep pinning, refusing and pausing each other;
+neither tile ever gets a done or capacity receipt. Regenerate: java -jar tla2tools.jar -config CacheLeasesBuggy.cfg MCCacheLeases.tla
+
+Error: Temporal properties were violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {}
+/\ pc = [w1 |-> "idle", w2 |-> "idle", w3 |-> "idle"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 2: <Start("w3") line 55, col 13 to line 60, col 88 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {}
+/\ pc = [w1 |-> "idle", w2 |-> "idle", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 3: <Start("w1") line 55, col 13 to line 60, col 88 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {}
+/\ pc = [w1 |-> "fetch", w2 |-> "idle", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 4: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {"e"}
+/\ pc = [w1 |-> "fetch", w2 |-> "idle", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"e"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 5: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {"e", "a"}
+/\ pc = [w1 |-> "fetch", w2 |-> "idle", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"e", "a"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 6: <Start("w2") line 55, col 13 to line 60, col 88 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {"e", "a"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"e", "a"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 7: <Fetch("w2") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<>>]
+/\ cache = {"e", "a", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {"c"}, w3 |-> {"e", "a"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 8: <Finish("w3") line 104, col 14 to line 109, col 71 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"e", "a", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "next"]
+/\ pins = [w1 |-> {}, w2 |-> {"c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 9: <Fetch("w2") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "next"]
+/\ pins = [w1 |-> {}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 1]
+/\ queue = <<>>
+
+State 10: <Advance("w3") line 116, col 15 to line 121, col 82 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "idle"]
+/\ pins = [w1 |-> {}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 11: <Fetch("w1") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "idle"]
+/\ pins = [w1 |-> {"b"}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 12: <Fetch("w1") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "paused", w2 |-> "fetch", w3 |-> "idle"]
+/\ pins = [w1 |-> {}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 13: <Retry("w1") line 112, col 13 to line 114, col 95 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "idle"]
+/\ pins = [w1 |-> {}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 14: <Start("w3") line 55, col 13 to line 60, col 88 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<>>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "fetch", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {"d", "c"}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 15: <Finish("w2") line 104, col 14 to line 109, col 71 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "next", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 16: <Advance("w2") line 116, col 15 to line 121, col 82 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 17: <Fetch("w1") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "d"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 18: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "d"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {"b"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 19: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "d"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {"a", "b"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 20: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {"a", "b", "c"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 21: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "paused"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 22: <Retry("w3") line 112, col 13 to line 114, col 95 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 23: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {"d"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 24: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {"d", "c"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 25: <Fetch("w1") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "paused", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"d", "c"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 26: <Retry("w1") line 112, col 13 to line 114, col 95 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"d", "c"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 27: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "fetch"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {"b", "d", "c"}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 28: <Fetch("w3") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"b", "d", "c"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "paused"]
+/\ pins = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+State 29: <Fetch("w1") line 80, col 3 to line 101, col 39 of module CacheLeases>
+/\ refusedWithReservation = FALSE
+/\ reserved = [w1 |-> {}, w2 |-> {}, w3 |-> {}]
+/\ outcome = [w1 |-> <<>>, w2 |-> <<"done">>, w3 |-> <<"done">>]
+/\ cache = {"a", "b", "d"}
+/\ pc = [w1 |-> "fetch", w2 |-> "finished", w3 |-> "paused"]
+/\ pins = [w1 |-> {"a"}, w2 |-> {}, w3 |-> {}]
+/\ job = [w1 |-> 1, w2 |-> 1, w3 |-> 2]
+/\ queue = <<>>
+
+Back to state 17: <Retry("w3") line 112, col 13 to line 114, col 95 of module CacheLeases>
