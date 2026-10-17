@@ -48,7 +48,7 @@ from shapely.geometry import box, shape
 from shapely.ops import transform
 
 from aws_terrain import prepare as terrain
-from chicago_tiles import Journal, STAGES, digest, tile_plan
+from chicago_tiles import Journal, STAGES, digest, parse_shard, tile_plan
 import hf_store
 from hf_store import DatasetReader, DiskGuardError, GiB, MiB, StoreClient, human, parse_size
 from metric_way_index import MetricWayIndex
@@ -812,7 +812,7 @@ class Worker:
                 while not self.stopping and processed < a.limit:
                     if not self.wait_for_capacity(batch):
                         break
-                    job = journal.claim_tile(self.worker_id, a.lane, tiles=a.tiles, lease_seconds=3600)
+                    job = journal.claim_tile(self.worker_id, a.lane, tiles=a.tiles, lease_seconds=3600, shard=a.shard)
                     if job is None:
                         break
                     keeper.add(job)
@@ -943,7 +943,9 @@ class Batch:
         local = self.worker.gen / '_status-pipeline.json'
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_bytes(data)
-        return {'path': STATUS_PATH, 'local': str(local), 'sha256': hashlib.sha256(data).hexdigest(),
+        shard = self.worker.args.shard
+        path = STATUS_PATH if shard is None else f'status/pipeline-{shard[0]}-of-{shard[1]}.json'
+        return {'path': path, 'local': str(local), 'sha256': hashlib.sha256(data).hexdigest(),
                 'bytes': len(data)}
 
 
@@ -1046,6 +1048,9 @@ def build_parser():
     parser.add_argument('--worker-id', default='base-1')
     parser.add_argument('--tiles', type=lambda v: [t for t in v.split(',') if t], default=None)
     parser.add_argument('--limit', type=int, default=1_000_000)
+    parser.add_argument('--shard', type=parse_shard, default=parse_shard(os.environ.get('EARTHCRAFT_SHARD')),
+                        help='i/N: claim only this machine\'s deterministic share of the plan (4-tile '
+                             'east-west bands, band mod N); default EARTHCRAFT_SHARD or all tiles')
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
     parser.add_argument('--nice', type=int, default=10, help='raise niceness by this much (default 10)')
     parser.add_argument('--no-wait', action='store_true', help='exit instead of pausing when the guard refuses')

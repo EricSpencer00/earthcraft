@@ -26,6 +26,25 @@ BOUNDARY='https://gisapps.cityofchicago.org/arcgis/rest/services/CachedMaps/Aeri
 STAGES=('sources','geometry','appearance','game_verify')
 
 
+SHARD_BAND_TILES=4  # a shard owns whole 4-tile (2 km) east-west bands, so source strips stay on one box
+
+
+def parse_shard(value):
+    """'i/N' -> (i, N) with 0 <= i < N; None or '' -> None (all tiles)."""
+    if value in (None,'','0/1'):return None
+    try:
+        index,count=(int(part) for part in str(value).split('/'))
+    except ValueError:
+        raise ValueError(f'Shard must look like i/N, not {value!r}') from None
+    if not 0<=index<count<=1024:raise ValueError(f'Shard {value!r} needs 0 <= i < N <= 1024')
+    return None if count==1 else (index,count)
+
+
+def tile_shard(tile,count):
+    """Deterministic shard of a plan tile id 'tx_tz': its 4-row band of the plan grid, modulo count."""
+    return (int(str(tile).rsplit('_',1)[1])//SHARD_BAND_TILES)%int(count)
+
+
 def is_local_evidence(evidence):
     """Local receipts are absolute paths; dataset evidence is a repository path (tiles/v2/...)."""
     return Path(str(evidence)).is_absolute()
@@ -117,6 +136,7 @@ class Journal:
     def __init__(self,path,plan,source_order=None):
         self.db=sqlite3.connect(path,timeout=20,isolation_level=None)
         self.db.row_factory=sqlite3.Row
+        self.db.create_function('tile_shard',2,tile_shard,deterministic=True)
         # Multiple tile workers can open the journal at the same instant.  WAL
         # mode changes the database header, so SQLite may briefly report a
         # startup lock even though the connection timeout is set.  Retry that
@@ -278,7 +298,7 @@ class Journal:
             kinds[name]='local'
         return kinds
 
-    def claim_tile(self,owner,lane='base',now=None,lease_seconds=3600,tiles=None):
+    def claim_tile(self,owner,lane='base',now=None,lease_seconds=3600,tiles=None,shard=None):
         """Lease every unfinished generation stage of one tile under one token.
 
         One tile is one unit of work. Lane 'base' takes a tile whose sources are
@@ -302,6 +322,8 @@ class Journal:
             tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
             if not tiles:return None
             query+=' AND j.tile IN ('+','.join('?' for _ in tiles)+')';params+=list(tiles)
+        if shard is not None:  # (index, count): this machine's deterministic share of the plan
+            query+=' AND tile_shard(j.tile,?)=?';params+=[int(shard[1]),int(shard[0])]
         query+=' ORDER BY CASE WHEN j.route_rank IS NULL THEN 1 ELSE 0 END, j.route_rank, j.priority, j.tile LIMIT 1'
         self._begin_immediate()
         try:

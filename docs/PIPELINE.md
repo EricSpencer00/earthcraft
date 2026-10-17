@@ -48,6 +48,21 @@ progress. Failed tiles retry with backoff; `--requeue-failed` puts them back in
 the queue. `configs/earthcraft-regional-generator.plist` is a launchd template
 for running the supervisor at login.
 
+### Scaling
+
+- **More workers on one box:** set `EARTHCRAFT_WORKERS=N` in
+  `/etc/earthcraft/pipeline.env` (or pass `--workers N`, 1-8) and restart. On
+  AWS the footprint cap grows with it (cache + 5 GiB per worker + 1 GiB).
+- **More boxes:** `scripts/aws_pipeline_setup.sh launch --count N` starts N
+  more identical spot boxes that bootstrap themselves. Add `--dry-run` to
+  print the AWS calls without launching anything.
+- **No collisions without a shared database:** every box is tagged
+  `EarthcraftShard=i/T` and claims only its share (`--shard i/T`, or
+  `EARTHCRAFT_SHARD`): whole 4-tile (2 km) east-west bands of the plan grid,
+  band mod T, so source strips stay on one box. Existing boxes pick up a new
+  tag at their next update tick. A tile that is already on the Hub is adopted,
+  not regenerated, so re-sharding never duplicates work.
+
 ## 2. Install into the save
 
 Quit Minecraft to the title screen first. The installer refuses while the game

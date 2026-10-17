@@ -42,7 +42,7 @@ No Java is installed: the regional generator verifies worlds in Python.
 ## Units
 
 * `earthcraft-pipeline.service` runs `aws_pipeline_setup.sh run`: reads the token
-  from SSM, then `regional_supervisor.py --footprints --workers 1 --batch-tiles 8`
+  from SSM, then `regional_supervisor.py --footprints --workers $EARTHCRAFT_WORKERS --batch-tiles 8`
   at nice 10, idle-ish I/O priority, `Restart=always`, enabled at boot, so it
   resumes by itself after a reboot or a spot stop/start (the worker requeues its
   own leases; a tile already on the Hub is adopted). Logs: journald for the
@@ -87,6 +87,9 @@ scripts/aws_pipeline_setup.sh push     # client JAR, templates, frame -> the ins
 ```
 
 `launch` reuses the key pair, security group and instance profile.
+`launch --count N` adds N identical boxes and re-tags every box
+`EarthcraftShard=i/T`; each box claims only its share of the plan (see
+[Scaling](PIPELINE.md#scaling)). `--dry-run` prints the calls only.
 Cloud-init downloads this script from `main` and runs `bootstrap` (packages,
 checkout, venv, units, timers). The service waits (`ConditionPathExists`) for the
 private inputs, which never go into user data or the public repository. A
