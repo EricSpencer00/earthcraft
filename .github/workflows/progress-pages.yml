@@ -7,13 +7,7 @@ on:
       - dashboard/**
       - progress/**
       - scripts/progress_snapshot.py
-      - scripts/headless_blocks.py
-      - scripts/headless_site.py
-      - tests/test_headless_blocks.py
-      - tests/headless_browser.mjs
       - tests/dashboard_browser.mjs
-      - requirements-headless.txt
-      - docs/HEADLESS_EVIDENCE.md
       - docs/photos/watertower-sep-10-26.png
       - .github/workflows/progress-pages.yml
   workflow_dispatch:
@@ -41,13 +35,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install bounded evidence and projection support
-        run: python -m pip install pyproj==3.7.2 -r requirements-headless.txt
-      - name: Verify actual-block decoder and sealed evidence
-        run: |
-          python -m unittest discover -s tests -p 'test_headless_blocks.py' -v
-          python scripts/headless_blocks.py validate --directory progress/headless
-          python scripts/public_tree_check.py
+      - name: Install projection support
+        run: python -m pip install pyproj==3.7.2
+      - name: Check the public tree
+        run: python scripts/public_tree_check.py
       - name: Build a privacy-safe snapshot
         run: python scripts/progress_snapshot.py --root . --output progress/earth.json
       - name: Assemble the static observatory
@@ -58,17 +49,16 @@ jobs:
           cp -R dashboard/cache site/cache
           cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
-          python scripts/headless_site.py --bundle progress/headless --output site/headless
           python -c 'from pathlib import Path; p=Path("site"); files=list(p.rglob("*")); assert not any(f.is_symlink() for f in files); size=sum(f.stat().st_size for f in files if f.is_file()); assert size <= 20*2**20, "Pages artifact exceeds the 20 MiB bound"; print("Site bytes:", size)'
           touch site/.nojekyll
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      - name: Install headless browser check tools
+      - name: Install browser check tools
         run: |
           npm install --no-save --package-lock=false @playwright/test@1.58.2 @axe-core/playwright@4.11.0
           npx playwright install --with-deps chromium
-      - name: Verify the assembled atlas and evidence page before publication
+      - name: Verify the assembled site before publication
         run: |
           node tests/location_search.mjs
           node tests/cell_browser.mjs
@@ -76,7 +66,6 @@ jobs:
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs site
           node tests/blocks_browser.mjs site
-          node tests/headless_browser.mjs site/headless
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact
