@@ -1,7 +1,7 @@
 // Block meshing without a renderer: face culling across loaded chunk borders,
 // per-face shading by normal, vertex ambient occlusion, and a separate
 // transparent buffer for glass, water and leaves. Output is plain typed arrays.
-import {blockStyle} from './block-colors.mjs?v=blocks-1';
+import {blockStyle} from './block-colors.mjs?v=blocks-2';
 
 export const OPAQUE=1,TRANSLUCENT=2,SHAPE=4,WATER=8,CROSS=16;
 const FLOOR=1;// reserved opaque id below the cut-away floor
