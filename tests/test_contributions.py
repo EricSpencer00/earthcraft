@@ -143,6 +143,22 @@ class ContributionTests(unittest.TestCase):
         report, _ = vc.validate(None, reader, REPO, 3, 'abc', files, plan, 'p', args)
         self.assertIn(('Tiles are in the plan', False, '9_9'), report.checks)
 
+    def test_hub_lfs_rules_in_gitattributes_are_allowed_only_for_the_requests_tiles(self):
+        reader = SimpleNamespace(info=lambda paths, revision=None: {})
+        plan = {'tiles': [{'id': '1_2'}]}
+        args = SimpleNamespace(spot_check_rate=0)
+        files = {'.gitattributes': 'modified', 'tiles/v2/1_2/region/r.1.2.mca': 'added', 'contributions/a.json': 'added'}
+        diff = ('diff --git a/.gitattributes b/.gitattributes\n--- a/.gitattributes\n+++ b/.gitattributes\n'
+                '@@ -1,1 +1,2 @@\n tiles/v2/0_0/region/r.0.0.mca filter=lfs diff=lfs merge=lfs -text\n'
+                '+tiles/v2/1_2/region/r.1.2.mca filter=lfs diff=lfs merge=lfs -text\n')
+        report, _ = vc.validate(None, reader, REPO, 3, 'abc', files, plan, 'p', args, contributions.gitattributes_lines(diff))
+        self.assertIn(('Only allowed paths', True, '2 files'), report.checks)
+        evil = diff + '+*.dat filter=lfs diff=lfs merge=lfs -text\n'
+        report, _ = vc.validate(None, reader, REPO, 3, 'abc', files, plan, 'p', args, contributions.gitattributes_lines(evil))
+        self.assertFalse(report.checks[0][1])
+        commits = SimpleNamespace(events=[SimpleNamespace(type='comment', oid=None), SimpleNamespace(type='commit', oid='c1')])
+        self.assertEqual(contributions.pull_request_diff(commits, REPO, fetch=lambda r, b, h, t: f'{b}..{h}'), 'c1~1..c1')
+
     def test_spot_check_selection_is_deterministic_about_one_in_n(self):
         due = [vc.spot_check_due(pr, 'head', 20) for pr in range(2000)]
         self.assertEqual(due, [vc.spot_check_due(pr, 'head', 20) for pr in range(2000)])

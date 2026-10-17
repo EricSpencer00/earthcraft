@@ -46,14 +46,61 @@ def classify(path):
     return None, 'path outside tiles/v2/<tile>/ and contributions/'
 
 
+GITATTRIBUTES = '.gitattributes'
+LFS_RULE = re.compile(r'(\S+) filter=lfs diff=lfs merge=lfs -text')
+
+
+def diff_blocks(diff):
+    """[(path, block text)] for each file in a git-format diff."""
+    starts = [(m.start(), m.group(2)) for m in DIFF_HEADER.finditer(diff or '')]
+    return [(path, diff[start:(starts[index + 1][0] if index + 1 < len(starts) else len(diff))])
+            for index, (start, path) in enumerate(starts)]
+
+
 def diff_files(diff):
-    """{path: 'added'|'modified'|'deleted'} from a Hub pull request diff (git format)."""
-    files, starts = {}, [(m.start(), m.group(2)) for m in DIFF_HEADER.finditer(diff or '')]
-    for index, (start, path) in enumerate(starts):
-        end = starts[index + 1][0] if index + 1 < len(starts) else len(diff)
-        block = diff[start:end]
-        files[path] = 'deleted' if DELETED.search(block) else ('added' if 'new file mode' in block else 'modified')
-    return files
+    """{path: 'added'|'modified'|'deleted'} from a git-format diff."""
+    return {path: 'deleted' if DELETED.search(block) else ('added' if 'new file mode' in block else 'modified')
+            for path, block in diff_blocks(diff)}
+
+
+def gitattributes_lines(diff):
+    """(added, removed) lines of .gitattributes in a diff; the Hub adds one LFS rule per large file."""
+    added, removed = [], []
+    for path, block in diff_blocks(diff):
+        if path != GITATTRIBUTES:
+            continue
+        for line in block.splitlines():
+            if line.startswith('+') and not line.startswith('+++'):
+                added.append(line[1:])
+            elif line.startswith('-') and not line.startswith('---'):
+                removed.append(line[1:])
+    return added, removed
+
+
+def compare(repo, base, head, token=None, endpoint='https://huggingface.co', limit=64 * 2**20):
+    """Raw git diff between two revisions of the dataset (the Hub's compare API)."""
+    import urllib.parse
+    import urllib.request
+    url = f'{endpoint}/api/datasets/{repo}/compare/{urllib.parse.quote(base, safe="~")}..{urllib.parse.quote(head, safe="")}'
+    headers = {'User-Agent': 'earthcraft-contributions/1'}
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
+        raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('Pull request diff exceeds its read bound')
+    return raw.decode('utf-8', 'replace')
+
+
+def pull_request_diff(details, repo, token=None, fetch=compare):
+    """The diff of the pull request's own commits (not of main moving on since it branched)."""
+    commits = [event.oid for event in details.events if getattr(event, 'type', '') == 'commit' and event.oid]
+    return '\n'.join(fetch(repo, f'{oid}~1', oid, token) for oid in commits)
+
+
+def hub_token():
+    from huggingface_hub import get_token
+    return get_token()
 
 
 def open_pull_requests(api, repo):
@@ -66,7 +113,7 @@ def tiles_in_open_pull_requests(api, repo):
     claimed = {}
     for discussion in open_pull_requests(api, repo):
         details = api.get_discussion_details(repo_id=repo, discussion_num=discussion.num, repo_type='dataset')
-        for path in diff_files(details.diff or ''):
+        for path in diff_files(pull_request_diff(details, repo, hub_token())):
             kind, tile = classify(path)
             if kind == 'tile':
                 claimed.setdefault(tile, discussion.num)

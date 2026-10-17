@@ -90,12 +90,24 @@ def regenerate(tile, args):
     raise RuntimeError('regeneration produced no result: ' + (completed.stderr or completed.stdout)[-300:])
 
 
-def validate(api, reader, repo, pr, head, files, plan, plan_sha, args):
-    """Report for one pull request; files is {path: 'added'|'modified'|'deleted'}."""
+def validate(api, reader, repo, pr, head, files, plan, plan_sha, args, gitattributes=((), ())):
+    """Report for one pull request; files is {path: 'added'|'modified'|'deleted'}.
+
+    gitattributes: (added, removed) lines of .gitattributes; the Hub itself adds one LFS rule per large
+    file, so only added rules for this pull request's own tile files are accepted.
+    """
     from regional_tiles import TILE_SCHEMA, assert_portable, audit_region, tile_coords
     report = Report()
     plan_tiles = {tile['id'] for tile in plan['tiles']}
     tiles, manifests, bad = {}, [], []
+    files = dict(files)
+    if contributions.GITATTRIBUTES in files:
+        files.pop(contributions.GITATTRIBUTES)
+        added, removed = gitattributes
+        rules = [contributions.LFS_RULE.fullmatch(line.strip()) for line in added if line.strip()]
+        if removed or not all(rule and contributions.classify(rule.group(1))[0] == 'tile' and rule.group(1) in files
+                              for rule in rules):
+            bad.append('.gitattributes (only LFS rules for this request\'s tile files may be added)')
     for path, change in sorted(files.items()):
         kind, value = contributions.classify(path)
         if change == 'deleted':
@@ -227,9 +239,11 @@ def main(argv=None):
         head = api.repo_info(args.repo, repo_type='dataset', revision=details.git_reference).sha
         if already_judged(details, head) and not args.force:
             continue
-        files = contributions.diff_files(details.diff or '')
         try:
-            report, tiles = validate(api, reader, args.repo, discussion.num, head, files, plan, plan_sha, args)
+            diff = contributions.pull_request_diff(details, args.repo, contributions.hub_token())
+            files = contributions.diff_files(diff)
+            report, tiles = validate(api, reader, args.repo, discussion.num, head, files, plan, plan_sha, args,
+                                     contributions.gitattributes_lines(diff))
         except Exception as error:  # noqa: BLE001 - still answer the contributor
             report, tiles = Report(), []
             report.check('Validator ran', False, f'{type(error).__name__}: {str(error)[:200]}')
