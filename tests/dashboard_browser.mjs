@@ -39,6 +39,15 @@ const problems=[];
 const context=await browser.newContext({viewport:{width:1440,height:1000},hasTouch:true});
 // Region files are not fetched in isolated checks: every HF region answers with an empty header (no chunks stored).
 await context.route('https://huggingface.co/**',route=>route.fulfill({status:206,body:Buffer.alloc(8192),headers:{'Access-Control-Allow-Origin':'*','Content-Range':'bytes 0-8191/8192','Content-Type':'application/octet-stream'}}));
+// Detail levels: a small sampled fixture keyed by 512 m region (two 256 m map cells per side).
+const detailTiles={};
+for(const cell of snapshot.generated_world?.cells||[]){
+  const [x,z]=String(cell.tile_id).split('_').map(Number);
+  if((x+z)%3===0)detailTiles[`r.${Math.floor(x/2)}.${Math.floor(z/2)}`]='low';
+}
+const detailFixture={schema:'earthcraft.detail-levels.v1',sampled:0.1,counts:{none:0,low:Object.keys(detailTiles).length,high:0,hand:0},
+  estimated_totals:{none:{estimate:40},low:{estimate:10043},high:{estimate:0},hand:{estimate:0}},tiles:detailTiles};
+await context.route('https://huggingface.co/**/world/index/detail-levels.json',route=>route.fulfill({status:200,body:JSON.stringify(detailFixture),headers:{'Access-Control-Allow-Origin':'*','Content-Type':'application/json'}}));
 const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
 page.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
@@ -236,6 +245,15 @@ try{
   await expect(page.locator('#mapnote')).toContainText('12 cells with surface detail');
   await expect(page.locator('#legend-source-label')).toHaveText('Awaiting detail');
   await capture('surface-detail');
+  await expect(page.locator('#detail-count')).toHaveText(/Detail:\s*none ~40\s*low ~10,043\s*high 0\s*hand 0/);
+  await page.locator('#layer-detail').click();
+  await expect(page.locator('#layer-detail')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('#legend-finished')).toBeHidden();
+  await capture('detail-levels');
+  await page.locator('#places-menu summary').click();
+  await page.locator('#place-chicago').click();
+  await expect(page.locator('#selection-details')).toContainText(/Detail(low|not checked yet)/);
+  await page.getByRole('button',{name:'Clear selection'}).click();
   await page.locator('#layer-build').click();
   await page.locator('#about-open').click();
   await page.waitForFunction(()=>document.querySelector('.world-photo img').naturalWidth>0);
