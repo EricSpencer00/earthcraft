@@ -20,6 +20,17 @@ its ``.json`` manifest form one unit, as do an EPT node ``7-1-2-3.laz`` with its
 is a container and is descended into. Hidden entries (``.lru.sqlite``,
 ``.locks/``, in-progress ``.x.building-*`` directories) are operational and
 never evicted. Units used since the oldest active tile began are pinned.
+
+ArcGrid strip members (namespace ``arcgrid/``, ~1.1 GiB each) are admitted
+differently, because pinning them one by one live-locked the workers (each
+held part of its strip set and waited on the others; specs/CacheLeases.tla,
+counterexample in specs/CacheLeases.livelock.txt). A tile now reserves its
+whole member set before it pins anything (``enqueue`` then ``try_grant``):
+reservations are granted in FIFO order when the pinned non-ArcGrid bytes plus
+the union of all granted member sets (a strip shared by neighbouring tiles
+counts once) fit the cap; a waiting tile holds no pins; a set that cannot fit
+even with no other grant fails with a capacity receipt. ArcGrid units are
+pinned only by a granted reservation, never by the time rule.
 """
 from contextlib import contextmanager
 import fcntl
@@ -37,6 +48,9 @@ DEFAULT_CACHE_CAP = 12 * GiB
 DEFAULT_FOOTPRINT_CAP = 25 * GiB
 DEFAULT_MIN_FREE = 40 * GiB
 STALE_STAGING_SECONDS = 24 * 3600
+
+
+GRID_NAMESPACE = 'arcgrid'
 
 
 class CacheCapacityError(DiskGuardError):
@@ -193,6 +207,8 @@ class SourceCache:
         self._db.execute('PRAGMA busy_timeout=30000')
         self._db.execute('CREATE TABLE IF NOT EXISTS units (unit TEXT PRIMARY KEY, last_used REAL NOT NULL)')
         self._db.execute('CREATE TABLE IF NOT EXISTS active (owner TEXT PRIMARY KEY, pid INTEGER, since REAL)')
+        self._db.execute('CREATE TABLE IF NOT EXISTS reservations (owner TEXT PRIMARY KEY, pid INTEGER, '
+                         'ticket INTEGER NOT NULL, granted INTEGER NOT NULL DEFAULT 0, units TEXT NOT NULL)')
         self._db_lock = threading.Lock()
         self._sweep_staging()
 
@@ -280,6 +296,86 @@ class SourceCache:
     def end_tile(self):
         with self._db_lock:
             self._db.execute('DELETE FROM active WHERE owner=?', (self.owner,))
+            self._db.execute('DELETE FROM reservations WHERE owner=?', (self.owner,))
+
+    # -- admission control for ArcGrid member sets (see the module docstring)
+    def enqueue(self, members):
+        """Queue a reservation for {cache path: bytes}; returns the reserved {unit: bytes}."""
+        units = {}
+        for path, nbytes in dict(members).items():
+            unit = self.unit_of(path)
+            if unit is not None:
+                units[unit] = max(units.get(unit, 0), int(nbytes))
+        with self._exclusive(), self._db_lock:
+            ticket = self._db.execute('SELECT COALESCE(max(ticket),0)+1 FROM reservations').fetchone()[0]
+            self._db.execute('INSERT OR REPLACE INTO reservations(owner,pid,ticket,granted,units) VALUES(?,?,?,0,?)',
+                             (self.owner, os.getpid(), ticket, json.dumps(units, sort_keys=True)))
+        return units
+
+    def _live_reservations(self):
+        with self._db_lock:
+            rows = self._db.execute('SELECT owner,pid,ticket,granted,units FROM reservations ORDER BY ticket').fetchall()
+        live = []
+        for owner, pid, ticket, granted, units in rows:
+            if owner != self.owner and not _alive(pid):
+                with self._db_lock:
+                    self._db.execute('DELETE FROM reservations WHERE owner=?', (owner,))
+                continue
+            live.append({'owner': owner, 'ticket': ticket, 'granted': bool(granted), 'units': json.loads(units)})
+        return live
+
+    def reserved_units(self):
+        """Units of every live granted reservation (pinned against eviction)."""
+        return {unit for row in self._live_reservations() if row['granted'] for unit in row['units']}
+
+    def _pinned_other_bytes(self):
+        """Bytes eviction cannot free for a grid reservation: non-ArcGrid units pinned by the time
+        rule (indexes, EPT nodes in use) plus operational entries (.lru.sqlite, locks, staging)."""
+        since = self.protected_since()
+        units = self.units()
+        with self._db_lock:
+            stamps = dict(self._db.execute('SELECT unit,last_used FROM units').fetchall())
+        operational = max(0, self.used(fresh=True) - sum(slot['bytes'] for slot in units.values()))
+        if since is None:
+            return operational
+        return operational + sum(slot['bytes'] for unit, slot in units.items()
+                                 if unit.split('/')[0] != GRID_NAMESPACE
+                                 and max(stamps.get(unit, 0.0), slot['mtime']) >= since)
+
+    def try_grant(self, what='tile'):
+        """True once this worker's queued reservation is granted; False: keep waiting (no pins held).
+
+        Raises CacheCapacityError (and drops the reservation) when the set
+        cannot fit even with no other reservation granted.
+        """
+        with self._exclusive():
+            live = self._live_reservations()
+            mine = next((row for row in live if row['owner'] == self.owner), None)
+            if mine is None:
+                raise RuntimeError('try_grant() without enqueue()')
+            if mine['granted']:
+                return True
+            waiting = [row for row in live if not row['granted']]
+            if waiting[0]['owner'] != self.owner:
+                return False  # FIFO: an older request goes first, so a large set is never starved
+            granted = {}
+            for row in live:
+                if row['granted']:
+                    granted.update(row['units'])
+            base = self._pinned_other_bytes()
+            alone = base + sum(mine['units'].values())
+            if alone > self.cap:
+                self.end_tile()
+                raise CacheCapacityError(
+                    f'Cache cap refuses {what}: its ArcGrid members need {human(sum(mine["units"].values()))} '
+                    f'+ {human(base)} pinned > cap {human(self.cap)}; the tile needs more source cache than the cap allows')
+            if base + sum({**granted, **mine['units']}.values()) > self.cap:
+                return False
+            with self._db_lock:
+                self._db.execute('UPDATE reservations SET granted=1 WHERE owner=?', (self.owner,))
+            self.log(event='cache_reserved', units=len(mine['units']), bytes=sum(mine['units'].values()),
+                     pinned_other_bytes=base, granted_others=sum(1 for row in live if row['granted']))
+            return True
 
     def others_active(self):
         """True when another live worker has a tile running (its units are pinned)."""
@@ -293,14 +389,7 @@ class SourceCache:
         with self._db_lock:
             rows = self._db.execute('SELECT owner,pid,since FROM active').fetchall()
         for owner, pid, since in rows:
-            alive = True
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                alive = False
-            except PermissionError:
-                pass
-            if not alive:
+            if not _alive(pid):
                 with self._db_lock:
                     self._db.execute('DELETE FROM active WHERE owner=?', (owner,))
                 continue
@@ -338,13 +427,16 @@ class SourceCache:
 
     def _evict(self, needed, keep=None):
         since = self.protected_since()
+        reserved = self.reserved_units()
         units = self.units()
         with self._db_lock:
             stamps = dict(self._db.execute('SELECT unit,last_used FROM units').fetchall())
         candidates = []
         for unit, slot in units.items():
             last = max(stamps.get(unit, 0.0), slot['mtime'])
-            if unit == keep or (since is not None and last >= since):
+            if unit == keep or unit in reserved:
+                continue
+            if unit.split('/')[0] != GRID_NAMESPACE and since is not None and last >= since:
                 continue
             candidates.append((last, unit, slot))
         candidates.sort(key=lambda item: (item[0], item[1]))
@@ -411,6 +503,16 @@ class SourceCache:
     def close(self):
         self.end_tile()
         self._db.close()
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
 
 
 # --------------------------------------------------------------------------
