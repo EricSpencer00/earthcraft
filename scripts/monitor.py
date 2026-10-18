@@ -265,6 +265,8 @@ def check_ci_health(report: MonitorReport, token: str) -> None:
     latest_by_workflow = {}
     for run in runs:
         workflow_name = run.get("name", "unknown")
+        if workflow_name == "Health monitor":  # its own failures must not keep it failing
+            continue
         conclusion = run.get("conclusion")
         status = run.get("status")
 
