@@ -130,3 +130,7 @@ with `.claude/commands/qa-chunks.md`, then upload the run with
 | `push-files` | Upload arbitrary files, such as QA runs or detail layers. |
 | `verify` | Check remote files against their recorded hashes. |
 | `migrate` | Move older private datasets into this one. |
+
+## Health monitoring
+
+A GitHub Actions workflow (`monitor.yml`) runs every 4 hours to check pipeline freshness, dataset integrity, CI health, and site availability. See `scripts/monitor.py`.
