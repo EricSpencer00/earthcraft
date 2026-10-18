@@ -886,8 +886,9 @@ class Worker:
                     return 'adopted'
             except Exception as error:  # noqa: BLE001 - adoption is an optimisation; generate instead
                 self.log(event='adopt_check_failed', tile=tile['id'], reason=str(error)[:200])
-            try:
-                need = grid_need(tile, ctx['frame'], ctx.get('catalog') or {'sources': []})
+            try:  # only the scan upgrade (appearance) reads ArcGrid; an LQ pass reserves nothing
+                need = (grid_need(tile, ctx['frame'], ctx.get('catalog') or {'sources': []})
+                        if 'appearance' in job['stages'] else {})
             except Exception as error:  # noqa: BLE001 - the tile itself reports a bad grid; just do not reserve
                 need = {}
                 self.log(event='grid_need_failed', tile=tile['id'], reason=str(error)[:200])
@@ -901,7 +902,7 @@ class Worker:
             self.cache.begin_tile()
             self.footprint.peak_detail.pop('tile', None)
             self.log(event='tile_start', tile=tile['id'], lane=job['lane'], stages=job['stages'])
-            if self.prefetcher is not None:
+            if self.prefetcher is not None and 'appearance' in job['stages']:
                 self.prefetcher.kick(journal, tile['id'])
             with self.footprint.watch(interval=self.args.watch_seconds, extra={'tile': (root, self.args.tile_cap)}):
                 receipts, failures, delivered, lq = generate_tile(tile, job, root, ctx)
