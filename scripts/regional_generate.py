@@ -1000,7 +1000,7 @@ class Worker:
                 while not self.stopping and processed < a.limit:
                     if not self.wait_for_capacity(batch):
                         break
-                    job = journal.claim_tile(self.worker_id, a.lane, tiles=a.tiles, lease_seconds=3600, shard=a.shard)
+                    job = claim_next(journal, self.worker_id, a.lane, tiles=a.tiles, shard=a.shard)
                     if job is None:
                         break
                     keeper.add(job)
@@ -1045,6 +1045,19 @@ class Worker:
                       'tile_scratch_peak_bytes': self.tile_peaks, 'summary': journal_summary, 'installed': False}
             self.log(**report)
             return self.exit_code
+
+
+def claim_next(journal, owner, lane, *, tiles=None, shard=None):
+    """Lease the next tile. Lane 'auto' is base-first: LQ (sources + geometry)
+    for every tile of the plan, then the scan upgrades (appearance) once no LQ
+    work is left. A measured LQ tile takes seconds; a scan upgrade takes
+    15-60 minutes and pins gigabytes of ArcGrid cache (docs/PERFORMANCE.md)."""
+    lanes = ('lq', 'scans') if lane == 'auto' else (lane,)
+    for name in lanes:
+        job = journal.claim_tile(owner, name, tiles=tiles, lease_seconds=3600, shard=shard)
+        if job is not None:
+            return job
+    return None
 
 
 class Batch:
@@ -1236,7 +1249,9 @@ def build_parser():
     parser.add_argument('--batch-tiles', type=int, default=6, help='tiles per commit (6)')
     parser.add_argument('--batch-seconds', type=float, default=1200, help='commit a partial batch after this (1200)')
     parser.add_argument('--watch-seconds', type=float, default=5)
-    parser.add_argument('--lane', choices=('base', 'scans'), default='base')
+    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans'), default='base',
+                        help="auto: LQ for the whole plan first, then scan upgrades; lq: sources+geometry only; "
+                             "base: sources+geometry+appearance per tile; scans: appearance only")
     parser.add_argument('--worker-id', default='base-1')
     parser.add_argument('--tiles', type=lambda v: [t for t in v.split(',') if t], default=None)
     parser.add_argument('--limit', type=int, default=1_000_000)
