@@ -3,6 +3,8 @@
 import os
 import json
 import urllib.request
+
+USER_AGENT = "earthcraft-monitor/1.0 (+https://github.com/EricSpencer00/earthcraft)"
 import urllib.error
 import hashlib
 from datetime import datetime, timedelta
@@ -55,7 +57,7 @@ class MonitorReport:
 def fetch_json(url: str, headers: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """Fetch JSON from a URL, return None on failure."""
     try:
-        req = urllib.request.Request(url, headers=headers or {})
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read()
             return json.loads(data)
@@ -66,7 +68,7 @@ def fetch_json(url: str, headers: Optional[Dict[str, str]] = None) -> Optional[D
 def fetch_url(url: str, headers: Optional[Dict[str, str]] = None) -> Tuple[Optional[int], Optional[str]]:
     """Fetch a URL and return (status_code, body). Returns (None, None) on error."""
     try:
-        req = urllib.request.Request(url, headers=headers or {})
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read()
             return response.status, data.decode('utf-8', errors='ignore')
@@ -81,13 +83,14 @@ def check_pipeline_freshness(report: MonitorReport) -> None:
     url = "https://huggingface.co/api/datasets/EricSpencer00/earthcraft/commits/main"
     data = fetch_json(url)
 
-    if not data or "commits" not in data or not data["commits"]:
+    commits = data if isinstance(data, list) else (data or {}).get("commits") or []
+    if not commits:
         report.add_check("Pipeline freshness", False, "Cannot fetch HF commits")
         return
 
     # Find newest commit with title starting with "Generate tiles/v2"
     newest_tile_commit = None
-    for commit in data["commits"]:
+    for commit in commits:
         title = commit.get("title", "")
         if title.startswith("Generate tiles/v2"):
             newest_tile_commit = commit
@@ -97,7 +100,7 @@ def check_pipeline_freshness(report: MonitorReport) -> None:
         report.add_check("Pipeline freshness", False, "No tile-generation commits found")
         return
 
-    commit_date_str = newest_tile_commit.get("created_at", "")
+    commit_date_str = (newest_tile_commit.get("date") or newest_tile_commit.get("created_at", ""))
     if not commit_date_str:
         report.add_check("Pipeline freshness", False, "Cannot parse commit date")
         return
@@ -131,8 +134,8 @@ def check_pipeline_freshness(report: MonitorReport) -> None:
     status_data = fetch_json(status_url)
 
     if status_data:
-        disk_free_gb = status_data.get("disk_free_gb", 0)
-        tiles_24h = status_data.get("tiles_in_24h", 0)
+        disk_free_gb = (status_data.get("disk") or {}).get("free_bytes", 0) / 2**30
+        tiles_24h = status_data.get("tiles_last_24h", 0)
 
         if disk_free_gb < 12:
             report.add_check(
@@ -162,12 +165,13 @@ def check_hf_integrity(report: MonitorReport) -> None:
     url = "https://huggingface.co/api/datasets/EricSpencer00/earthcraft/commits/main"
     data = fetch_json(url)
 
-    if not data or "commits" not in data or not data["commits"]:
+    commits = data if isinstance(data, list) else (data or {}).get("commits") or []
+    if not commits:
         report.add_check("HF integrity", False, "Cannot fetch HF commits")
         return
 
     newest_tile_commit = None
-    for commit in data["commits"]:
+    for commit in commits:
         title = commit.get("title", "")
         if title.startswith("Generate tiles/v2"):
             newest_tile_commit = commit
@@ -182,7 +186,7 @@ def check_hf_integrity(report: MonitorReport) -> None:
     # Try to extract a tile coordinate from the title
     tile_match = None
     import re
-    matches = re.findall(r'(\d+_\d+)', commit_title)
+    matches = re.findall(r'(-?\d+_-?\d+)', commit_title)
     if matches:
         tile_match = matches[0]
 
@@ -212,14 +216,20 @@ def check_hf_integrity(report: MonitorReport) -> None:
         report.add_check("HF integrity", False, "Malformed tile.json entries")
         return
 
-    file_url = f"https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/tiles/v2/{tile_match}/{file_path}"
-    status, body = fetch_url(file_url)
+    # tile.json paths are dataset-relative ("tiles/v2/<tile>/..."); hash the raw bytes.
+    file_url = f"https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/{file_path}"
+    try:
+        req = urllib.request.Request(file_url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=60) as response:
+            body = response.read()
+    except Exception:
+        body = None
 
-    if status != 200 or body is None:
+    if body is None:
         report.add_check("HF integrity", False, f"Cannot download {file_path}")
         return
 
-    actual_sha256 = hashlib.sha256(body.encode('utf-8') if isinstance(body, str) else body).hexdigest()
+    actual_sha256 = hashlib.sha256(body).hexdigest()
 
     if actual_sha256.lower() != expected_sha256.lower():
         report.add_check(
