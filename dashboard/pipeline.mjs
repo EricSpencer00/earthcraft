@@ -66,7 +66,11 @@ export async function publishedTileCount(revision,read=jsonPage){
       if(entry.type==='directory'&&entry.path===`tiles/v2/${tile}`&&TILE.test(tile))tiles.add(tile);
     }
     const next=/<([^>]+)>;\s*rel="next"/.exec(link)?.[1];
-    if(next&&!next.startsWith(prefix+'?'))throw Error('Unexpected tile-list continuation.');
+    if(next){
+      const continuation=new URL(next);
+      if(continuation.origin!==HUB||continuation.username||continuation.password||
+          decodeURIComponent(continuation.pathname)!==new URL(prefix).pathname)throw Error('Unexpected tile-list continuation.');
+    }
     url=next;pages++;
   }
   return {count:tiles.size,complete:!url};

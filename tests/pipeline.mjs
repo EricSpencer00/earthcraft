@@ -34,7 +34,7 @@ assert.equal(q.layout,'flat');assert.deepEqual(q.center,[-136*32+16,68*32+16]);
 assert.throws(()=>parseViewerParams('?layout=unknown'),/layout/);
 const countPrefix=`https://huggingface.co/api/datasets/EricSpencer00/earthcraft/tree/${revision}/tiles/v2`;
 let pages=0;
-const actual=await publishedTileCount(revision,async()=>++pages===1?{data:[{type:'directory',path:'tiles/v2/1_2'},{type:'file',path:'tiles/v2/not-a-tile'}],link:`<${countPrefix}?cursor=next>; rel="next"`}:{data:[{type:'directory',path:'tiles/v2/-3_4'},{type:'directory',path:'tiles/v2/1_2'}],link:''});
+const actual=await publishedTileCount(revision,async()=>++pages===1?{data:[{type:'directory',path:'tiles/v2/1_2'},{type:'file',path:'tiles/v2/not-a-tile'}],link:`<${countPrefix.replace('/tiles/v2','/tiles%2Fv2')}?cursor=next>; rel="next"`}:{data:[{type:'directory',path:'tiles/v2/-3_4'},{type:'directory',path:'tiles/v2/1_2'}],link:''});
 assert.deepEqual(actual,{count:2,complete:true});assert.equal(pages,2);
 const bounded=await publishedTileCount(revision,async()=>({data:[{type:'directory',path:'tiles/v2/1_2'}],link:`<${countPrefix}?cursor=next>; rel="next"`}));
 assert.deepEqual(bounded,{count:1,complete:false});
