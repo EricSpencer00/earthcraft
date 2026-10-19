@@ -131,16 +131,23 @@ photoscan transposes them on load. EarthCraft labels are already `[z, x]`.
 `photoscan` only adds the sidecar plus a comparison report. A separate later change would let
 `detail_buildings.regularize` take `roof_y`/`base_y` instead of save column tops.
 
-## 5. Requests to the photoscan session
+## 5. Photoscan API as implemented (photoscan d577656)
 
-Sent through the shared notes folder (`earthcraft-adapter-requests.md`):
-1. Make `rasters.npz` generic: a `build(grid: TargetGrid, labels, enz, cls, naip=None)` that takes
-   the grid and labels as arguments instead of reading `loyola.GRID` / `to_y`.
-2. Let `ept_crop` take an `admit(enz, cls) -> mask` hook and a caller-supplied cache with a byte
-   cap. It should not default to `~/.cache`.
-3. Keep `y_round='floor'` supported and the `[z, x]` / `(x, y, z)` contract documented in `grid.py`.
-4. Put the photoscan version / git SHA into every manifest.
-5. Update `docs/DESIGN.md`: it still says models are cached on `/Volumes/LaCie`, which is retired.
+The photoscan session implemented EarthCraft's requests. Checked against the source on 2026-10-18:
+* `buildings.build_buildings(grid, fp, out_dir, points=(enz, cls, manifest), overwrite=False)`
+  together with `Footprints.from_labels(label[z,x], records)` makes no network or cache access.
+  `rasters_from_points(grid, labels, enz, cls)` is also exposed.
+* `lidar.ept_crop(grid, cache, ..., admit=fn(enz, cls)->mask, max_bytes=N)`: the cache is required.
+  Only the CLI defaults to `~/.cache`. EarthCraft always passes `runs/scratch/...`.
+* `rasters.npz` (`photoscan-buildings-v1`, all `[z, x]`, int16 world Y, -1 = none): `roofY`,
+  `baseY`, `groundY`, `canopyY`, `roof_block` (255 none), `inferred` (0 measured, 1 same-building
+  fill, 2 tags, 3 type default), `label`, `support` (uint16 non-ground returns per column).
+* `manifest.json` holds the photoscan version + git SHA, the full grid, and the caller manifest.
+  `read(dir, expect_grid=grid)` rejects any grid mismatch.
+* EarthCraft keeps its own point admission and DTM ground check, applied before `points=`.
+
+The adapter in §4 therefore reduces to: `target_grid` → EarthCraft crop + admission →
+`build_buildings(points=...)` → `read(expect_grid=...)`. `inferred >= 2` is adaptation, never observed.
 
 ## 6. Comparison plan (Water Tower tile, 64 m, west −32, north 33)
 
