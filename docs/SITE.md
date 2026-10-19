@@ -17,6 +17,11 @@ fonts are vendored under `dashboard/assets/`.
   metadata every two minutes while visible. The preview and receipts pin the
   publication commit; it does not confuse the installed save with a new tile.
   Host telemetry has its own timestamp and is labelled old after 90 minutes.
+  Published v2 tile folders are counted separately at the preview's pinned
+  commit, with a ten-page cap. Journal work history includes inherited stage
+  completions and is not a published-tile count. The map is a saved-world
+  footprint snapshot, not a live AWS publication index; its publication date
+  does not establish the age of the underlying generation work.
 
 Viewer URL options:
 

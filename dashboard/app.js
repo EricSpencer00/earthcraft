@@ -306,7 +306,7 @@ function renderSnapshot(){
   $('phase').textContent=snapshot.regions?.[0]?.label||'Chicago area';
   $('connection').textContent=snapshot.source==='local'?'Local build connected':'Published snapshot';
   document.body.dataset.feed=snapshot.source;
-  $('updated').textContent=snapshot.updated_utc?'Map updated '+dateLabel(snapshot.updated_utc):'';
+  $('updated').textContent=snapshot.updated_utc?(snapshot.source==='public'?'Snapshot published ':'Map updated ')+dateLabel(snapshot.updated_utc):'';
   $('rollup').textContent=stateLabel(rollup.state);
   $('geometry').textContent=countLabel(rollup.generated_tiles);
   $('sources').textContent=countLabel(local.source_tiles_complete);
@@ -322,7 +322,7 @@ function renderSnapshot(){
   $('geometry-label').textContent=world?'Cells built':'Terrain & buildings';
   $('sources-label').textContent=world?'Tiles with extra scan detail':'Data ready';
   $('appearance-label').textContent=world?'Cells with photo color':'Surface detail';
-  $('record-note').textContent=world?'Each cell is a '+number(world.cell_size_m||256)+' m square. Select one on the map to see it up close or in 3D.':'Green cells have terrain and buildings.';
+  $('record-note').textContent=world?'Saved-world footprint snapshot, separate from new AWS publications. Each cell is a '+number(world.cell_size_m||256)+' m square. Select one to see its blocks.':'Historical build record, separate from current AWS publications. Green cells have terrain and buildings.';
   $('auto-control').hidden=snapshot.source==='public';
   $('recovery').textContent=snapshot.source==='local'
     ?'Source files are reused between tiles. Interrupted work resumes from its last checkpoint.'

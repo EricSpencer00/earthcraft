@@ -10,7 +10,7 @@
   <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="./style.css?v=pipeline-1">
   <link rel="stylesheet" href="./pipeline.css?v=pipeline-1">
-  <script type="module" src="./pipeline.mjs?v=pipeline-1"></script>
+  <script type="module" src="./pipeline.mjs?v=count-meaning-1"></script>
 </head>
 <body class="pipeline-page">
   <a class="skip-link" href="#pipeline">Skip to the pipeline</a>
@@ -31,8 +31,8 @@
         <div class="source-links"><a id="tile-manifest" hidden>Tile and source receipts ↗</a><a id="tile-commit" hidden>Publication ↗</a></div>
       </section>
       <aside class="pipeline-side" aria-label="Pipeline activity">
-        <section aria-labelledby="host-heading"><div class="section-heading"><h3 id="host-heading">AWS worker</h3><span id="worker-state" class="state-label">Checking</span></div><p id="worker-report" class="muted">Waiting for the worker report.</p><dl class="pipeline-metrics"><div><dt>Published in the last hour</dt><dd id="rate-hour">Unavailable</dd></div><div><dt>Published in 24 hours</dt><dd id="rate-day">Unavailable</dd></div><div><dt>Workers</dt><dd id="worker-count">Unavailable</dd></div><div><dt>Free space</dt><dd id="worker-disk">Unavailable</dd></div></dl></section>
-        <section class="stages-section" aria-labelledby="stage-heading"><h3 id="stage-heading">Build stages</h3><ol id="pipeline-stages" class="pipeline-stages"><li>Waiting for the worker journal.</li></ol><p class="muted">Stage totals are cumulative. Published tiles become playable after a separate save update.</p></section>
+        <section aria-labelledby="host-heading"><div class="section-heading"><h3 id="host-heading">AWS worker</h3><span id="worker-state" class="state-label">Checking</span></div><p id="worker-report" class="muted">Waiting for the worker report.</p><dl class="pipeline-metrics"><div><dt>Published v2 tiles on HF</dt><dd id="published-tiles">Checking</dd></div><div><dt>Published in the last hour</dt><dd id="rate-hour">Unavailable</dd></div><div><dt>Published in 24 hours</dt><dd id="rate-day">Unavailable</dd></div><div><dt>Workers</dt><dd id="worker-count">Unavailable</dd></div><div><dt>Free space</dt><dd id="worker-disk">Unavailable</dd></div></dl><p id="published-basis" class="muted">Counting published tile folders, separately from historical work.</p></section>
+        <section class="stages-section" aria-labelledby="stage-heading"><h3 id="stage-heading">Journal work history</h3><ol id="pipeline-stages" class="pipeline-stages"><li>Waiting for the worker journal.</li></ol><p class="muted">Includes work inherited from earlier runs. These are stage completions, not published or playable tile totals. The world map shows a separate saved-world footprint.</p></section>
         <section class="recent-section" aria-labelledby="recent-heading"><div class="section-heading"><h3 id="recent-heading">Recent publications</h3><a href="https://huggingface.co/datasets/EricSpencer00/earthcraft/commits/main">All ↗</a></div><ol id="recent-publications" class="publication-list"><li>Loading publication history…</li></ol></section>
       </aside>
     </div>
