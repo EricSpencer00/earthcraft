@@ -3,7 +3,7 @@
 One small always-on EC2 spot instance runs the regional generator
 ([Chicagoland scans](CHICAGOLAND_SCANS.md)) continuously and commits each batch of
 tiles straight to the public dataset under `tiles/v2/<tile>/`
-([the dataset](WORLD_DATASET.md)). It is the pipeline's only compute host; the
+([the dataset](DATASET.md)). It is the pipeline's only compute host; the
 MacBook coordinates it with the AWS CLI and ssh only.
 
 ## Host
@@ -53,7 +53,9 @@ No Java is installed: the regional generator verifies worlds in Python.
   (no credentials on the box); if the branch moved it fast-forwards, reinstalls
   requirements when a `requirements*.txt` changed, reinstalls units when
   `configs/aws/` or this script changed, and restarts the pipeline gracefully as
-  above. A missing branch falls back to `main`.
+  above when worker scripts, requirements, AWS configuration or the shard changed.
+  Frontend/documentation-only updates leave generation running. A missing branch
+  falls back to `main`.
 * `earthcraft-status.timer` (every 10 min) writes `runs/status/pipeline.json`
   (`earthcraft.pipeline-status.v1`: tiles last hour / 24 h, tiles per hour, last
   commit, journal counts, disk, git SHA, spot state). The generator adds it to

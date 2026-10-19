@@ -12,6 +12,11 @@ fonts are vendored under `dashboard/assets/`.
 - `blocks.html` — the 3D block viewer. It reads region files straight from the
   dataset with HTTP Range requests and decodes the chunks in the browser.
   Block colours come from `block-colors.mjs`; no Minecraft textures are used.
+- `pipeline.html` — recent tile publications, a block excerpt from the latest
+  batch, AWS host telemetry and cumulative build stages. It reads public HF
+  metadata every two minutes while visible. The preview and receipts pin the
+  publication commit; it does not confuse the installed save with a new tile.
+  Host telemetry has its own timestamp and is labelled old after 90 minutes.
 
 Viewer URL options:
 
@@ -22,6 +27,7 @@ Viewer URL options:
 | `view` | `orbit`, `iso`, `top` or `street`. |
 | `revision` | Dataset commit to read (default: the pinned one; `main` for latest). |
 | `base` | Another region folder URL, for local testing. |
+| `layout=flat` | Raw region files directly in that folder, as in `tiles/v2/<tile>/region/`. Default is the bucketed `world/region/` layout. |
 | `qa=1` | Canvas only, for screenshots (used by `scripts/qa_sample.mjs`). |
 
 ## View cache
@@ -60,4 +66,6 @@ node tests/anvil.mjs              # decoder and mesher
 node tests/view_cache.mjs         # cache matches the pinned revision
 node tests/dashboard_browser.mjs  # map (needs @playwright/test)
 node tests/blocks_browser.mjs     # 3D viewer
+node tests/pipeline.mjs           # publication and telemetry semantics
+node tests/pipeline_browser.mjs   # pipeline UI and accessibility
 ```

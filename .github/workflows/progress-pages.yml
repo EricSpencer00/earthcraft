@@ -8,6 +8,8 @@ on:
       - progress/**
       - scripts/progress_snapshot.py
       - tests/dashboard_browser.mjs
+      - tests/pipeline.mjs
+      - tests/pipeline_browser.mjs
       - docs/photos/watertower-sep-10-26.png
       - .github/workflows/progress-pages.yml
   workflow_dispatch:
@@ -66,6 +68,8 @@ jobs:
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs site
           node tests/blocks_browser.mjs site
+          node tests/pipeline.mjs
+          node tests/pipeline_browser.mjs site
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact

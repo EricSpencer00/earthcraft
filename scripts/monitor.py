@@ -133,6 +133,24 @@ def check_pipeline_freshness(report: MonitorReport) -> None:
     status_url = "https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/status/pipeline.json"
     status_data = fetch_json(status_url)
 
+    if not isinstance(status_data, dict) or status_data.get('schema') != 'earthcraft.pipeline-status.v1':
+        report.add_check('Pipeline status', False, 'Worker report is missing or has an unsupported format')
+        return
+    try:
+        reported = datetime.fromisoformat(status_data.get('time_utc', '').replace('Z', '+00:00'))
+        if reported.tzinfo is None:
+            raise ValueError('Worker report must include its timezone')
+        report_age = datetime.now(reported.tzinfo) - reported
+        if report_age > timedelta(hours=3) or report_age < -timedelta(minutes=5):
+            report.add_check('Pipeline status', False, 'Worker report is stale or dated in the future')
+            return
+    except (TypeError, ValueError, AttributeError):
+        report.add_check('Pipeline status', False, 'Worker report has no valid timestamp')
+        return
+    if status_data.get('service') != 'active':
+        report.add_check('Pipeline status', False, 'Worker service is not reported active')
+        return
+
     if status_data:
         disk_free_gb = (status_data.get("disk") or {}).get("free_bytes", 0) / 2**30
         tiles_24h = status_data.get("tiles_last_24h", 0)

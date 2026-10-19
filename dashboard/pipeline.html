@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Follow Earthcraft's tile pipeline and explore the most recently published Minecraft terrain.">
+  <title>Earthcraft · Pipeline</title>
+  <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+  <link rel="preload" href="./assets/fonts/source-serif-4-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./style.css?v=pipeline-1">
+  <link rel="stylesheet" href="./pipeline.css?v=pipeline-1">
+  <script type="module" src="./pipeline.mjs?v=pipeline-1"></script>
+</head>
+<body class="pipeline-page">
+  <a class="skip-link" href="#pipeline">Skip to the pipeline</a>
+  <header class="site-header">
+    <a href="./" class="brand" aria-label="Earthcraft home">Earthcraft</a>
+    <h1>Pipeline</h1>
+    <nav aria-label="Main navigation"><a href="./">World map</a><a href="./blocks.html">3D viewer</a><a href="./pipeline.html" aria-current="page">Pipeline</a></nav>
+  </header>
+  <main id="pipeline" class="pipeline-main">
+    <div class="pipeline-heading"><div><p class="eyebrow">From open data to blocks</p><h2>The world, in the making.</h2><p id="publication-state" role="status">Checking recent publications…</p></div><button id="pipeline-refresh" type="button">Refresh</button></div>
+    <div id="pipeline-error" class="pipeline-message" role="status" hidden></div>
+    <div class="pipeline-layout">
+      <section class="latest-tile" aria-labelledby="latest-heading" aria-busy="true">
+        <div class="section-heading"><h3 id="latest-heading">Latest published tile</h3><span id="tile-id" class="tile-id">Waiting for the feed</span></div>
+        <div class="tile-view"><canvas id="tile-canvas" tabindex="0" role="img" aria-label="Block preview of the latest published tile. Drag to turn and scroll to zoom." aria-describedby="preview-status"></canvas><p id="preview-status" role="status">Finding the latest tile…</p><button id="preview-retry" type="button" hidden>Retry preview</button></div>
+        <div class="tile-caption"><p id="tile-description">The preview uses the published Minecraft blocks.</p><a id="tile-open" hidden>Explore in 3D <span aria-hidden="true">↗</span></a></div>
+        <dl class="tile-facts"><div><dt>Published</dt><dd id="tile-published">Not available yet</dd></div><div><dt>Source detail</dt><dd id="tile-quality">Not available yet</dd></div><div><dt>Generation time</dt><dd id="tile-duration">Not available yet</dd></div></dl>
+        <div class="source-links"><a id="tile-manifest" hidden>Tile and source receipts ↗</a><a id="tile-commit" hidden>Publication ↗</a></div>
+      </section>
+      <aside class="pipeline-side" aria-label="Pipeline activity">
+        <section aria-labelledby="host-heading"><div class="section-heading"><h3 id="host-heading">AWS worker</h3><span id="worker-state" class="state-label">Checking</span></div><p id="worker-report" class="muted">Waiting for the worker report.</p><dl class="pipeline-metrics"><div><dt>Published in the last hour</dt><dd id="rate-hour">Unavailable</dd></div><div><dt>Published in 24 hours</dt><dd id="rate-day">Unavailable</dd></div><div><dt>Workers</dt><dd id="worker-count">Unavailable</dd></div><div><dt>Free space</dt><dd id="worker-disk">Unavailable</dd></div></dl></section>
+        <section class="stages-section" aria-labelledby="stage-heading"><h3 id="stage-heading">Build stages</h3><ol id="pipeline-stages" class="pipeline-stages"><li>Waiting for the worker journal.</li></ol><p class="muted">Stage totals are cumulative. Published tiles become playable after a separate save update.</p></section>
+        <section class="recent-section" aria-labelledby="recent-heading"><div class="section-heading"><h3 id="recent-heading">Recent publications</h3><a href="https://huggingface.co/datasets/EricSpencer00/earthcraft/commits/main">All ↗</a></div><ol id="recent-publications" class="publication-list"><li>Loading publication history…</li></ol></section>
+      </aside>
+    </div>
+    <footer class="pipeline-footer"><p id="checked-at">Updates every two minutes while this page is visible.</p><p>Map data © OpenStreetMap contributors, ODbL. LiDAR: USGS 3DEP and county surveys. <a href="https://github.com/EricSpencer00/earthcraft/blob/main/NOTICE">Credits and licences</a>.</p><p>Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p></footer>
+  </main>
+</body>
+</html>
