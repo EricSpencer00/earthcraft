@@ -141,11 +141,12 @@ class LRU{
 }
 
 export class RegionClient{
-  constructor({base,fetch:fetcher=(...a)=>globalThis.fetch(...a),packs=[],maxConcurrent=6,headerCache=64,chunkCache=320,gapSectors=8,maxRequestBytes=MAX_REQUEST_BYTES}={}){
+  constructor({base,layout='bucketed',fetch:fetcher=(...a)=>globalThis.fetch(...a),packs=[],maxConcurrent=6,headerCache=64,chunkCache=320,gapSectors=8,maxRequestBytes=MAX_REQUEST_BYTES}={}){
     if(typeof base!=='string'||!base)throw Error('A region base URL is required.');
     const url=new URL(base.endsWith('/')?base:base+'/',globalThis.location?.href);
     if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error('Region base must be an http(s) URL without credentials.');
-    this.base=url.href;this.fetch=fetcher;this.max=maxConcurrent;this.active=0;this.queue=[];
+    if(!['bucketed','flat'].includes(layout))throw Error('Unknown region layout.');
+    this.base=url.href;this.layout=layout;this.fetch=fetcher;this.max=maxConcurrent;this.active=0;this.queue=[];
     this.headers=new LRU(headerCache);this.pending=new Map();this.chunkCache=new LRU(chunkCache);this.gap=gapSectors;this.maxRequestBytes=Math.max(HEADER_BYTES,Math.min(maxRequestBytes,MAX_REQUEST_BYTES));
     this.stats={requests:0,bytes:0,packRequests:0,packBytes:0};
     // Signed CDN URL each region's resolve URL redirected to; reusing it skips one 302 per read.
@@ -173,7 +174,7 @@ export class RegionClient{
     for(const p of packs){const e=p.chunks.get(cx+','+cz);if(e&&e[0]+e[1]<=p.bytes.length)return p.bytes.subarray(e[0],e[0]+e[1]);}
     return null;
   }
-  url(rx,rz){return new URL(regionPath(rx,rz),this.base).href;}
+  url(rx,rz){return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:regionPath(rx,rz),this.base).href;}
   slot(signal){
     signal?.throwIfAborted();
     if(this.active<this.max){this.active++;return Promise.resolve();}

@@ -3,7 +3,7 @@
 // blocks.html?base=<…/world/region/>&chunk=cx,cz&radius=r&view=orbit|iso|top|street&yaw=deg
 // qa=1 adds a fixed-size, chrome-free deterministic capture that sets window.__earthcraftRender.
 import * as THREE from './assets/vendor/three/three.module.min.js';
-import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=blocks-2';
+import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=pipeline-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-2';
 
 export const WATER_TOWER_BLOCK=[32,33];// Inherited frame: easting 0, northing 0 → X 32, Z 33.
@@ -17,6 +17,8 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
   const number=(name,lo,hi)=>{const v=q.get(name);if(v===null||v==='')return null;const n=Number(v);if(!Number.isFinite(n))throw Error(name+' must be a number.');return Math.max(lo,Math.min(hi,n));};
   const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
+  const layout=q.get('layout')||'bucketed';
+  if(!['bucketed','flat'].includes(layout))throw Error('Unknown region layout.');
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
   if(chunk){
@@ -28,7 +30,7 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
   else center=[WATER_TOWER_BLOCK[0]>>4,WATER_TOWER_BLOCK[1]>>4];
   const qa=q.get('qa')==='1',viewName=q.get('view'),view=VIEWS.includes(viewName)?viewName:qa?'iso':'orbit';
   const radius=Math.round(number('radius',0,MAX_RADIUS)??(qa?2:3)),floor=number('floor',-64,960);
-  return {base,custom:!!custom,revision,center,block,radius,view,yaw:number('yaw',-3600,3600)??DEFAULT_YAW[view],pitch:number('pitch',-89,90),
+  return {base,layout,custom:!!custom,revision,center,block,radius,view,yaw:number('yaw',-3600,3600)??DEFAULT_YAW[view],pitch:number('pitch',-89,90),
     width:Math.round(number('w',64,4096)??960),height:Math.round(number('h',64,4096)??640),qa,floor:floor===null?null:Math.round(floor)};
 }
 export function spiral([cx,cz],radius){
@@ -213,7 +215,7 @@ export function installBlocksPage(doc=document){
     new ResizeObserver(entries=>doc.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px')).observe(doc.querySelector('.viewer-tools'));
   }
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();$('viewer-status').textContent='The graphics context was lost. Reload the page to draw the blocks again.';});
-  const client=new RegionClient({base:params.base,packs:params.custom?[]:VIEW_CACHES}),registry=new BlockRegistry();
+  const client=new RegionClient({base:params.base,layout:params.layout,packs:params.custom?[]:VIEW_CACHES}),registry=new BlockRegistry();
   let world=new BlockWorld(registry),state={center:params.center,radius:params.radius,floor:params.floor,floorY:-64,originX:0,originZ:0,statuses:new Map(),errors:[]},session=null,hover=null,pinned=null;
   viewer.setView(params.view,{yaw:params.yaw,pitch:params.pitch??DEFAULT_PITCH[params.view]});
   const setStatus=text=>{$('viewer-status').textContent=text;};
@@ -273,6 +275,7 @@ export function installBlocksPage(doc=document){
   function syncUrl(){
     if(params.qa)return;const q=new URLSearchParams();q.set('chunk',state.center.join(','));q.set('radius',String(state.radius));q.set('view',viewer.view);
     if(params.custom)q.set('base',params.base);else if(params.revision!==PINNED_REVISION)q.set('revision',params.revision);
+    if(params.layout!=='bucketed')q.set('layout',params.layout);
     history.replaceState(null,'','?'+q.toString());
   }
   function stats(blocks,faces,regions){

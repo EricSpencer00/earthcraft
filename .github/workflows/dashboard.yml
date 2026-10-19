@@ -6,6 +6,8 @@ on:
       - dashboard/**
       - tests/dashboard_browser.mjs
       - tests/blocks_browser.mjs
+      - tests/pipeline.mjs
+      - tests/pipeline_browser.mjs
       - tests/anvil.mjs
       - tests/view_cache.mjs
       - scripts/build_view_cache.mjs
@@ -19,6 +21,8 @@ on:
       - dashboard/**
       - tests/dashboard_browser.mjs
       - tests/blocks_browser.mjs
+      - tests/pipeline.mjs
+      - tests/pipeline_browser.mjs
       - tests/anvil.mjs
       - tests/view_cache.mjs
       - scripts/build_view_cache.mjs
@@ -55,6 +59,8 @@ jobs:
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs
           node tests/blocks_browser.mjs
+          node tests/pipeline.mjs
+          node tests/pipeline_browser.mjs
       - name: Save screenshots
         if: always()
         uses: actions/upload-artifact@v5

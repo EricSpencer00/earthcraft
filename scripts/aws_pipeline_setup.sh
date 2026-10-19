@@ -147,6 +147,12 @@ update() {
     as_user git merge -q --ff-only FETCH_HEAD
   fi
   changed() { [ "$old" = none ] || ! as_user git cat-file -e "$old^{commit}" 2>/dev/null || ! as_user git diff --quiet "$old" "$new" -- "$@"; }
+  local restart=0
+  if changed scripts 'requirements*.txt' configs/aws || \
+     ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline || \
+     { [ -f /run/earthcraft/shard ] && [ "$(cat /run/earthcraft/shard)" != "$(shard)" ]; }; then
+    restart=1
+  fi
   if changed 'requirements*.txt'; then install_requirements; fi
   if changed configs/aws scripts/aws_pipeline_setup.sh || ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline; then
     install -m 0755 scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline
@@ -154,8 +160,12 @@ update() {
     systemctl daemon-reload
     for timer in configs/aws/*.timer; do systemctl enable --now "$(basename "$timer")" 2>/dev/null || true; done
   fi
-  echo "updated $old -> $new; restarting (SIGTERM: the worker finishes its tile and commits its batch first)"
-  systemctl restart earthcraft-pipeline.service
+  if [ "$restart" = 1 ]; then
+    echo "updated $old -> $new; restarting (SIGTERM: the worker finishes its tile and commits its batch first)"
+    systemctl restart earthcraft-pipeline.service
+  else
+    echo "updated $old -> $new; no worker changes, keeping the generator running"
+  fi
   mkdir -p "$(dirname "$deployed")"; echo "$new" > "$deployed.tmp"; mv "$deployed.tmp" "$deployed"
 }
 
