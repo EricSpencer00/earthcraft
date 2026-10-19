@@ -159,3 +159,33 @@ Run the existing frozen crop and photoscan's crop on the same `meta`. Report:
 * the photoscan Water Tower holdout result from the hand-over note, for context: median 1.18 m.
 
 Keep the run under `runs/scratch/photoscan-compare/`, delete it afterwards, and never write to the save.
+
+### Results (2026-10-18, photoscan d577656)
+
+Run it with: `PYTHONPATH=scripts .venv/bin/python scripts/photoscan_adapter.py`. It is offline,
+uses the frozen 2022 ISGS crop `runs/water-tower-points-2022` and `runs/water-tower-focus-64`,
+and deletes its scratch afterwards. Only the CLI entry point is opt-in; nothing in the default
+pipeline imports it. The baseline is the max Y per column of `point_geometry.load_tower_points`
+voxels, the cells EarthCraft places today. Footprint: county OBJECTID 833197, 224 columns.
+
+| | Today (observed voxels) | photoscan `roofY` |
+|---|---|---|
+| Footprint columns with a roof | 215 | 224 (214 measured, 10 filled from the same building) |
+| Top Y | 121 | 119 (p98 per column, not max) |
+| Per-column difference (215 shared) | — | mean −0.62, MAE 0.73, p90 2, max 14 blocks |
+| Ground vs EarthCraft DEM | — | median 0 blocks |
+| Tiers found | — | y 72 (28 %), 86 (6.5 %), 112 (5.6 %); roof_shape `complex`, confidence 0.79 |
+
+Feeding all non-withheld classes, or only EarthCraft's admitted classes (1, 2, 6, 15, 19), gives
+identical roof numbers. With all classes, photoscan also finds 1,965 canopy columns in the tile.
+It finds 1 `baseY` column.
+
+Reading: on this tile photoscan reproduces today's column tops to within 1 block on average. The
+small negative bias and the lower top come from p98 vs max: the cupola tip is lost. The 9 columns
+with no observation today get a same-building fill, flagged `inferred=1`. The gain for EarthCraft
+is therefore not accuracy on already-dense towers. It is tiers/roof shape, `baseY`, canopy, and
+NAIP roof colour on sparser buildings. Next test: a sparse downtown tile where
+`detail_buildings.roof_heights` leaves footprints untouched (<30 % coverage).
+
+Not done: no `--geometry-source` flag in `regional_generate.py` yet. The adapter is a separate
+script, so default behaviour is untouched.
