@@ -39,7 +39,7 @@ export function tileSource(manifest,batch,tile=batch.tiles[0]){
   return {base,href:`./blocks.html?${query}`,x:x*512+256,z:z*512+256,tile};
 }
 
-async function json(url,limit=2*1024*1024){
+async function jsonPage(url,limit=2*1024*1024){
   const response=await fetch(url,{cache:'no-cache',credentials:'omit',signal:AbortSignal.timeout(20000)});
   if(!response.ok){response.body?.cancel().catch(()=>{});throw Error(`Feed request failed (${response.status}).`);}
   const reader=response.body.getReader(),chunks=[];let length=0;
@@ -47,7 +47,29 @@ async function json(url,limit=2*1024*1024){
     while(true){const {done,value}=await reader.read();if(done)break;length+=value.byteLength;if(length>limit)throw Error('The feed exceeded its size limit.');chunks.push(value);}
   }catch(error){await reader.cancel().catch(()=>{});throw error;}
   const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return {data:JSON.parse(new TextDecoder().decode(bytes)),link:response.headers.get('Link')||''};
+}
+async function json(url,limit){return (await jsonPage(url,limit)).data;}
+
+// List directory names only, at the same immutable publication as the preview.
+// Ten bounded pages cap work; beyond that the result is explicitly a lower bound.
+export async function publishedTileCount(revision,read=jsonPage){
+  if(!SHA.test(revision))throw Error('Invalid publication revision.');
+  const prefix=`${HUB}/api/datasets/${REPO}/tree/${revision}/tiles/v2`;
+  let url=prefix+'?recursive=false&expand=false&limit=1000',pages=0;
+  const tiles=new Set();
+  while(url&&pages<10){
+    const {data,link}=await read(url,512*1024);
+    if(!Array.isArray(data)||data.length>1000)throw Error('Invalid published-tile listing.');
+    for(const entry of data){
+      const tile=String(entry.path||'').slice('tiles/v2/'.length);
+      if(entry.type==='directory'&&entry.path===`tiles/v2/${tile}`&&TILE.test(tile))tiles.add(tile);
+    }
+    const next=/<([^>]+)>;\s*rel="next"/.exec(link)?.[1];
+    if(next&&!next.startsWith(prefix+'?'))throw Error('Unexpected tile-list continuation.');
+    url=next;pages++;
+  }
+  return {count:tiles.size,complete:!url};
 }
 export const dateLabel=at=>new Date(at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});
 export function ageLabel(at,now=Date.now()){
@@ -106,6 +128,12 @@ export function installPipeline(doc=document){
       if(shown!==latest.revision){
         const manifest=await json(`${ROOT}/resolve/${latest.revision}/tiles/v2/${tile}/tile.json`,512*1024);
         current=tileSource(manifest,latest,tile);shown=latest.revision;
+        text('published-tiles','Checking');
+        void publishedTileCount(latest.revision).then(result=>{
+          if(shown!==latest.revision)return;
+          text('published-tiles',(result.complete?'':'At least ')+count(result.count));
+          text('published-basis',`Distinct 512 × 512 m v2 tile folders at publication ${latest.revision.slice(0,8)}. Legacy v1 packages and saved-world declarations are separate; folders are not a full integrity audit.`);
+        }).catch(()=>{if(shown===latest.revision){text('published-tiles','Unavailable');text('published-basis','The published tile count could not be read. Journal counts are not a substitute.');}});
         text('tile-id',tile);text('tile-published',dateLabel(latest.at));
         text('tile-description',`An excerpt from tile ${tile} in the latest published batch. Each tile covers 512 × 512 m; this view shows its centre.`);
         text('tile-quality',({LQ:'Base terrain','scan-roof':'LiDAR roofs','scan-points-and-roof':'LiDAR points & roofs','classified-scan-points':'Classified LiDAR points'})[manifest.quality]||'Not recorded');

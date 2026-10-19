@@ -26,6 +26,7 @@ try{
     if(url.includes('/commits/main')){if(commitsFail)return route.fulfill({status:503,body:'Unavailable'});value=[batch];}
     else if(url.endsWith('/status/pipeline.json'))value={...fixture,time_utc:old?new Date(Date.now()-4*3600000).toISOString():now};
     else if(url.endsWith('/tile.json'))value=manifest;
+    else if(url.includes('/tree/')&&url.includes('/tiles/v2'))value=[{type:'directory',path:'tiles/v2/-136_68'},{type:'directory',path:'tiles/v2/-130_68'}];
     else if(url.endsWith('/r.-136.68.mca')){regionRequests++;return route.fulfill({status:206,body:header,headers:{'Content-Range':'bytes 0-8191/4202496','Content-Type':'application/octet-stream','Access-Control-Allow-Origin':'*'}});}
     else throw Error('Unexpected network request: '+url);
     return route.fulfill({status:200,body:JSON.stringify(value),contentType:'application/json',headers:{'Access-Control-Allow-Origin':'*'}});
@@ -35,6 +36,7 @@ try{
     await page.setViewportSize({width,height});await page.goto(origin+'/pipeline.html');
     await expect(page.locator('#tile-id')).toHaveText('-136_68');await expect(page.locator('#rate-day')).toHaveText('1,121');
     await expect(page.locator('#worker-state')).toHaveText('Reported active');
+    await expect(page.locator('#published-tiles')).toHaveText('2');
     await expect(page.locator('#preview-status')).toContainText('no stored chunks',{timeout:30000});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'No horizontal overflow');
     const href=await page.locator('#tile-open').getAttribute('href');assert.ok(href.includes(revision)&&href.includes('layout=flat'));

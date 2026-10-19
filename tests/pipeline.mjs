@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {publications,hostState,tileSource,ageLabel} from '../dashboard/pipeline.mjs';
+import {publications,hostState,tileSource,ageLabel,publishedTileCount} from '../dashboard/pipeline.mjs';
 import {RegionClient} from '../dashboard/anvil.mjs';
 import {parseViewerParams} from '../dashboard/chunk-viewer.mjs';
 
@@ -32,4 +32,11 @@ assert.throws(()=>new RegionClient({base:source.base,layout:'other'}),/layout/);
 const q=parseViewerParams(new URL(source.href,'http://localhost').search);
 assert.equal(q.layout,'flat');assert.deepEqual(q.center,[-136*32+16,68*32+16]);
 assert.throws(()=>parseViewerParams('?layout=unknown'),/layout/);
+const countPrefix=`https://huggingface.co/api/datasets/EricSpencer00/earthcraft/tree/${revision}/tiles/v2`;
+let pages=0;
+const actual=await publishedTileCount(revision,async()=>++pages===1?{data:[{type:'directory',path:'tiles/v2/1_2'},{type:'file',path:'tiles/v2/not-a-tile'}],link:`<${countPrefix}?cursor=next>; rel="next"`}:{data:[{type:'directory',path:'tiles/v2/-3_4'},{type:'directory',path:'tiles/v2/1_2'}],link:''});
+assert.deepEqual(actual,{count:2,complete:true});assert.equal(pages,2);
+const bounded=await publishedTileCount(revision,async()=>({data:[{type:'directory',path:'tiles/v2/1_2'}],link:`<${countPrefix}?cursor=next>; rel="next"`}));
+assert.deepEqual(bounded,{count:1,complete:false});
+await assert.rejects(publishedTileCount(revision,async()=>({data:[],link:'<https://example.com/>; rel="next"'})),/continuation/);
 console.log('Pipeline: publication ordering, invalid data, stale telemetry, pinned tile paths and flat region layout passed');
