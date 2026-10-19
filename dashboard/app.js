@@ -1,5 +1,6 @@
 import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
 import {parseLocation} from './location-search.mjs?v=simple-1';
+import {loadTilesIndex,tileForCell,cellsOfTile,tileRegionUrl,prefersTile,agoLabel,counterLabel,fitProjection,cellRecord as newCellRecord,TILES_REFRESH_MS} from './new-tiles.mjs?v=tiles-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 
 const $=id=>document.getElementById(id);
@@ -12,9 +13,9 @@ const stateLabel=value=>({
   verified:'Checked in Minecraft',failed:'Needs review',unknown:'Not recorded'
 }[value]||String(value||'Not recorded').replaceAll('_',' ').replaceAll('-',' '));
 const color=name=>getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();
-const palette=()=>['surface','gray','green','amber','rust'].map(color);
+const palette=()=>['surface','gray','green','amber','rust','new'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
-let cellBrowser=null;
+let cellBrowser=null,newTiles=null,tilesShown=false;
 // Per-cell detail level (256 m cells = 16x16 chunks).
 const DETAIL_URL='https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/world/index/detail-levels.json';
 const DETAIL_LEVELS=['none','low','high','hand'];
@@ -193,7 +194,7 @@ function drawGeography(ctx,cssWidth,cssHeight){
     const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
     const level=mapLayer==='detail'?detailLevel(cell.index):null;
     ctx.fillStyle=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
-    ctx.globalAlpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
+    ctx.globalAlpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):code===5?.55:.28;
     const points=cell.points.map(p=>({x:anchor.x+(p.x-first.nw.x)*scale,y:anchor.y+(p.y-first.nw.y)*scale}));
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();
     if(w>5){ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.strokeStyle=mapLayer==='detail'?ctx.fillStyle:colors[code];ctx.lineWidth=.6;ctx.stroke();}
@@ -249,6 +250,7 @@ function setMapMessage(message){$('mapnote').textContent=message;}
 function countCells(counts={}){return Object.values(counts).reduce((total,value)=>total+Number(value||0),0);}
 
 function stageCode(cell){
+  if(cell.new_tile)return 5;
   if(cell.state==='failed')return 4;
   if(cell.state==='running'||cell.state==='leased')return 3;
   if(['generated','styled','verified'].includes(cell.state))return 2;
@@ -264,6 +266,7 @@ function publishedAtlas(data){
     return match?{...cell,id,x:Number(match[1]),z:Number(match[2])}:null;
   }).filter(Boolean);
   if(!rows.length)return null;
+  if(world&&newTiles?.count)addNewTiles(rows,Number(world.cell_size_m)||256);
   const bounds=rows.reduce((box,row)=>({left:Math.min(box.left,row.x),top:Math.min(box.top,row.z),right:Math.max(box.right,row.x+1),bottom:Math.max(box.bottom,row.z+1)}),{left:Infinity,top:Infinity,right:-Infinity,bottom:-Infinity});
   const {left,top,right,bottom}=bounds;
   const width=right-left,height=bottom-top;
@@ -277,13 +280,14 @@ function publishedAtlas(data){
     cellIds[index]=row.id;
     records[index]=row;
   }
-  const counts={white:0,gray:0,green:0,active:0,failed:0};
+  const counts={white:0,gray:0,green:0,active:0,failed:0,fresh:0};
   for(const code of cells){
     if(code===0)counts.white+=1;
     if(code===1)counts.gray+=1;
     if(code===2)counts.green+=1;
     if(code===3)counts.active+=1;
     if(code===4)counts.failed+=1;
+    if(code===5)counts.fresh+=1;
   }
   const cellSize=Number(world?.cell_size_m||data.cell_grid?.cell_size_m)||256;
   return {
@@ -297,6 +301,40 @@ function publishedAtlas(data){
     cells,cell_ids:cellIds,records,counts,failed_tiles:counts.failed,
     updated_utc:data.updated_utc,overlays:{}
   };
+}
+
+// Cells of newly published tiles: mark the ones already on the map, add the rest.
+function addNewTiles(rows,cellSize){
+  const byId=new Map(rows.map((row,i)=>[row.id,i])),project=fitProjection(rows,cellSize);
+  for(const tile of newTiles.tiles.values())for(const {x,z} of cellsOfTile(tile)){
+    const id=x+'_'+z,at=byId.get(id);
+    if(at!==undefined){rows[at]={...rows[at],new_tile:tile.id};continue;}
+    if(!project)continue;
+    byId.set(id,rows.length);rows.push(newCellRecord(project,x,z,tile,cellSize));
+  }
+}
+async function loadTiles(){
+  try{
+    const index=await loadTilesIndex();
+    const changed=!newTiles||index.count!==newTiles.count||index.last!==newTiles.last;
+    newTiles=index;renderTilesCounter();
+    if(changed&&snapshot&&$('area').value==='world')applyTiles();
+  }catch{/* the tiles index is optional */}
+}
+function renderTilesCounter(){
+  const box=$('new-tiles'),label=counterLabel(newTiles);
+  box.hidden=!label;box.textContent=label;
+  if(label)box.title='Newly built 512 m areas, shown in blue. Updated every few minutes.';
+}
+// Rebuild the map with the newest tiles, keeping the selected cell and (after the first time) the camera.
+function applyTiles(){
+  const keep=selectedIndex!==null?atlas?.cell_ids?.[selectedIndex]:null;
+  const next=publishedAtlas(snapshot);if(!next)return;
+  atlas=next;
+  if(tilesShown)geoSignature=atlasSignature();
+  tilesShown=true;
+  selectedIndex=keep?Math.max(0,atlas.cell_ids.indexOf(keep)):null;if(keep&&atlas.cell_ids[selectedIndex]!==keep)selectedIndex=null;
+  hoverIndex=null;renderSnapshot();renderAtlas();
 }
 
 function renderSnapshot(){
@@ -443,7 +481,7 @@ function drawAtlas(){
 
 function renderLegend(isPublished,counts,live){
   if(isPublished&&mapLayer==='detail'){
-    for(const id of ['outside','queued','source','finished','installed','running','failed'])$('legend-'+id).hidden=true;
+    for(const id of ['outside','queued','source','finished','installed','running','failed','new'])$('legend-'+id).hidden=true;
     return;
   }
   $('legend-outside').hidden=false;
@@ -451,7 +489,7 @@ function renderLegend(isPublished,counts,live){
     $('legend-outside-label').textContent='Not built yet';
     $('legend-source-label').textContent='Awaiting detail';
     $('legend-finished-label').textContent='Surface detail added';
-    for(const id of ['queued','installed','running','failed'])$('legend-'+id).hidden=true;
+    for(const id of ['queued','installed','running','failed','new'])$('legend-'+id).hidden=true;
     $('legend-source').hidden=false;$('legend-finished').hidden=false;
     return;
   }
@@ -463,6 +501,7 @@ function renderLegend(isPublished,counts,live){
   $('legend-source').hidden=live||!counts.gray;
   $('legend-finished').hidden=false;
   $('legend-installed').hidden=live||isPublished;
+  $('legend-new').hidden=!counts.fresh;
   $('legend-running').hidden=live||!counts.active;
   $('legend-failed').hidden=live||!counts.failed;
 }
@@ -490,7 +529,7 @@ function renderAtlas(){
     $('map-scale').textContent='';
     mapMetrics=null;
     $('map').setAttribute('aria-label','No generation cells recorded.');
-    for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed'])$(id).hidden=true;
+    for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed','legend-new'])$(id).hidden=true;
     updateZoomButtons();
     clearSelection();
     return;
@@ -618,7 +657,7 @@ async function refresh(){
       $('map-summary').textContent='Map unavailable. Use Refresh to try again.';
       $('map').setAttribute('aria-label','Map unavailable. Use Refresh to try again.');
       for(const id of ['geometry','sources','appearance','chunk-count','border','leases','rollup'])$(id).textContent='Not recorded';
-      for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed'])$(id).hidden=true;
+      for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed','legend-new'])$(id).hidden=true;
       $('selection-title').textContent='No cell selected';
       $('cell').textContent='Load the map to look at cells.';
       $('log').textContent='No build details loaded';
@@ -669,6 +708,8 @@ function renderSelection(){
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
   if(detail&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
+  const tile=atlas.area.id==='world'?tileForCell(newTiles,id):null;
+  if(tile)rows.push(['Newly built',agoLabel(tile.at)]);
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
     dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
@@ -677,10 +718,18 @@ function renderSelection(){
   if(code<0){$('cell').hidden=false;$('cell').textContent='Not built yet.';return;}
   $('cell').hidden=true;
   const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
-  $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}`;$('cell-actions').hidden=false;
+  const overrides=[];
+  if(newTiles&&atlas.area.id==='world'){
+    const rx=Math.floor(cx/512),rz=Math.floor(cz/512);
+    for(let dz=-1;dz<=1;dz++)for(let dx=-1;dx<=1;dx++){const t=newTiles.tiles.get((rx+dx)+'_'+(rz+dz));if(t&&prefersTile(t))overrides.push({rx:t.rx,rz:t.rz,url:tileRegionUrl(t)});}
+  }
+  $('cell-blocks').href=tile&&prefersTile(tile)
+    ?'./blocks.html?'+new URLSearchParams({base:tileRegionUrl(tile).replace(/[^/]+$/,''),layout:'flat',block:cx+','+cz,radius:String(radius)})
+    :`./blocks.html?block=${cx},${cz}&radius=${radius}`;
+  $('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
-  cellPreview??=import('./cell-preview.mjs?v=cell-2');
-  cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2})).then(result=>{
+  cellPreview??=import('./cell-preview.mjs?v=tiles-1');
+  cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,overrides})).then(result=>{
     if(token!==cellToken||result.status==='aborted')return;
     $('cell-view').dataset.state=result.status;
     $('cell-view-status').textContent=result.status==='empty'?'Not built yet.':'Drag to turn · scroll or pinch to zoom.';
@@ -764,6 +813,9 @@ setPanel(false,'world');
 initializeBasemap();
 refresh();
 loadDetail();
+loadTiles();
+setInterval(()=>{if(!document.hidden)loadTiles();},TILES_REFRESH_MS);
+setInterval(renderTilesCounter,30000);
 let ticks=0;
 setInterval(()=>{ticks+=1;if(snapshot?.source!=='public'&&$('auto').checked&&!document.hidden&&(!['world','published'].includes($('area').value)||ticks%6===0))refresh();},10000);
 

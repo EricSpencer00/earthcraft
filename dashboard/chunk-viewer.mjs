@@ -3,7 +3,7 @@
 // blocks.html?base=<…/world/region/>&chunk=cx,cz&radius=r&view=orbit|iso|top|street&yaw=deg
 // qa=1 adds a fixed-size, chrome-free deterministic capture that sets window.__earthcraftRender.
 import * as THREE from './assets/vendor/three/three.module.min.js';
-import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=pipeline-1';
+import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=tiles-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-2';
 
 export const WATER_TOWER_BLOCK=[32,33];// Inherited frame: easting 0, northing 0 → X 32, Z 33.

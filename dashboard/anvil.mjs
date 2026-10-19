@@ -6,6 +6,8 @@ export const HF_REPO='EricSpencer00/earthcraft';
 // Immutable dataset commit the site reads by default (content at a SHA never changes, so CDNs and
 // browsers may cache it). Bump together with dashboard/cache/*.json via scripts/build_view_cache.mjs.
 export const PINNED_REVISION='770e8308816b3443f4f66c56b378e49ff8ae0480';
+// When the world at PINNED_REVISION was captured; tiles/v2 regions published later replace it.
+export const WORLD_CAPTURED_UTC='2026-10-16T18:21:13Z';
 export const VIEW_CACHES=['./cache/water-tower.json'];
 export const MAX_PACK_BYTES=8*1024*1024;
 const REVISION=/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/,REPO=/^[-\w]+\/[-\w.]+$/;
@@ -151,6 +153,14 @@ export class RegionClient{
     this.stats={requests:0,bytes:0,packRequests:0,packBytes:0};
     // Signed CDN URL each region's resolve URL redirected to; reusing it skips one 302 per read.
     this.resolved=new Map();this.packUrls=packs;this.packs=null;
+    // Per-region URL overrides (for example a newer tiles/v2 publication): "rx,rz" → absolute URL.
+    this.overrides=new Map();
+  }
+  setOverride(rx,rz,href){
+    const key=rx+','+rz,url=new URL(href,globalThis.location?.href);
+    if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error('Region override must be an http(s) URL without credentials.');
+    if(this.overrides.get(key)===url.href)return;
+    this.overrides.set(key,url.href);this.headers.map.delete(key);
   }
   // Prepacked chunk records (scripts/build_view_cache.mjs). Used only when the pack was built from
   // the same repo+revision this client reads; any failure falls back to Range reads.
@@ -174,7 +184,7 @@ export class RegionClient{
     for(const p of packs){const e=p.chunks.get(cx+','+cz);if(e&&e[0]+e[1]<=p.bytes.length)return p.bytes.subarray(e[0],e[0]+e[1]);}
     return null;
   }
-  url(rx,rz){return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:regionPath(rx,rz),this.base).href;}
+  url(rx,rz){const o=this.overrides.get(rx+','+rz);if(o)return o;return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:regionPath(rx,rz),this.base).href;}
   slot(signal){
     signal?.throwIfAborted();
     if(this.active<this.max){this.active++;return Promise.resolve();}
@@ -226,7 +236,7 @@ export class RegionClient{
     const report=r=>{results.push(r);onChunk(r);};
     const packs=this.packUrls.length?await this.loadPacks():[];signal?.throwIfAborted();
     for(const [cx,cz] of coords){
-      const record=packs.length&&this.fromPack(packs,cx,cz);
+      const record=packs.length&&!this.overrides.has(chunkRegion(cx,cz).join(','))&&this.fromPack(packs,cx,cz);
       if(record){
         try{const chunk=decodeChunk(readNBT(await readChunkPayload(record)).value);signal?.throwIfAborted();report({cx,cz,status:'ok',chunk,packed:true});continue;}
         catch(error){if(signal?.aborted)throw error;}// fall through to a Range read
@@ -239,7 +249,7 @@ export class RegionClient{
       for(const item of items){
         const i=chunkIndex(item.cx,item.cz),offset=header.offsets[i],n=header.sectors[i];
         if(!offset){report({...item,status:'absent'});continue;}
-        const cached=this.chunkCache.get(item.cx+','+item.cz);
+        const cached=this.chunkCache.get(this.url(rx,rz)+'|'+item.cx+','+item.cz);
         if(cached&&cached.timestamp===header.timestamps[i]){report({...item,status:'ok',chunk:cached.chunk,cached:true});continue;}
         wanted.push({...item,offset,n,timestamp:header.timestamps[i]});
       }
@@ -259,7 +269,7 @@ export class RegionClient{
           try{
             const at=(item.offset-span.start)*SECTOR,chunk=decodeChunk(readNBT(await readChunkPayload(bytes.subarray(at,at+item.n*SECTOR))).value);
             signal?.throwIfAborted();
-            this.chunkCache.set(item.cx+','+item.cz,{chunk,timestamp:item.timestamp});report({cx:item.cx,cz:item.cz,status:'ok',chunk});
+            this.chunkCache.set(url+'|'+item.cx+','+item.cz,{chunk,timestamp:item.timestamp});report({cx:item.cx,cz:item.cz,status:'ok',chunk});
           }catch(error){if(signal?.aborted)throw error;report({cx:item.cx,cz:item.cz,status:'error',error});}
         }
       }));
