@@ -17,9 +17,11 @@ from global_projection import (
     ATLAS_SCHEMA, WORLD_PAGE_COUNT, address_for, page_coordinates, page_manifest,
 )
 from pyproj import Transformer
+from dataset_coverage import read_dataset_coverage
 from world_coverage import read_world_coverage
 
 
+WORLD_BASES = frozenset(('installed_save_tile_manifest', 'dataset_region_index'))
 STAGES = ('sources', 'geometry', 'appearance', 'game_verify')
 EARTH_SURFACE_M2 = 510_064_471 * 1_000_000
 CELL_SIZE_M = 256
@@ -214,7 +216,7 @@ def _valid_public_snapshot(snapshot):
     world = snapshot.get('generated_world')
     if world is not None:
         if (not isinstance(world, dict) or world.get('schema_version') != 1 or
-                world.get('basis') != 'installed_save_tile_manifest' or
+                world.get('basis') not in WORLD_BASES or
                 world.get('cell_size_m') != CELL_SIZE_M or
                 world.get('current_block_fill_verified') is not False):
             return False
@@ -228,6 +230,8 @@ def _valid_public_snapshot(snapshot):
             return False
         for cell in rows:
             corners = cell.get('corners_lonlat')
+            if corners is None:
+                continue
             if (not isinstance(corners, list) or len(corners) != 4 or
                     any(not isinstance(p, list) or len(p) != 2 or
                         not _is_number(p[0]) or not -180 <= p[0] <= 180 or
@@ -512,13 +516,20 @@ def _city_destinations(root, active_save_coverage):
     return sorted(result, key=lambda entry: entry['id'])
 
 
+def _world_coverage(root):
+    """The dataset is the source of truth; the local save is only an offline fallback."""
+    for reader in (read_dataset_coverage, read_world_coverage):
+        try:
+            return reader(root)
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def build_snapshot(root, now=None):
     root = Path(root)
     active_save_coverage = _active_save_coverage(root)
-    try:
-        generated_world = read_world_coverage(root)
-    except (OSError, KeyError, TypeError, ValueError):
-        generated_world = None
+    generated_world = _world_coverage(root)
     city_destinations = _city_destinations(root, active_save_coverage)
     journal_path = _latest_journal(root)
     counts = _journal_counts(root)
@@ -659,7 +670,7 @@ def write_snapshot(root, output, save_footprint=False):
         snapshot = _previous_public_snapshot(Path(root))
         if snapshot is None:
             raise ValueError('A validated public build record is required')
-        snapshot['generated_world'] = read_world_coverage(root)
+        snapshot['generated_world'] = _world_coverage(root)
         snapshot['active_save_coverage'] = _active_save_coverage(root)
         snapshot['updated_utc'] = datetime.now(timezone.utc).isoformat()
     else:
