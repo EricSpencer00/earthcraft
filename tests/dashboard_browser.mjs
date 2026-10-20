@@ -48,6 +48,11 @@ for(const cell of snapshot.generated_world?.cells||[]){
 const detailFixture={schema:'earthcraft.detail-levels.v1',sampled:0.1,counts:{none:0,low:Object.keys(detailTiles).length,high:0,hand:0},
   estimated_totals:{none:{estimate:40},low:{estimate:10043},high:{estimate:0},hand:{estimate:0}},tiles:detailTiles};
 await context.route('https://huggingface.co/**/world/index/detail-levels.json',route=>route.fulfill({status:200,body:JSON.stringify(detailFixture),headers:{'Access-Control-Allow-Origin':'*','Content-Type':'application/json'}}));
+// New tiles index: one tile over cells already on the map, so cell counts stay those of the snapshot.
+const worldCells=new Set((snapshot.generated_world?.cells||[]).map(cell=>String(cell.tile_id)));
+const newTile=[...worldCells].map(id=>id.split('_').map(Number)).map(([x,z])=>[Math.floor(x/2),Math.floor(z/2)])
+  .find(([rx,rz])=>[0,1].every(dx=>[0,1].every(dz=>worldCells.has(`${rx*2+dx}_${rz*2+dz}`))))?.join('_')||'0_0';
+await context.route('https://huggingface.co/**/tiles/v2/index.json*',route=>route.fulfill({status:200,body:JSON.stringify({schema:'earthcraft.tiles-index.v1',tiles:{[newTile]:[0,Math.floor(Date.now()/1000)-180]}}),headers:{'Access-Control-Allow-Origin':'*','Content-Type':'application/json'}}));
 const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
 page.on('console',message=>{if(message.type()==='error')problems.push(message.text());});
@@ -89,6 +94,8 @@ try{
       await ready('world');
       await expect(page.locator('#map-title')).toHaveText('What’s built');
       await expect(page.locator('#coverage-note')).toHaveText('Built so far · the Chicago area');
+      await expect(page.locator('#new-tiles')).toHaveText(/^1 new tile · last added [34] min ago$/);
+      await expect(page.locator('#legend-new')).toBeVisible();
       await expect(page.locator('#record-note')).toContainText('256 m square');
       await expect(page.locator('#grid-size')).toHaveText(snapshot.generated_world.unique_cells.toLocaleString()+' cells');
       await page.locator('#places-menu').evaluate(el=>el.open=true);

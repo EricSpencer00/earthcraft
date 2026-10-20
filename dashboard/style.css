@@ -3,7 +3,7 @@
 :root {
   color-scheme: light;
   --paper: #fff; --surface: #f4f5f3; --ink: #26332c; --muted: #566159; --line: #d9ded9; --control-line: #89948c;
-  --green: #285b3e; --gray: #8b9890; --amber: #98691e; --rust: #a24432; --outside: #ecebe3; --wash: #edf2ee; --accent-ink: #fff;
+  --green: #285b3e; --gray: #8b9890; --amber: #98691e; --rust: #a24432; --new: #1f5f8b; --outside: #ecebe3; --wash: #edf2ee; --accent-ink: #fff;
   --font-display: 'Source Serif 4', Georgia, serif; --font-body: 'Libre Franklin', Arial, sans-serif; --font-data: 'SFMono-Regular', Consolas, monospace;
   --header-height: 56px; --panel-width: 300px;
 }
@@ -65,6 +65,8 @@ select { height: 44px; width: 164px; padding: 8px 26px 8px 10px; border: 1px sol
 .legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 9px; height: 9px; background: var(--outside); border: 1px solid var(--gray); }
 .legend .nothing { background: var(--surface); } .legend .source { background: var(--gray); }
+.legend .new { background: var(--new); border-color: var(--new); }
+.new-tiles { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--new); }
 .legend .finished { background: var(--green); border-color: var(--green); } .legend .running, .legend .installed { background: var(--amber); border-color: var(--amber); } .legend .failed { background: var(--rust); border-color: var(--rust); }
 .map-attribution { position: absolute; bottom: 4px; right: 12px; z-index: 3; max-width: calc(100% - 24px); padding: 2px 5px; color: var(--muted); background: var(--paper); font-size: 10px; text-align: right; }
 .map-attribution a { text-decoration: none; }

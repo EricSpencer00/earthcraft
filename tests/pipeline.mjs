@@ -39,4 +39,26 @@ assert.deepEqual(actual,{count:2,complete:true});assert.equal(pages,2);
 const bounded=await publishedTileCount(revision,async()=>({data:[{type:'directory',path:'tiles/v2/1_2'}],link:`<${countPrefix}?cursor=next>; rel="next"`}));
 assert.deepEqual(bounded,{count:1,complete:false});
 await assert.rejects(publishedTileCount(revision,async()=>({data:[],link:'<https://example.com/>; rel="next"'})),/continuation/);
+// New tiles index: parsing, cell mapping, counter, projection fit and region overrides.
+{
+  const {parseTilesIndex,tileForCell,cellsOfTile,tileRegionUrl,prefersTile,counterLabel,fitProjection,cellRecord}=await import('../dashboard/new-tiles.mjs');
+  const index=parseTilesIndex({schema:'earthcraft.tiles-index.v1',tiles:{'-137_42':[0,1792342669],'1_2':[2,1792000000],'bad':[0,1]}});
+  assert.equal(index.count,2);assert.equal(index.last,1792342669000);
+  assert.throws(()=>parseTilesIndex({schema:'other'}),/Unsupported/);
+  assert.equal(tileForCell(index,'-274_85')?.id,'-137_42');assert.equal(tileForCell(index,'-273_84')?.id,'-137_42');assert.equal(tileForCell(index,'-272_84'),null);
+  assert.deepEqual(cellsOfTile(index.tiles.get('1_2')),[{x:2,z:4},{x:3,z:4},{x:2,z:5},{x:3,z:5}]);
+  assert.ok(tileRegionUrl(index.tiles.get('-137_42')).endsWith('/resolve/main/tiles/v2/-137_42/region/r.-137.42.mca'));
+  assert.ok(prefersTile(index.tiles.get('-137_42')));assert.ok(!prefersTile({at:Date.parse('2026-10-01T00:00:00Z')}));
+  assert.equal(counterLabel(index,1792342669000+3*60000),'2 new tiles · last added 3 min ago');assert.equal(counterLabel(null),'');
+  const rows=[];for(let x=-20;x<=20;x+=5)for(let z=-20;z<=20;z+=5)rows.push({x,z,longitude:-87.6+(x+.5)*256/83000,latitude:41.9-(z+.5)*256/111000});
+  const project=fitProjection(rows);const [lon,lat]=project(-274*256+128,85*256+128);
+  assert.ok(Math.abs(lon-(-87.6+(-274+.5)*256/83000))<1e-6&&Math.abs(lat-(41.9-(85+.5)*256/111000))<1e-6);
+  const cell=cellRecord(project,-274,85,index.tiles.get('-137_42'));assert.equal(cell.id,'-274_85');assert.equal(cell.corners_lonlat.length,4);assert.equal(cell.new_tile,'-137_42');
+  assert.equal(fitProjection(rows.slice(0,5)),null);
+  const client=new RegionClient({base:'https://huggingface.co/datasets/o/r/resolve/x/world/region/'});
+  client.setOverride(-137,42,tileRegionUrl(index.tiles.get('-137_42')));
+  assert.equal(client.url(-137,42),tileRegionUrl(index.tiles.get('-137_42')));assert.ok(client.url(-136,42).endsWith('/world/region/-9/r.-136.42.mca'));
+  assert.throws(()=>client.setOverride(0,0,'javascript:alert(1)'),/override/);
+}
+console.log('New tiles: index parsing, cells, counter, projection fit and region overrides passed');
 console.log('Pipeline: publication ordering, invalid data, stale telemetry, pinned tile paths and flat region layout passed');

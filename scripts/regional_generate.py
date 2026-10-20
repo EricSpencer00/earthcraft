@@ -62,6 +62,7 @@ from regional_scans import acquire, discover, frozen_get
 from regional_sources import validate as validate_sources
 from regional_store import region_hashes
 from regional_tiles import TILE_ID, TILE_SCHEMA, package_tile, receipt_bytes, tile_prefix
+import tiles_index
 from verify_metric_world import verify
 from worker_lease import LeaseKeeper
 from world_templates import chunk_template, height_template
@@ -1075,6 +1076,9 @@ class Batch:
         status = self.status_item()
         if status:
             items.append(status)
+        index = self.index_item()
+        if index:
+            items.append(index)
         tiles = [job['tile'] for job, _, _ in self.pending]
         label = f'Generate tiles/v2: {len(tiles)} tile(s) ' + ', '.join(tiles[:6]) + (' ...' if len(tiles) > 6 else '')
         for attempt in range(3):
@@ -1108,8 +1112,40 @@ class Batch:
         if status:
             atomic(self.worker.control / 'status-pushed.json', json.dumps(time.time()).encode())
             Path(status['local']).unlink(missing_ok=True)
+        if index:
+            Path(index['local']).unlink(missing_ok=True)
         self.pending, self.first = [], None
         return result
+
+    def index_item(self):
+        """tiles/v2/index.json with this batch merged in, riding along in the same commit.
+
+        Merge-safe: the current Hub copy is read and extended, plus every tile this
+        worker has published before (control/index-own.json), so a lost update from a
+        concurrent shard heals on the next batch. Never fails the batch.
+        """
+        try:
+            now = time.time()
+            own_path = self.worker.control / 'index-own.json'
+            try:
+                own = json.loads(own_path.read_text())
+            except (OSError, ValueError):
+                own = {}
+            for _, package, _ in self.pending:
+                manifest = package.manifest
+                quality = manifest.get('quality') if manifest.get('installable') else None
+                own[package.tile] = [tiles_index.quality_code(quality), int(now)]
+            atomic(own_path, json.dumps(own, separators=(',', ':')).encode())
+            raw = tiles_index.dumps(tiles_index.merge(tiles_index.read_remote(self.worker.reader), own, now))
+            self.worker.footprint.check(len(raw), 'tiles index')
+            local = self.worker.gen / '_tiles-index.json'
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_bytes(raw)
+            return {'path': tiles_index.PATH, 'local': str(local), 'sha256': hashlib.sha256(raw).hexdigest(),
+                    'bytes': len(raw)}
+        except Exception as error:  # noqa: BLE001 - the index is a convenience; tiles still publish
+            self.worker.log(event='tiles_index_skipped', reason=str(error)[:300])
+            return None
 
     def status_item(self):
         """At most hourly, ride a host status file (EARTHCRAFT_STATUS_FILE) along in this tile commit.

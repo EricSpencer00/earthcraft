@@ -104,7 +104,7 @@ export function installPipeline(doc=document){
     const generation=++drawGeneration;
       $('preview-retry').hidden=true;text('preview-status','Reading the published blocks…');
       try{
-        preview??=await import('./cell-preview.mjs?v=pipeline-1');
+        preview??=await import('./cell-preview.mjs?v=tiles-1');
         if(generation!==drawGeneration)return;
         const result=await preview.showCell($('tile-canvas'),{...source,radius:2,layout:'flat'});
         if(generation!==drawGeneration)return;
