@@ -90,17 +90,10 @@ def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
     inverse = Transformer.from_crs(frame['crs'], 'EPSG:4326', always_xy=True)
     rows = []
     for x, z in sorted(keys, key=lambda k: (k[1], k[0])):
-        # Cell centres only: the app sizes each cell from latitude, and per-cell
-        # corners would push the Pages artifact past its cap at this many cells.
+        # Cell centres only: the app sizes each cell from latitude.
         east, north = frame['west'] + (x + 0.5) * CELL, frame['north'] - (z + 0.5) * CELL
         lon, lat = (round(v, 6) for v in inverse.transform(east, north))
-        tile_id = f'{x}_{z}'
-        rows.append({
-            'id': f'world/{tile_id}', 'region_id': 'world', 'tile_id': tile_id,
-            'size_m': CELL, 'state': 'generated', 'geometry_state': 'complete',
-            'appearance_state': 'pending', 'game_verify_state': 'pending',
-            'longitude': lon, 'latitude': lat,
-        })
+        rows.append({'tile_id': f'{x}_{z}', 'longitude': lon, 'latitude': lat})
     return {
         'schema_version': 1, 'basis': 'dataset_region_index',
         'dataset_revision': commit, 'native_tiles': len(v2_tiles),
@@ -111,5 +104,11 @@ def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
         'manifest_sha256': hashlib.sha256(index_bytes).hexdigest(),
         'frame_sha256': hashlib.sha256(json.dumps(
             {k: frame[k] for k in ('crs', 'west', 'north')}, sort_keys=True).encode()).hexdigest(),
+        # Fields every dataset cell shares; stored once to keep the Pages artifact small.
+        'cell_defaults': {
+            'region_id': 'world', 'size_m': CELL, 'state': 'generated',
+            'geometry_state': 'complete', 'appearance_state': 'pending',
+            'game_verify_state': 'pending',
+        },
         'cells': rows,
     }
