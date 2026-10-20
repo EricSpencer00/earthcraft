@@ -258,10 +258,11 @@ function stageCode(cell){
 
 function publishedAtlas(data){
   const world=$('area').value==='world'?data.generated_world:null;
+  const defaults=world?.cell_defaults||{};
   const rows=(world?.cells||data.cells||[]).map(cell=>{
     const id=String(cell.tile_id||String(cell.id||'').split('/').pop()||'');
     const match=id.match(/^(-?\d+)_(-?\d+)$/);
-    return match?{...cell,id,x:Number(match[1]),z:Number(match[2])}:null;
+    return match?{...defaults,...cell,id,x:Number(match[1]),z:Number(match[2])}:null;
   }).filter(Boolean);
   if(!rows.length)return null;
   const bounds=rows.reduce((box,row)=>({left:Math.min(box.left,row.x),top:Math.min(box.top,row.z),right:Math.max(box.right,row.x+1),bottom:Math.max(box.bottom,row.z+1)}),{left:Infinity,top:Infinity,right:-Infinity,bottom:-Infinity});

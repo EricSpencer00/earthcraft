@@ -221,11 +221,15 @@ def _valid_public_snapshot(snapshot):
                 world.get('current_block_fill_verified') is not False):
             return False
         rows = world.get('cells')
+        defaults = world.get('cell_defaults', {})
         if (not isinstance(rows, list) or len(rows) > 500_000 or
+                not isinstance(defaults, dict) or
                 world.get('unique_cells') != len(rows) or
-                world.get('unique_area_km2') != len(rows) * CELL_SIZE_M ** 2 / 1e6 or
-                not all(_valid_cell(cell) and cell.get('size_m') == CELL_SIZE_M
-                        for cell in rows) or
+                world.get('unique_area_km2') != len(rows) * CELL_SIZE_M ** 2 / 1e6):
+            return False
+        rows = [{**defaults, **cell, 'id': f"{(cell.get('region_id') or defaults.get('region_id'))}/{cell.get('tile_id')}"}
+                if isinstance(cell, dict) else cell for cell in rows]
+        if (not all(_valid_cell(cell) and cell.get('size_m') == CELL_SIZE_M for cell in rows) or
                 len({cell['id'] for cell in rows}) != len(rows)):
             return False
         for cell in rows:
