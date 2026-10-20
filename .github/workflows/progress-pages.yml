@@ -7,11 +7,15 @@ on:
       - dashboard/**
       - progress/**
       - scripts/progress_snapshot.py
+      - scripts/dataset_coverage.py
+      - configs/world-frame.json
       - tests/dashboard_browser.mjs
       - tests/pipeline.mjs
       - tests/pipeline_browser.mjs
       - docs/photos/watertower-sep-10-26.png
       - .github/workflows/progress-pages.yml
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
