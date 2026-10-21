@@ -184,6 +184,9 @@ function drawGeography(ctx,cssWidth,cssHeight){
   const reference=geoMap.project([first.bounds[0]+1,first.bounds[3]]);
   const scale=(reference.x-anchor.x)*360,colors=palette();
   let selected=null,hover=null;
+  // One path per colour, filled once: translucent cells filled one by one
+  // double their alpha along shared antialiased edges and read as a dotted grid.
+  const groups=new Map(),outlines=[];
   for(const cell of geoCells){
     const x=anchor.x+(cell.nw.x-first.nw.x)*scale,y=anchor.y+(cell.nw.y-first.nw.y)*scale;
     const w=(cell.se.x-cell.nw.x)*scale,h=(cell.se.y-cell.nw.y)*scale;
@@ -192,13 +195,23 @@ function drawGeography(ctx,cssWidth,cssHeight){
     const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
     const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
     const level=mapLayer==='detail'?detailLevel(cell.index):null;
-    ctx.fillStyle=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
-    ctx.globalAlpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
+    const fill=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
+    const alpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
     const points=cell.points.map(p=>({x:anchor.x+(p.x-first.nw.x)*scale,y:anchor.y+(p.y-first.nw.y)*scale}));
-    ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();
-    if(w>5){ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.strokeStyle=mapLayer==='detail'?ctx.fillStyle:colors[code];ctx.lineWidth=.6;ctx.stroke();}
+    const key=fill+'|'+alpha;
+    if(!groups.has(key))groups.set(key,{fill,alpha,path:new Path2D()});
+    // Grow each cell by a fraction of a pixel so neighbours meet without hairline gaps.
+    const cx=(points[0].x+points[2].x)/2,cy=(points[0].y+points[2].y)/2,path=groups.get(key).path;
+    points.forEach((p,i)=>{const dx=p.x-cx,dy=p.y-cy,d=Math.hypot(dx,dy)||1,q={x:p.x+dx/d*.35,y:p.y+dy/d*.35};i?path.lineTo(q.x,q.y):path.moveTo(q.x,q.y);});
+    path.closePath();
+    if(w>5)outlines.push({points,stroke:mapLayer==='detail'?fill:colors[code]});
     if(cell.index===selectedIndex)selected=points;
     if(cell.index===hoverIndex)hover=points;
+  }
+  for(const {fill,alpha,path} of groups.values()){ctx.fillStyle=fill;ctx.globalAlpha=alpha;ctx.fill(path);}
+  ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.lineWidth=.6;
+  for(const {points,stroke} of outlines){
+    ctx.strokeStyle=stroke;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
   ctx.globalAlpha=1;
   for(const [points,strong] of [[hover,false],[selected,true]])if(points){
