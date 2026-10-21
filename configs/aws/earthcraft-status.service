@@ -1,5 +1,5 @@
 [Unit]
-Description=Earthcraft: write runs/status/pipeline.json (committed hourly with the next tile batch)
+Description=Earthcraft: write runs/status/pipeline.json (committed every 15 minutes with the next tile batch)
 
 [Service]
 Type=oneshot

@@ -193,36 +193,78 @@ status() {
   INSTANCE=$(imds instance-id) AZ=$(imds placement/availability-zone) OUT=$out SHARD=$(shard) \
   WORKERS=${EARTHCRAFT_WORKERS:-1} \
   SERVICE=$(systemctl is-active earthcraft-pipeline 2>/dev/null || true) python3 - <<'PY'
-import json, os, shutil, sqlite3, subprocess, time
+import base64, json, os, re, shutil, sqlite3, subprocess, time, zlib
+from datetime import datetime
 from pathlib import Path
 control, root = Path(os.environ['CONTROL']), Path(os.environ['ROOT'])
 now = time.time()
-published, last_commit = [], None
-for log in sorted((control / 'logs').glob('*.log*')):
-    for line in log.read_text(errors='replace').splitlines():
-        if not line.startswith('{'):
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if event.get('event') == 'tile_published':
-            published.append((event.get('utc'), event.get('tile')))
-        elif event.get('event') == 'commit_verified':
-            if last_commit is None or event.get('utc', '') > last_commit['utc']:
-                last_commit = {'oid': event.get('oid'), 'utc': event.get('utc'), 'label': event.get('label')}
-def age(utc):
-    from datetime import datetime
-    return now - datetime.fromisoformat(utc).timestamp()
-hour = sum(1 for utc, _ in published if utc and age(utc) <= 3600)
-day = sum(1 for utc, _ in published if utc and age(utc) <= 86400)
-journal = {}
+DAY = 86400
+
+
+def recent_events(log, since, block=1 << 20):
+    """Events newer than `since`, reading the log backwards: logs only grow, so the cost
+    stays proportional to one day of work, not the whole history."""
+    events, size = [], log.stat().st_size
+    with open(log, 'rb') as f:
+        end, tail = size, b''
+        while end > 0:
+            start = max(0, end - block)
+            f.seek(start)
+            lines = (f.read(end - start) + tail).split(b'\n')
+            tail, end = (lines.pop(0) if start else b''), start
+            older = False
+            for line in reversed(lines):
+                if not line.startswith(b'{'):
+                    continue
+                try:
+                    event = json.loads(line)
+                    at = datetime.fromisoformat(event['utc']).timestamp()
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if at < since:
+                    older = True
+                    break
+                events.append((at, event))
+            if older:
+                break
+    return events
+
+
+events = [e for log in sorted((control / 'logs').glob('*.log')) for e in recent_events(log, now - DAY)]
+published = sorted((at, e.get('tile')) for at, e in events if e.get('event') == 'tile_published')
+commits = sorted((at, e) for at, e in events if e.get('event') == 'commit_verified')
+last_commit = ({'oid': commits[-1][1].get('oid'), 'utc': commits[-1][1].get('utc'), 'label': commits[-1][1].get('label')}
+               if commits else None)
+hour = sum(1 for at, _ in published if at >= now - 3600)
+day = len(published)
+journal, tiles = {}, []
 try:
     with sqlite3.connect(f'file:{control / "jobs.sqlite"}?mode=ro', uri=True, timeout=20) as db:
         for stage, state, n in db.execute('SELECT stage,state,count(*) FROM jobs GROUP BY 1,2'):
             journal.setdefault(str(stage), {})[state] = n
+        tiles = [t for (t,) in db.execute("SELECT tile FROM jobs WHERE stage=1 AND state='complete' "
+                                           "AND evidence LIKE 'tiles/v2/%'")]
 except sqlite3.Error as error:
     journal = {'error': str(error)}
+
+
+def bitmap(ids):
+    """Published tiles/v2 tiles as a zlib bitmap over their bounding box (a few KB for the
+    whole plan); the site adds tiles newer than its base map snapshot from this."""
+    xy = [tuple(map(int, t.split('_'))) for t in ids if re.fullmatch(r'-?\d+_-?\d+', t)]
+    if not xy:
+        return None
+    x0, z0 = min(x for x, _ in xy), min(z for _, z in xy)
+    width, height = max(x for x, _ in xy) - x0 + 1, max(z for _, z in xy) - z0 + 1
+    bits = bytearray((width * height + 7) // 8)
+    for x, z in xy:
+        i = (z - z0) * width + (x - x0)
+        bits[i >> 3] |= 1 << (i & 7)
+    return {'x0': x0, 'z0': z0, 'width': width, 'height': height, 'count': len(xy),
+            'encoding': 'base64(zlib(bitmap)); bit i = (z - z0) * width + (x - x0), least significant bit first',
+            'bitmap': base64.b64encode(zlib.compress(bytes(bits), 9)).decode()}
+
+
 usage = shutil.disk_usage(root)
 scratch = sum(f.stat().st_size for f in (root / 'runs/scratch/gen').rglob('*') if f.is_file()) \
     if (root / 'runs/scratch/gen').exists() else 0
@@ -233,10 +275,10 @@ result = {
              'lifecycle': os.environ['LIFECYCLE'], 'spot_interruption': os.environ['ACTION'] or None},
     'service': os.environ['SERVICE'], 'git_sha': sha,
     'shard': os.environ['SHARD'] or None, 'workers': int(os.environ['WORKERS']),
-    'tiles_published_logged': len(published), 'tiles_last_hour': hour, 'tiles_last_24h': day,
+    'tiles_published_journal': len(tiles), 'tiles_last_hour': hour, 'tiles_last_24h': day,
     'tiles_per_hour_24h': round(day / 24, 2), 'tiles_complete_journal': journal.get('2', {}).get('complete'),
     'last_commit': last_commit, 'last_tile': published[-1][1] if published else None,
-    'journal': journal,
+    'journal': journal, 'published_tiles': bitmap(tiles),
     'disk': {'total_bytes': usage.total, 'free_bytes': usage.free, 'gen_scratch_bytes': scratch},
 }
 text = json.dumps(result, indent=1, sort_keys=True)
@@ -248,7 +290,7 @@ else:
     print(f"service {result['service']}  git {sha[:12]}  workers {result['workers']}  shard {result['shard'] or 'all'}  "
           f"{result['host']['instance']} {result['host']['az']} "
           f"({result['host']['lifecycle']}, interruption: {result['host']['spot_interruption'] or 'none'})")
-    print(f"tiles: {hour} last hour, {day} last 24h, {len(published)} logged here; appearance complete in journal: "
+    print(f"tiles: {hour} last hour, {day} last 24h, {len(tiles)} published in the journal; appearance complete: "
           f"{result['tiles_complete_journal']}")
     print(f"last commit: {last_commit['oid'][:12] + ' ' + last_commit['utc'] if last_commit else 'none'}")
     print(f"disk: {usage.free / gib:.1f} GiB free of {usage.total / gib:.1f}; tile scratch {scratch / gib:.2f} GiB")

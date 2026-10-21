@@ -69,7 +69,7 @@ from world_templates import chunk_template, height_template
 ROOT = Path(__file__).resolve().parents[1]
 EX_TEMPFAIL = 75  # the guard refused; the supervisor waits and retries
 STATUS_PATH = 'status/pipeline.json'  # optional host status, committed with a tile batch
-STATUS_INTERVAL = 3600
+STATUS_INTERVAL = 900  # the status file carries the published-tile bitmap the map reads
 CONTROL_ALLOWANCE = 512 * MiB
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
