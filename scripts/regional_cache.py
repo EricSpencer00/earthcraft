@@ -66,14 +66,26 @@ def entry_bytes(path):
         return 0
     if not path.is_dir() or path.is_symlink():
         return max(info.st_size, getattr(info, 'st_blocks', 0) * 512)
-    total = 0
-    for directory, _, files in os.walk(path):
-        for name in files:
-            try:
-                item = (Path(directory) / name).lstat()
-            except FileNotFoundError:
-                continue
-            total += max(item.st_size, getattr(item, 'st_blocks', 0) * 512)
+    # os.scandir, not os.walk + pathlib: the cache holds 20k+ files and the footprint
+    # watch sizes it every few seconds; pathlib's per-file objects made one walk ~1.2 s.
+    # Same rule as os.walk(followlinks=False): directory symlinks are neither counted nor followed.
+    total, stack = 0, [os.fspath(path)]
+    while stack:
+        try:
+            entries = os.scandir(stack.pop())
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        if not entry.is_symlink():
+                            stack.append(entry.path)
+                        continue
+                    item = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                total += max(item.st_size, getattr(item, 'st_blocks', 0) * 512)
     return total
 
 
