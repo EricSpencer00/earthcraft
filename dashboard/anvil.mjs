@@ -29,6 +29,20 @@ export function parseHeader(bytes){
   return {offsets,sectors,timestamps,bitmap,count};
 }
 
+// Packed region (scripts/region_pack.py): 'ECRPACK1', .mca size, residue length, then
+// 1024 x (byte offset, record length, timestamp) and the original location table.
+export const PACKED_HEADER_BYTES=16400;
+export function parsePackedHeader(bytes){
+  if(!(bytes instanceof Uint8Array)||bytes.length<PACKED_HEADER_BYTES||new TextDecoder().decode(bytes.subarray(0,8))!=='ECRPACK1')throw Error('Not a packed Earthcraft region.');
+  const view=new DataView(bytes.buffer,bytes.byteOffset,PACKED_HEADER_BYTES),at=new Uint32Array(1024),lengths=new Uint32Array(1024),timestamps=new Uint32Array(1024),bitmap=new Uint8Array(128);let count=0;
+  for(let i=0;i<1024;i++){
+    const offset=view.getUint32(16+i*12),length=view.getUint32(20+i*12);timestamps[i]=view.getUint32(24+i*12);
+    if(length&&(offset<PACKED_HEADER_BYTES||length<6))throw Error('Packed region index is invalid.');
+    if(length){at[i]=offset;lengths[i]=length;bitmap[i>>3]|=1<<(i&7);count++;}
+  }
+  return {packed:true,at,lengths,timestamps,bitmap,count};
+}
+
 // Coverage index published beside the regions: world/index/regions.json.
 export function parseRegionIndex(value){
   if(value?.schema!=='earthcraft.world-regions.v1'||!Array.isArray(value.regions))throw Error('Unsupported region index.');
@@ -145,7 +159,7 @@ export class RegionClient{
     if(typeof base!=='string'||!base)throw Error('A region base URL is required.');
     const url=new URL(base.endsWith('/')?base:base+'/',globalThis.location?.href);
     if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error('Region base must be an http(s) URL without credentials.');
-    if(!['bucketed','flat'].includes(layout))throw Error('Unknown region layout.');
+    if(!['bucketed','flat','flat-packed'].includes(layout))throw Error('Unknown region layout.');
     this.base=url.href;this.layout=layout;this.fetch=fetcher;this.max=maxConcurrent;this.active=0;this.queue=[];
     this.headers=new LRU(headerCache);this.pending=new Map();this.chunkCache=new LRU(chunkCache);this.gap=gapSectors;this.maxRequestBytes=Math.max(HEADER_BYTES,Math.min(maxRequestBytes,MAX_REQUEST_BYTES));
     this.stats={requests:0,bytes:0,packRequests:0,packBytes:0};
@@ -174,7 +188,7 @@ export class RegionClient{
     for(const p of packs){const e=p.chunks.get(cx+','+cz);if(e&&e[0]+e[1]<=p.bytes.length)return p.bytes.subarray(e[0],e[0]+e[1]);}
     return null;
   }
-  url(rx,rz){return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:regionPath(rx,rz),this.base).href;}
+  url(rx,rz){return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:this.layout==='flat-packed'?`r.${rx}.${rz}.mcp`:regionPath(rx,rz),this.base).href;}
   slot(signal){
     signal?.throwIfAborted();
     if(this.active<this.max){this.active++;return Promise.resolve();}
@@ -213,8 +227,9 @@ export class RegionClient{
   header(rx,rz,signal){
     const key=rx+','+rz,cached=this.headers.get(key);if(cached!==undefined)return Promise.resolve(cached);
     if(this.pending.has(key))return this.pending.get(key);
-    const promise=this.range(this.url(rx,rz),0,HEADER_BYTES,signal).then(bytes=>{
-      const header=!bytes||bytes.length===0?null:bytes.length<HEADER_BYTES?(()=>{throw Error('Region header is shorter than 8 KiB.');})():parseHeader(bytes);
+    const packed=this.layout==='flat-packed';
+    const promise=this.range(this.url(rx,rz),0,packed?PACKED_HEADER_BYTES:HEADER_BYTES,signal).then(bytes=>{
+      const header=!bytes||bytes.length===0?null:packed?parsePackedHeader(bytes):bytes.length<HEADER_BYTES?(()=>{throw Error('Region header is shorter than 8 KiB.');})():parseHeader(bytes);
       this.headers.set(key,header);return header;
     }).finally(()=>this.pending.delete(key));
     this.pending.set(key,promise);return promise;
@@ -235,29 +250,31 @@ export class RegionClient{
       let header;
       try{header=await this.header(rx,rz,signal);}catch(error){if(signal?.aborted)throw error;for(const {cx,cz} of items)report({cx,cz,status:'error',error});return;}
       if(!header){for(const {cx,cz} of items)report({cx,cz,status:'no-region'});return;}
+      // Byte span of each wanted chunk record: whole sectors in .mca, the exact record in a packed region.
       const wanted=[];
       for(const item of items){
-        const i=chunkIndex(item.cx,item.cz),offset=header.offsets[i],n=header.sectors[i];
-        if(!offset){report({...item,status:'absent'});continue;}
+        const i=chunkIndex(item.cx,item.cz),start=header.packed?header.at[i]:header.offsets[i]*SECTOR;
+        const end=header.packed?start+header.lengths[i]:start+header.sectors[i]*SECTOR;
+        if(!start){report({...item,status:'absent'});continue;}
         const cached=this.chunkCache.get(item.cx+','+item.cz);
         if(cached&&cached.timestamp===header.timestamps[i]){report({...item,status:'ok',chunk:cached.chunk,cached:true});continue;}
-        wanted.push({...item,offset,n,timestamp:header.timestamps[i]});
+        wanted.push({...item,start,end,timestamp:header.timestamps[i]});
       }
-      wanted.sort((a,b)=>a.offset-b.offset);
-      const spans=[],limit=Math.floor(this.maxRequestBytes/SECTOR);
+      wanted.sort((a,b)=>a.start-b.start);
+      const spans=[],gap=this.gap*SECTOR;
       for(const item of wanted){
         const last=spans.at(-1);
-        if(last&&item.offset-last.end<=this.gap&&item.offset+item.n-last.start<=limit){last.end=Math.max(last.end,item.offset+item.n);last.items.push(item);}
-        else spans.push({start:item.offset,end:item.offset+item.n,items:[item]});
+        if(last&&item.start-last.end<=gap&&item.end-last.start<=this.maxRequestBytes){last.end=Math.max(last.end,item.end);last.items.push(item);}
+        else spans.push({start:item.start,end:item.end,items:[item]});
       }
       const url=this.url(rx,rz);
       await Promise.all(spans.map(async span=>{
         let bytes;
-        try{bytes=await this.range(url,span.start*SECTOR,(span.end-span.start)*SECTOR,signal);if(!bytes)throw Error('Region file disappeared.');}
+        try{bytes=await this.range(url,span.start,span.end-span.start,signal);if(!bytes)throw Error('Region file disappeared.');}
         catch(error){if(signal?.aborted)throw error;for(const item of span.items)report({cx:item.cx,cz:item.cz,status:'error',error});return;}
         for(const item of span.items){
           try{
-            const at=(item.offset-span.start)*SECTOR,chunk=decodeChunk(readNBT(await readChunkPayload(bytes.subarray(at,at+item.n*SECTOR))).value);
+            const chunk=decodeChunk(readNBT(await readChunkPayload(bytes.subarray(item.start-span.start,item.end-span.start))).value);
             signal?.throwIfAborted();
             this.chunkCache.set(item.cx+','+item.cz,{chunk,timestamp:item.timestamp});report({cx:item.cx,cz:item.cz,status:'ok',chunk});
           }catch(error){if(signal?.aborted)throw error;report({cx:item.cx,cz:item.cz,status:'error',error});}

@@ -96,7 +96,8 @@ def validate(api, reader, repo, pr, head, files, plan, plan_sha, args, gitattrib
     gitattributes: (added, removed) lines of .gitattributes; the Hub itself adds one LFS rule per large
     file, so only added rules for this pull request's own tile files are accepted.
     """
-    from regional_tiles import TILE_SCHEMA, assert_portable, audit_region, tile_coords
+    from region_pack import unpack
+    from regional_tiles import REGION_ENCODING, TILE_SCHEMA, assert_portable, audit_region, tile_coords
     report = Report()
     plan_tiles = {tile['id'] for tile in plan['tiles']}
     tiles, manifests, bad = {}, [], []
@@ -128,7 +129,8 @@ def validate(api, reader, repo, pr, head, files, plan, plan_sha, args, gitattrib
     main_info = reader.info([f'tiles/v2/{t}/tile.json' for t in names])
     report.check('Tiles not already on main', not main_info,
                  ', '.join(p.split('/')[2] for p in main_info) or 'all new')
-    oversize = [p for p, r in info.items() if r.size > (contributions.MAX_REGION_BYTES if p.endswith('.mca')
+    oversize = [p for p, r in info.items() if r.size > (contributions.MAX_REGION_BYTES
+                                                       if p.endswith(contributions.REGION_SUFFIXES)
                                                        else contributions.MAX_JSON_BYTES)]
     total = sum(r.size for r in info.values())
     report.check('Sane sizes', not oversize and total <= contributions.MAX_PR_BYTES,
@@ -157,13 +159,20 @@ def validate(api, reader, repo, pr, head, files, plan, plan_sha, args, gitattrib
                 remote = info.get(path)
                 if remote is None or remote.size != entry['bytes'] or (remote.sha256 and remote.sha256 != entry['sha256']):
                     raise ValueError(f'{path} size or SHA-256 differs from tile.json')
-                limit = contributions.MAX_REGION_BYTES if path.endswith('.mca') else contributions.MAX_JSON_BYTES
+                limit = (contributions.MAX_REGION_BYTES if path.endswith(contributions.REGION_SUFFIXES)
+                         else contributions.MAX_JSON_BYTES)
                 raw = reader.read(path, limit=limit, revision=head, expected=remote)
                 if hashlib.sha256(raw).hexdigest() != entry['sha256']:
                     raise ValueError(f'{path} content differs from tile.json')
                 digests[path] = entry['sha256']
-                if path.endswith('.mca'):
+                if path.endswith(contributions.REGION_SUFFIXES):
                     try:
+                        if path.endswith('.mcp'):
+                            decoded = entry.get('decoded') or {}
+                            raw = unpack(raw)
+                            if (decoded.get('encoding') != REGION_ENCODING or
+                                    hashlib.sha256(raw).hexdigest() != decoded.get('sha256')):
+                                raise ValueError('packed region does not rebuild its decoded .mca')
                         audit_region(raw, *tile_coords(tile))
                         regions[path] = contributions.chunk_digest(raw)
                     except Exception as error:  # noqa: BLE001 - reported under the region check

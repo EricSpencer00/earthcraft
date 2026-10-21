@@ -1,8 +1,12 @@
 // Anvil, NBT, palette and mesher checks against a real 9-chunk Water Tower fixture
 // (tests/fixtures/anvil, byte-identical chunk records from the 1.21.10 save).
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
-import {parseHeader,parseRegionIndex,readNBT,readChunkPayload,decodeChunk,unpackIndices,blockAt,RegionClient,LongArray,hfRegionBase,regionPath,chunkIndex,chunkPresent,SECTOR} from '../dashboard/anvil.mjs';
+import {readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {parseHeader,parsePackedHeader,parseRegionIndex,readNBT,readChunkPayload,decodeChunk,unpackIndices,blockAt,RegionClient,LongArray,hfRegionBase,regionPath,chunkIndex,chunkPresent,SECTOR} from '../dashboard/anvil.mjs';
 import {blockStyle} from '../dashboard/block-colors.mjs';
 import {BlockWorld,prepareChunk,meshChunk,raycast} from '../dashboard/chunk-mesh.mjs';
 
@@ -121,6 +125,29 @@ function host({ignoreRange=false,file=region}={}){
   assert.throws(()=>new RegionClient({base:'ftp://example.test/'}),/http/);
 }
 console.log('Range requests: header-first reads, coalescing, caching, caps, 404s and aborts passed');
+
+// Packed regions (scripts/region_pack.py) decode to the same chunks as the .mca they came from.
+{
+  const dir=await mkdtemp(join(tmpdir(),'earthcraft-pack-'));
+  try{
+    const source=join(dir,'r.0.0.mca'),target=join(dir,'r.0.0.mcp');await writeFile(source,region);
+    execFileSync('python3',['-I',fileURLToPath(new URL('../scripts/region_pack.py',import.meta.url)),'pack',source,target]);
+    const packed=new Uint8Array(await readFile(target));
+    assert.throws(()=>parsePackedHeader(region),/Not a packed/);
+    const header=parsePackedHeader(packed);assert.equal(header.count,parseHeader(region).count);
+    const log=[],fetcher=async(url,{headers})=>{
+      const path=new URL(url).pathname;log.push(path);if(path!=='/tiles/v2/0_0/region/r.0.0.mcp')return new Response('',{status:404});
+      const [,a,b]=/bytes=(\d+)-(\d+)/.exec(headers.Range).map(Number),end=Math.min(b,packed.length-1);
+      return new Response(packed.slice(a,end+1),{status:206,headers:{'content-range':`bytes ${a}-${end}/${packed.length}`}});
+    };
+    const coords=[];for(let z=0;z<32;z++)for(let x=0;x<32;x++)coords.push([x,z]);
+    const fromPack=await new RegionClient({base:'https://example.test/tiles/v2/0_0/region/',layout:'flat-packed',fetch:fetcher}).loadChunks(coords);
+    const fromMca=await new RegionClient({base:'https://example.test/world/region/',fetch:host().fetcher}).loadChunks(coords);
+    const view=list=>Object.fromEntries(list.map(r=>[r.cx+','+r.cz,r.status==='ok'?JSON.stringify(r.chunk.sections.map(s=>[s.y,s.palette,s.indices?[...s.indices]:null])):r.status]));
+    assert.deepEqual(view(fromPack),view(fromMca));assert.ok(fromPack.some(r=>r.status==='ok'));
+  }finally{await rm(dir,{recursive:true,force:true});}
+}
+console.log('Packed regions: Python-packed file decodes to the same chunks over Range passed');
 
 // Coverage index published beside the regions.
 const index=parseRegionIndex({schema:'earthcraft.world-regions.v1',regions:[{x:0,z:0,path:'world/region/0/r.0.0.mca',bytes:region.length,sha256:sources.file.sha256,chunks:9,chunk_bitmap:Buffer.from(header.bitmap).toString('base64')}]});

@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import contributions  # noqa: E402
 from hf_store import DEFAULT_REPO, GiB, MiB, DatasetReader, parse_size  # noqa: E402
+from region_pack import unpack  # noqa: E402
 
 LEGACY_CONTROL = 'archive/mini-worker-20260929/runs/chicagoland-scans-20260929'
 COVERAGE = 'sources/indexes/index-coverage.json'
@@ -183,8 +184,10 @@ class LocalStore:
     def push(self, items, label):
         files = {}
         for item in items:
-            if item['path'].endswith('.mca'):
+            if item['path'].endswith(contributions.REGION_SUFFIXES):
                 raw = Path(item['local']).read_bytes()
+                if item['path'].endswith('.mcp'):
+                    raw = unpack(raw)
                 self.regions[item['path']] = {'sha256': item['sha256'], 'chunks_sha256': contributions.chunk_digest(raw)}
             files[item['path']] = {'sha256': item['sha256'], 'bytes': item['bytes'], 'commit': 'local-check'}
         return {'files': files, 'commits': []}

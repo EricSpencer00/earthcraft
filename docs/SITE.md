@@ -33,6 +33,7 @@ Viewer URL options:
 | `revision` | Dataset commit to read (default: the pinned one; `main` for latest). |
 | `base` | Another region folder URL, for local testing. |
 | `layout=flat` | Raw region files directly in that folder, as in `tiles/v2/<tile>/region/`. Default is the bucketed `world/region/` layout. |
+| `layout=flat-packed` | Packed `.mcp` regions (`scripts/region_pack.py`) in that folder, as new `tiles/v2` tiles publish them. |
 | `qa=1` | Canvas only, for screenshots (used by `scripts/qa_sample.mjs`). |
 
 ## View cache

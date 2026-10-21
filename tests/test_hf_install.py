@@ -16,6 +16,7 @@ from regional_fixtures import (FRAME, FakeHub, REPO, chunk_record, fake_tile_pas
 import hf_install  # noqa: E402
 import hf_store as hs  # noqa: E402
 from region_expansion import encode, records  # noqa: E402
+from region_pack import unpack  # noqa: E402
 import regional_tiles as rt  # noqa: E402
 
 HOLD_LOCK = '''
@@ -83,7 +84,7 @@ class InstallTests(unittest.TestCase):
         package = self.publish('0_0')
         self.assertEqual(self.install('--tiles', '0_0'), 0)
         installed = (self.save / 'region' / 'r.0.0.mca').read_bytes()
-        self.assertEqual(records(installed), records((package.directory / 'region' / 'r.0.0.mca').read_bytes()))
+        self.assertEqual(records(installed), records(unpack((package.directory / 'region' / 'r.0.0.mcp').read_bytes())))
         quality = json.loads((self.save / 'regional-quality.json').read_text())['tiles']['512:0_0']
         self.assertEqual((quality['quality'], quality['added_chunks']), ('scan-roof', 1024))
         self.assertEqual(quality['source_receipt_sha256'], package.receipts['appearance']['sha256'])
@@ -100,13 +101,13 @@ class InstallTests(unittest.TestCase):
 
     def test_scan_upgrade_replaces_only_chunks_that_still_match_the_lq_baseline(self):
         package = self.publish('0_0')
-        lq = records((package.directory / 'lq' / 'region' / 'r.0.0.mca').read_bytes())
+        lq = records(unpack((package.directory / 'lq' / 'region' / 'r.0.0.mcp').read_bytes()))
         current = dict(lq)
         current[5] = chunk_record(5, 0, 'minecraft:gold_block')  # a player edit
         (self.save / 'region' / 'r.0.0.mca').write_bytes(encode(current))
         self.assertEqual(self.install('--tiles', '0_0'), 0)
         merged = records((self.save / 'region' / 'r.0.0.mca').read_bytes())
-        scan = records((package.directory / 'region' / 'r.0.0.mca').read_bytes())
+        scan = records(unpack((package.directory / 'region' / 'r.0.0.mcp').read_bytes()))
         self.assertEqual(merged[5], current[5])
         self.assertEqual(merged[0], scan[0])
         quality = json.loads((self.save / 'regional-quality.json').read_text())['tiles']['512:0_0']

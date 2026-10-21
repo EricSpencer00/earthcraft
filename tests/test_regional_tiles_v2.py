@@ -19,6 +19,7 @@ import regional_generate as rg  # noqa: E402
 import regional_tiles as rt  # noqa: E402
 from chicago_tiles import Journal  # noqa: E402
 from hf_store import DiskGuardError  # noqa: E402
+from region_pack import unpack  # noqa: E402
 
 LOCAL = ('/Users/', '/private/', '/var/', '/tmp/', '/Volumes/')
 
@@ -46,8 +47,8 @@ class PackagingTests(unittest.TestCase):
                                       prefixes={cache: 'cache:'})
             paths = {item['path'] for item in package.items}
             base = 'tiles/v2/3_-4'
-            self.assertEqual(paths, {f'{base}/tile.json', f'{base}/region/r.3.-4.mca', f'{base}/earthcraft.json',
-                                     f'{base}/lq/region/r.3.-4.mca', f'{base}/lq/earthcraft.json',
+            self.assertEqual(paths, {f'{base}/tile.json', f'{base}/region/r.3.-4.mcp', f'{base}/earthcraft.json',
+                                     f'{base}/lq/region/r.3.-4.mcp', f'{base}/lq/earthcraft.json',
                                      f'{base}/receipts/sources.json', f'{base}/receipts/geometry.json',
                                      f'{base}/receipts/appearance.json'})
             appearance = json.loads((package.directory / 'receipts/appearance.json').read_text())
@@ -69,8 +70,16 @@ class PackagingTests(unittest.TestCase):
             for path in package.directory.rglob('*.json'):
                 for text in strings(json.loads(path.read_text())):
                     self.assertFalse(any(marker in text for marker in LOCAL), (path.name, text))
-            region_file = package.directory / 'region/r.3.-4.mca'
-            self.assertEqual(hashlib.sha256(region_file.read_bytes()).hexdigest(), appearance['regions']['r.3.-4.mca'])
+            # Published packed; unpacking rebuilds the exact .mca the receipt hashes.
+            region_file = package.directory / 'region/r.3.-4.mcp'
+            rebuilt = unpack(region_file.read_bytes())
+            self.assertEqual(hashlib.sha256(rebuilt).hexdigest(), appearance['regions']['r.3.-4.mca'])
+            self.assertEqual(rebuilt, (delivered / 'region/r.3.-4.mca').read_bytes())
+            entry = next(f for f in manifest['files'] if f['role'] == 'region')
+            self.assertEqual(entry['decoded'], {'file': 'r.3.-4.mca', 'sha256': appearance['regions']['r.3.-4.mca'],
+                                                'bytes': len(rebuilt), 'encoding': rt.REGION_ENCODING})
+            self.assertLess(entry['bytes'], len(rebuilt))
+            self.assertEqual(manifest['baselines'][-1]['region'], f'{base}/lq/region/r.3.-4.mcp')
 
     def test_gate_refuses_unmapped_local_paths_and_foreign_regions(self):
         with self.assertRaisesRegex(ValueError, 'Local path left'):
@@ -132,8 +141,8 @@ class LifecycleTests(unittest.TestCase):
         files = self.hub.repos[REPO]['files']
         for tile in ('0_0', '1_0'):
             rx = tile.split('_')[0]
-            self.assertIn(f'tiles/v2/{tile}/region/r.{rx}.0.mca', files)
-            self.assertIn(f'tiles/v2/{tile}/lq/region/r.{rx}.0.mca', files)
+            self.assertIn(f'tiles/v2/{tile}/region/r.{rx}.0.mcp', files)
+            self.assertIn(f'tiles/v2/{tile}/lq/region/r.{rx}.0.mcp', files)
             self.assertIn(f'tiles/v2/{tile}/tile.json', files)
         self.assertEqual(len(self.hub.commits), 1, 'two tiles share one commit')
         with sqlite3.connect(self.control / 'jobs.sqlite') as db:
