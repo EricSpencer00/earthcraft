@@ -18,7 +18,7 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
   const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
   const layout=q.get('layout')||'bucketed';
-  if(!['bucketed','flat'].includes(layout))throw Error('Unknown region layout.');
+  if(!['bucketed','flat','flat-packed'].includes(layout))throw Error('Unknown region layout.');
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
   if(chunk){

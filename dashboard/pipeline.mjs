@@ -33,9 +33,11 @@ export function tileSource(manifest,batch,tile=batch.tiles[0]){
   const [x,z]=tile.split('_').map(Number);
   if(manifest?.schema!=='earthcraft.generated-tile.v2'||manifest.tile!==tile||manifest.region?.x!==x||manifest.region?.z!==z)throw Error('The tile manifest does not match this publication.');
   const region=manifest.files?.find(f=>f.role==='region');
-  if(region?.path!==`tiles/v2/${tile}/region/r.${x}.${z}.mca`||!Number.isFinite(region.bytes)||region.bytes<=0||!/^[a-f0-9]{64}$/.test(region.sha256||''))throw Error('The published region is unavailable.');
+  // Tiles are published packed (.mcp); ones from before packing carry a raw .mca.
+  const packed=region?.path===`tiles/v2/${tile}/region/r.${x}.${z}.mcp`;
+  if(!packed&&region?.path!==`tiles/v2/${tile}/region/r.${x}.${z}.mca`||!Number.isFinite(region.bytes)||region.bytes<=0||!/^[a-f0-9]{64}$/.test(region.sha256||''))throw Error('The published region is unavailable.');
   const base=`${ROOT}/resolve/${batch.revision}/tiles/v2/${tile}/region/`;
-  const query=new URLSearchParams({base,layout:'flat',region:`${x},${z}`,radius:'3',view:'iso'});
+  const query=new URLSearchParams({base,layout:packed?'flat-packed':'flat',region:`${x},${z}`,radius:'3',view:'iso'});
   return {base,href:`./blocks.html?${query}`,x:x*512+256,z:z*512+256,tile};
 }
 

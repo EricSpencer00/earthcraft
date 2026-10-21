@@ -3,11 +3,17 @@
 Layout, relative to the dataset root:
 
   tiles/v2/<rx>_<rz>/tile.json                  entry point (schema earthcraft.generated-tile.v2)
-  tiles/v2/<rx>_<rz>/region/r.<rx>.<rz>.mca      delivered region, raw Anvil (Range-readable)
+  tiles/v2/<rx>_<rz>/region/r.<rx>.<rz>.mcp      delivered region, packed Anvil (Range-readable)
   tiles/v2/<rx>_<rz>/earthcraft.json            delivered world manifest
-  tiles/v2/<rx>_<rz>/lq/region/r.<rx>.<rz>.mca   LQ geometry from the same pass (scan tiles only):
+  tiles/v2/<rx>_<rz>/lq/region/r.<rx>.<rz>.mcp   LQ geometry from the same pass (scan tiles only):
   tiles/v2/<rx>_<rz>/lq/earthcraft.json         the immutable baseline a later install upgrades
   tiles/v2/<rx>_<rz>/receipts/<stage>.json      sources, geometry and appearance receipts
+
+Regions are published packed (scripts/region_pack.py): the same chunk records
+without Anvil's 4 KiB sector padding, about 8x smaller. Each files[] entry for a
+region names the `decoded` .mca with its sha256; unpacking rebuilds that file
+byte for byte, so receipts keep hashing the .mca. Tiles published before this
+carry a raw .mca and no `decoded` entry.
 
 Why not the v1 tar shards: a raw .mca at a stable path can be read one chunk
 at a time with HTTP Range (8 KiB header, then one sector run), by the browser
@@ -28,15 +34,17 @@ import copy
 import hashlib
 import io
 import json
-import os
 from pathlib import Path
 import re
 import shutil
+
+from region_pack import pack
 
 PREFIX = 'tiles/v2'
 TILE_SCHEMA = 'earthcraft.generated-tile.v2'
 TILE_ID = re.compile(r'(-?\d+)_(-?\d+)')
 STAGES = ('sources', 'geometry', 'appearance')
+REGION_ENCODING = 'earthcraft-region-pack-v1'
 QUALITIES = ('LQ', 'scan-roof', 'scan-points-and-roof', 'classified-scan-points')
 CHUNK_KEYS = {'Status', 'InhabitedTime', 'DataVersion', 'zPos', 'isLightOn', 'Heightmaps', 'structures', 'yPos',
               'xPos', 'entities', 'block_entities', 'PostProcessing', 'LastUpdate', 'sections', 'block_ticks',
@@ -78,6 +86,10 @@ def tile_prefix(tile):
 def region_name(tile):
     rx, rz = tile_coords(tile)
     return f'r.{rx}.{rz}.mca'
+
+
+def packed_name(tile):
+    return region_name(tile)[:-len('.mca')] + '.mcp'
 
 
 def sha_bytes(raw):
@@ -226,15 +238,6 @@ class Package:
         return sum(item['bytes'] for item in self.items)
 
 
-def _place(source, target):
-    """Hard-link (same volume, no second copy) or copy one generated file into the package."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(source, target)
-    except OSError:
-        shutil.copyfile(source, target)
-
-
 def package_tile(tile, root, *, receipts, delivered=None, lq=None, plan_sha256, frame_sha256, generator,
                  prefixes=None, baselines=(), notes=None):
     """Write tiles/v2/<tile>/ under root/package and return the Package (nothing uploaded yet).
@@ -264,17 +267,18 @@ def package_tile(tile, root, *, receipts, delivered=None, lq=None, plan_sha256, 
     exact = {}
     for sub, world in worlds:
         exact[world] = base + ('/' + sub.rstrip('/') if sub else '')
-        exact[world / 'region' / name] = f'{base}/{sub}region/{name}'
+        exact[world / 'region' / name] = f'{base}/{sub}region/{packed_name(tile_id)}'
         exact[world / 'earthcraft.json'] = f'{base}/{sub}earthcraft.json'
     mapping = PathMap(exact, {Path(root): f'gen:{tile_id}', **(prefixes or {})})
     items, manifests, files = [], {}, []
 
-    def add(relative, local, role):
+    def add(relative, local, role, decoded=None):
         digest = sha_file(local)
         size = Path(local).stat().st_size
         path = f'{base}/{relative}'
-        items.append({'path': path, 'local': str(local), 'sha256': digest, 'bytes': size, 'role': role})
-        files.append({'path': path, 'bytes': size, 'sha256': digest, 'role': role})
+        extra = {'decoded': decoded} if decoded else {}
+        items.append({'path': path, 'local': str(local), 'sha256': digest, 'bytes': size, 'role': role, **extra})
+        files.append({'path': path, 'bytes': size, 'sha256': digest, 'role': role, **extra})
         return digest
 
     for sub, world in worlds:
@@ -284,11 +288,13 @@ def package_tile(tile, root, *, receipts, delivered=None, lq=None, plan_sha256, 
             raise ValueError(f'{world.name}: exactly one region {name} is required')
         raw = source.read_bytes()
         audit_region(raw, rx, rz)
-        target = package / sub / 'region' / name
-        _place(source, target)
-        if sha_file(target) != sha_bytes(raw):
-            raise ValueError('Packaged region differs from the verified generated region')
-        add(f'{sub}region/{name}', target, 'lq-region' if sub else 'region')
+        target = package / sub / 'region' / packed_name(tile_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(pack(raw))  # pack() refuses unless it rebuilds raw exactly
+        if sha_bytes(source.read_bytes()) != sha_bytes(raw):
+            raise ValueError('Generated region changed while it was packaged')
+        add(f'{sub}region/{packed_name(tile_id)}', target, 'lq-region' if sub else 'region',
+            decoded={'file': name, 'sha256': sha_bytes(raw), 'bytes': len(raw), 'encoding': REGION_ENCODING})
         generated = (world / 'earthcraft.json').read_bytes()
         published = canonical(assert_portable(mapping.rewrite(json.loads(generated)), f'{sub}earthcraft.json'))
         manifest_path = package / sub / 'earthcraft.json'
@@ -321,7 +327,7 @@ def package_tile(tile, root, *, receipts, delivered=None, lq=None, plan_sha256, 
         'world_offset_xz': [rx * 512, rz * 512], 'size_m': tile.get('size', 512), 'metres_per_block': 1,
         'quality': quality if delivered else None, 'installable': bool(delivered),
         'delivered_receipt': delivered_receipt, 'stages': stage_records, 'files': files,
-        'baselines': list(baselines) + ([{'kind': 'tiles/v2-lq', 'region': f'{base}/lq/region/{name}',
+        'baselines': list(baselines) + ([{'kind': 'tiles/v2-lq', 'region': f'{base}/lq/region/{packed_name(tile_id)}',
                                            'manifest': f'{base}/lq/earthcraft.json'}]
                                          if any(sub for sub, _ in worlds) else []),
         'plan_sha256': plan_sha256, 'frame_sha256': frame_sha256, 'generator': generator,

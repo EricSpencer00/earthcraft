@@ -20,11 +20,13 @@ CLIENT_SHA1 = 'd3bdf582a7fa723ce199f3665588dcfe6bf9aca8'
 VALIDATOR_MARKER = 'earthcraft-validator'
 
 TILE = r'(-?\d+)_(-?\d+)'
-TILE_FILE = re.compile(r'tiles/v2/' + TILE + r'/(tile\.json|earthcraft\.json|region/r\.(-?\d+)\.(-?\d+)\.mca|'
-                       r'lq/earthcraft\.json|lq/region/r\.(-?\d+)\.(-?\d+)\.mca|'
+# Regions are packed .mcp (scripts/region_pack.py); tiles from before packing carry raw .mca.
+TILE_FILE = re.compile(r'tiles/v2/' + TILE + r'/(tile\.json|earthcraft\.json|region/r\.(-?\d+)\.(-?\d+)\.mc[ap]|'
+                       r'lq/earthcraft\.json|lq/region/r\.(-?\d+)\.(-?\d+)\.mc[ap]|'
                        r'receipts/(?:sources|geometry|appearance)\.json)')
 MANIFEST_FILE = re.compile(MANIFEST_DIR + r'/[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.json')
 MAX_REGION_BYTES = 64 * 2**20
+REGION_SUFFIXES = ('.mca', '.mcp')
 MAX_JSON_BYTES = 4 * 2**20
 MAX_TILES = 200
 MAX_PR_BYTES = 4 * 2**30

@@ -44,7 +44,9 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hf_store  # noqa: E402
 from hf_store import DatasetReader, DiskGuard, DiskGuardError, GiB, MiB, StoreClient, parse_size  # noqa: E402
-from regional_tiles import TILE_SCHEMA, region_name, sha_bytes, tile_coords, tile_prefix  # noqa: E402
+from region_pack import unpack  # noqa: E402
+from regional_tiles import (REGION_ENCODING, TILE_SCHEMA, region_name, sha_bytes, tile_coords,  # noqa: E402
+                            tile_prefix)
 from world_snapshot import save_lock  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,6 +187,17 @@ class Installer:
             digest = self.fetch(path, target, expected=info[path])
             if digest.sha256 != item['sha256']:
                 raise ValueError(f'{tile}: {path} differs from tile.json')
+            if 'decoded' in item:  # packed region: rebuild the exact .mca the receipts hash
+                decoded = item['decoded']
+                if decoded.get('encoding') != REGION_ENCODING or decoded.get('file') != name:
+                    raise ValueError(f'{tile}: {path} has an unknown encoding')
+                raw = unpack(target.read_bytes())
+                if sha_bytes(raw) != decoded['sha256'] or len(raw) != decoded['bytes']:
+                    raise ValueError(f'{tile}: {path} does not rebuild its region')
+                self.guard.remove(target)
+                self.admit(len(raw))
+                target = target.with_name(name)
+                target.write_bytes(raw)
             local[item['role'], path] = target
         stage = manifest['delivered_receipt']
         receipt_path = directory / 'receipts' / f'{stage}.json'
