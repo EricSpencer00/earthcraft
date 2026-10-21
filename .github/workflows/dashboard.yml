@@ -57,6 +57,7 @@ jobs:
         run: |
           node tests/anvil.mjs
           node tests/frame.mjs
+          node tests/lake.mjs
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs
           node tests/blocks_browser.mjs

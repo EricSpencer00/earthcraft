@@ -34,13 +34,18 @@ function detailLevel(index){
 // dataset commit; others read the world/region capture the viewer pins.
 const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
 let publishedTiles=null;
+function tileSet(cache,list){return cache?.list===list?cache:{list,set:new Set(list||[])};}
+// Lake Michigan cells (marked in publishedAtlas) are built in the browser from the lake/v1
+// bathymetry by dashboard/lake.mjs.
+function isLake(index){return atlas?.records?.[index]?.lake===true;}
 function blockSource(index){
   const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
-  if(!tile||!world?.dataset_revision||!Array.isArray(world.v2_tiles))return null;
-  if(publishedTiles?.list!==world.v2_tiles)publishedTiles={list:world.v2_tiles,set:new Set(world.v2_tiles)};
-  const id=tile[0]+'_'+tile[1];
-  if(!publishedTiles.set.has(id)||!/^[0-9a-f]{40}$/.test(world.dataset_revision))return null;
-  return {base:`${HF_DATASET}/resolve/${world.dataset_revision}/tiles/v2/${id}/region/`,layout:'flat-auto'};
+  if(!tile||!/^[0-9a-f]{40}$/.test(world?.dataset_revision||''))return null;
+  const id=tile[0]+'_'+tile[1],root=`${HF_DATASET}/resolve/${world.dataset_revision}`;
+  if(isLake(index))return {base:`${root}/lake/v1/`,layout:'lake'};
+  if(!Array.isArray(world.v2_tiles))return null;
+  publishedTiles=tileSet(publishedTiles,world.v2_tiles);
+  return publishedTiles.set.has(id)?{base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
 }
 function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 function renderDetailCount(){
@@ -71,6 +76,10 @@ async function loadDetail(){
 }
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
 let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
+// Cells by 0.01-degree bucket (a 256 m cell touches 1-4), so hover and click test a handful
+// of cells instead of all of them.
+let geoBuckets=new Map(),geoCellIndex=new Map();
+const BUCKET_DEG=0.01,bucketKey=(lng,lat)=>Math.floor(lng/BUCKET_DEG)+','+Math.floor(lat/BUCKET_DEG);
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
 const places={chicago:{name:'Chicago',coordinates:[-87.62443,41.8972]},elmhurst:{name:'Elmhurst',coordinates:[-87.9403418,41.8994745]}};
 
@@ -91,13 +100,12 @@ function scheduleDraw(){
   requestAnimationFrame(()=>{drawPending=false;if(atlas)drawAtlas();});
 }
 function geographic(){return document.body.dataset.map==='geographic'&&geoMap&&geoCells.length>0;}
-function mercator(lon,lat){return maplibre.MercatorCoordinate.fromLngLat([lon,lat]);}
 
 function prepareGeography(){
   const signature=atlasSignature();
   const changed=signature!==geoSignature;
   geoSignature=signature;
-  geoCells=[];geoBounds=null;
+  geoCells=[];geoBounds=null;geoBuckets=new Map();geoCellIndex=new Map();
   if(atlas?.source!=='published'){
     document.body.dataset.map='grid';$('map-attribution').hidden=true;return;
   }
@@ -110,7 +118,12 @@ function prepareGeography(){
     const bounds=[lon-width/2,lat-height/2,lon+width/2,lat+height/2];
     const corners=record.corners_lonlat||[[bounds[0],bounds[3]],[bounds[2],bounds[3]],[bounds[2],bounds[1]],[bounds[0],bounds[1]]];
     const exactBounds=[Math.min(...corners.map(p=>p[0])),Math.min(...corners.map(p=>p[1])),Math.max(...corners.map(p=>p[0])),Math.max(...corners.map(p=>p[1]))];
-    geoCells.push({index,bounds:exactBounds,corners,points:corners.map(p=>mercator(...p)),nw:mercator(exactBounds[0],exactBounds[3]),se:mercator(exactBounds[2],exactBounds[1])});
+    const geoCell={index,bounds:exactBounds,corners};
+    geoCells.push(geoCell);geoCellIndex.set(index,geoCell);
+    for(let bx=Math.floor(exactBounds[0]/BUCKET_DEG);bx<=Math.floor(exactBounds[2]/BUCKET_DEG);bx++)
+      for(let by=Math.floor(exactBounds[1]/BUCKET_DEG);by<=Math.floor(exactBounds[3]/BUCKET_DEG);by++){
+        const key=bx+','+by;if(!geoBuckets.has(key))geoBuckets.set(key,[]);geoBuckets.get(key).push(geoCell);
+      }
     bounds.splice(0,4,...exactBounds);
     if(!geoBounds)geoBounds=[...bounds];
     else geoBounds=[Math.min(geoBounds[0],bounds[0]),Math.min(geoBounds[1],bounds[1]),Math.max(geoBounds[2],bounds[2]),Math.max(geoBounds[3],bounds[3])];
@@ -140,6 +153,7 @@ async function initializeBasemap(){
     geoMap.keyboard.disable();geoMap.touchZoomRotate.disableRotation();
     geoMap.getCanvas().tabIndex=-1;geoMap.getCanvas().setAttribute('aria-hidden','true');
     geoMap.on('move',()=>{scheduleDraw();updateZoomButtons();});
+    geoMap.on('style.load',()=>{cellLayerKey='';scheduleDraw();});
     geoMap.on('movestart',()=>{document.body.dataset.camera='moving';});
     geoMap.on('idle',()=>{document.body.dataset.camera='idle';});
     geoMap.on('click',event=>{
@@ -184,7 +198,7 @@ async function initializeBasemap(){
 }
 
 function cellAtLocation({lng,lat}){
-  return geoCells.find(({bounds:[west,south,east,north],corners})=>{
+  return (geoBuckets.get(bucketKey(lng,lat))||[]).find(({bounds:[west,south,east,north],corners})=>{
     if(lng<west||lng>east||lat<south||lat>north)return false;
     let inside=false;
     for(let i=0,j=3;i<4;j=i++){
@@ -195,64 +209,46 @@ function cellAtLocation({lng,lat}){
   });
 }
 
-let cellCanvas=null;
-function cellLayer(target){
-  cellCanvas??={canvas:document.createElement('canvas')};
-  if(cellCanvas.canvas.width!==target.width||cellCanvas.canvas.height!==target.height){
-    cellCanvas.canvas.width=target.width;cellCanvas.canvas.height=target.height;cellCanvas.ctx=null;
+// Cells are a GPU fill layer under the map labels: MapLibre tiles and pans 100k+ polygons
+// smoothly, where redrawing them on a canvas every frame took ~200 ms. Neighbouring cells
+// share exact corners, so translucent fills meet without seams. The canvas above the map
+// only outlines the hovered and selected cells.
+let cellLayerKey='';
+function cellStyle(cell,colors,water){
+  const record=atlas.records[cell.index];
+  const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
+  const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
+  const level=mapLayer==='detail'?detailLevel(cell.index):null;
+  const fill=mapLayer==='detail'?detailColor(level):mapLayer==='build'&&code===2&&isLake(cell.index)?water:colors[code]||colors[0];
+  const alpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
+  return {f:fill,a:alpha,s:mapLayer==='detail'?fill:colors[code]||colors[0]};
+}
+function syncCellLayer(){
+  if(!geoMap?.isStyleLoaded())return;
+  const colors=palette(),water=color('water');
+  const key=[geoSignature,geoCells.length,mapLayer,detail?detail.computed_utc||1:0,colors.join(),water].join('|');
+  const source=geoMap.getSource('cells');
+  if(key===cellLayerKey&&source)return;
+  const data={type:'FeatureCollection',features:geoCells.map(cell=>({type:'Feature',id:cell.index,
+    properties:cellStyle(cell,colors,water),geometry:{type:'Polygon',coordinates:[[...cell.corners,cell.corners[0]]]}}))};
+  if(source)source.setData(data);
+  else{
+    geoMap.addSource('cells',{type:'geojson',data,tolerance:0,buffer:0});
+    const labels=geoMap.getStyle().layers.find(layer=>layer.type==='symbol')?.id;
+    geoMap.addLayer({id:'cells-fill',type:'fill',source:'cells',paint:{'fill-color':['get','f'],'fill-opacity':['get','a'],'fill-antialias':false}},labels);
+    // Outlines once a 256 m cell is wider than ~5 px.
+    geoMap.addLayer({id:'cells-line',type:'line',source:'cells',minzoom:11.2,paint:{'line-color':['get','s'],'line-width':.6}},labels);
   }
-  cellCanvas.ctx??=cellCanvas.canvas.getContext('2d');
-  return cellCanvas;
+  geoMap.setPaintProperty('cells-line','line-opacity',mapLayer==='appearance'?.25:.42);
+  cellLayerKey=key;
 }
 
 function drawGeography(ctx,cssWidth,cssHeight){
-  // A flat Mercator camera makes every cell share one transform per frame.
-  // Cache geographic corners; avoid projecting thousands of points while dragging.
-  const first=geoCells[0],anchor=geoMap.project([first.bounds[0],first.bounds[3]]);
-  const reference=geoMap.project([first.bounds[0]+1,first.bounds[3]]);
-  const scale=(reference.x-anchor.x)*360,colors=palette();
-  let selected=null,hover=null;
-  // Translucent cells filled one by one double their alpha along shared antialiased
-  // edges and read as a dotted grid. Fill each colour opaque on a layer, then blend
-  // the layer once. One huge Path2D does the same but rasterizes ~200x slower.
-  const groups=new Map(),outlines=[];
-  for(const cell of geoCells){
-    const x=anchor.x+(cell.nw.x-first.nw.x)*scale,y=anchor.y+(cell.nw.y-first.nw.y)*scale;
-    const w=(cell.se.x-cell.nw.x)*scale,h=(cell.se.y-cell.nw.y)*scale;
-    if(x+w<0||y+h<0||x>cssWidth||y>cssHeight)continue;
-    const record=atlas.records[cell.index];
-    const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
-    const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
-    const level=mapLayer==='detail'?detailLevel(cell.index):null;
-    const fill=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
-    const alpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
-    const points=cell.points.map(p=>({x:anchor.x+(p.x-first.nw.x)*scale,y:anchor.y+(p.y-first.nw.y)*scale}));
-    const key=fill+'|'+alpha;
-    if(!groups.has(key))groups.set(key,{fill,alpha,cells:[]});
-    groups.get(key).cells.push(points);
-    if(w>5)outlines.push({points,stroke:mapLayer==='detail'?fill:colors[code]});
-    if(cell.index===selectedIndex)selected=points;
-    if(cell.index===hoverIndex)hover=points;
-  }
-  const layer=cellLayer(ctx.canvas);
-  for(const {fill,alpha,cells} of groups.values()){
-    layer.ctx.setTransform(1,0,0,1,0,0);layer.ctx.clearRect(0,0,layer.canvas.width,layer.canvas.height);
-    layer.ctx.setTransform(ctx.getTransform());layer.ctx.fillStyle=fill;
-    for(const points of cells){
-      // Grow each cell by a fraction of a pixel so neighbours meet without hairline gaps.
-      const cx=(points[0].x+points[2].x)/2,cy=(points[0].y+points[2].y)/2;
-      layer.ctx.beginPath();
-      points.forEach((p,i)=>{const dx=p.x-cx,dy=p.y-cy,d=Math.hypot(dx,dy)||1,qx=p.x+dx/d*.35,qy=p.y+dy/d*.35;i?layer.ctx.lineTo(qx,qy):layer.ctx.moveTo(qx,qy);});
-      layer.ctx.fill();
-    }
-    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=alpha;ctx.drawImage(layer.canvas,0,0);ctx.restore();
-  }
-  ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.lineWidth=.6;
-  for(const {points,stroke} of outlines){
-    ctx.strokeStyle=stroke;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
-  }
-  ctx.globalAlpha=1;
-  for(const [points,strong] of [[hover,false],[selected,true]])if(points){
+  syncCellLayer();
+  for(const [index,strong] of [[hoverIndex,false],[selectedIndex,true]]){
+    const cell=index===null?null:geoCellIndex.get(index);
+    if(!cell)continue;
+    const points=cell.corners.map(p=>geoMap.project(p));
     ctx.strokeStyle=color(strong?'ink':'green');ctx.lineWidth=strong?2.5:1.5;
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
@@ -313,11 +309,13 @@ function publishedAtlas(data){
   const size=Number(world?.cell_size_m)||256;
   // Dataset cells carry only their id; place them exactly from the frame's projection.
   const place=world?.projection?.method==='transverse_mercator_wgs84'?frameInverse(world.projection):null;
+  const lake=new Set(world?.lake_tiles||[]);
   const rows=(world?.cells||data.cells||[]).map(cell=>{
     const id=String(cell.tile_id||String(cell.id||'').split('/').pop()||'');
     const match=id.match(/^(-?\d+)_(-?\d+)$/);
     if(!match)return null;
     const row={...defaults,...cell,id,x:Number(match[1]),z:Number(match[2])};
+    if(lake.has(`${row.x>>1}_${row.z>>1}`))row.lake=true;
     if(place&&!Number.isFinite(row.latitude)){
       const x0=row.x*size,z0=row.z*size;
       [row.longitude,row.latitude]=place(x0+size/2,z0+size/2).map(v=>Math.round(v*1e6)/1e6);
@@ -513,7 +511,7 @@ function renderLegend(isPublished,counts,live){
     $('legend-outside-label').textContent='Not built yet';
     $('legend-source-label').textContent='Awaiting detail';
     $('legend-finished-label').textContent='Surface detail added';
-    for(const id of ['queued','installed','running','failed'])$('legend-'+id).hidden=true;
+    for(const id of ['queued','installed','running','failed','water'])$('legend-'+id).hidden=true;
     $('legend-source').hidden=false;$('legend-finished').hidden=false;
     return;
   }
@@ -527,6 +525,7 @@ function renderLegend(isPublished,counts,live){
   $('legend-installed').hidden=live||isPublished;
   $('legend-running').hidden=live||!counts.active;
   $('legend-failed').hidden=live||!counts.failed;
+  $('legend-water').hidden=live||!isPublished||!snapshot?.generated_world?.lake_tiles?.length;
 }
 
 function renderAtlas(){
@@ -552,7 +551,7 @@ function renderAtlas(){
     $('map-scale').textContent='';
     mapMetrics=null;
     $('map').setAttribute('aria-label','No generation cells recorded.');
-    for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed'])$(id).hidden=true;
+    for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed','legend-water'])$(id).hidden=true;
     updateZoomButtons();
     clearSelection();
     return;
@@ -680,7 +679,7 @@ async function refresh(){
       $('map-summary').textContent='Map unavailable. Use Refresh to try again.';
       $('map').setAttribute('aria-label','Map unavailable. Use Refresh to try again.');
       for(const id of ['geometry','sources','appearance','chunk-count','border','leases','rollup'])$(id).textContent='Not recorded';
-      for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed'])$(id).hidden=true;
+      for(const id of ['legend-queued','legend-source','legend-finished','legend-installed','legend-running','legend-failed','legend-water'])$(id).hidden=true;
       $('selection-title').textContent='No cell selected';
       $('cell').textContent='Load the map to look at cells.';
       $('log').textContent='No build details loaded';
@@ -730,6 +729,7 @@ function renderSelection(){
   const rows=[['Size',number(size)+' × '+number(size)+' m']];
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
+  if(isLake(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
   if(detail&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
@@ -743,7 +743,7 @@ function renderSelection(){
   const tile=source?`&base=${encodeURIComponent(source.base)}&layout=${source.layout}`:'';
   $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}${tile}`;$('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
-  cellPreview??=import('./cell-preview.mjs?v=tiles-1');
+  cellPreview??=import('./cell-preview.mjs?v=lake-1');
   cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,...(source||{})})).then(result=>{
     if(token!==cellToken||result.status==='aborted')return;
     $('cell-view').dataset.state=result.status;

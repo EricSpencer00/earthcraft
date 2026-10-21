@@ -5,6 +5,7 @@
 import * as THREE from './assets/vendor/three/three.module.min.js';
 import {RegionClient,HF_REPO,hfRegionBase,chunkRegion,PINNED_REVISION,VIEW_CACHES} from './anvil.mjs?v=tiles-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk,raycast} from './chunk-mesh.mjs?v=blocks-2';
+import {LakeClient} from './lake.mjs?v=lake-1';
 
 export const WATER_TOWER_BLOCK=[32,33];// Inherited frame: easting 0, northing 0 → X 32, Z 33.
 export const MAX_RADIUS=8,VIEWS=['orbit','iso','top','street'];
@@ -18,7 +19,7 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
   const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
   const layout=q.get('layout')||'bucketed';
-  if(!['bucketed','flat','flat-packed','flat-auto'].includes(layout))throw Error('Unknown region layout.');
+  if(!['bucketed','flat','flat-packed','flat-auto','lake'].includes(layout))throw Error('Unknown region layout.');
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
   if(chunk){
@@ -215,7 +216,7 @@ export function installBlocksPage(doc=document){
     new ResizeObserver(entries=>doc.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px')).observe(doc.querySelector('.viewer-tools'));
   }
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();$('viewer-status').textContent='The graphics context was lost. Reload the page to draw the blocks again.';});
-  const client=new RegionClient({base:params.base,layout:params.layout,packs:params.custom?[]:VIEW_CACHES}),registry=new BlockRegistry();
+  const client=params.layout==='lake'?new LakeClient({base:params.base}):new RegionClient({base:params.base,layout:params.layout,packs:params.custom?[]:VIEW_CACHES}),registry=new BlockRegistry();
   let world=new BlockWorld(registry),state={center:params.center,radius:params.radius,floor:params.floor,floorY:-64,originX:0,originZ:0,statuses:new Map(),errors:[]},session=null,hover=null,pinned=null;
   viewer.setView(params.view,{yaw:params.yaw,pitch:params.pitch??DEFAULT_PITCH[params.view]});
   const setStatus=text=>{$('viewer-status').textContent=text;};
