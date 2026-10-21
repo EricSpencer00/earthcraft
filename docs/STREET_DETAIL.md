@@ -22,6 +22,12 @@ Apply them in this order:
 `detail_build.py` runs passes 1–4, `detail_apply.py` writes layers into region
 copies, and `detail_render.py` renders before/after images.
 
+Mapped heritage buildings (OSM `historic`, `heritage`, `ref:nrhp`, or churches and
+similar) are protected like `--protect-osm`: no layer touches them, so their
+scanned windows, battlements and ornament survive. Grass, sand or
+orthophoto-green blocks inside the carriageway are resurfaced with the nearby
+road block.
+
 ## Sources
 
 USGS 3DEP LiDAR (public domain), OpenStreetMap (ODbL), City of Chicago open
@@ -63,6 +69,8 @@ within 2.5 m. Keep Mapillary-derived data in its own layer.
 
 ```sh
 # 0. copies only (APFS clones on the save's host), then on a worker:
+PYTHONPATH=scripts python scripts/detail_sources.py --frame configs/world-frame.json \
+  --tile -256 -256 512 --halo 24 --out work/sources
 PYTHONPATH=scripts python scripts/detail_points.py --project USGS_LPC_IL_4County_Cook_2017_LAS_2019 \
   --frame frame.json --west -288 --north 289 --size 512 --halo 24 --out work/ept/cook2017
 PYTHONPATH=scripts python scripts/detail_build.py --regions copy/region --frame frame.json \
@@ -81,5 +89,6 @@ PYTHONPATH=scripts python scripts/detail_render.py --region-dir work/after --jar
 ```
 
 `sources/` holds the OSM halo extract (`osm_halo.json`) and the City GeoJSON
-extracts named by dataset ID. Renders use the owned client jar's textures
+extracts named by dataset ID; `detail_sources.py` fetches them and records URL,
+licence and SHA-256 in `sources/sources.json`. Renders use the owned client jar's textures
 only on the local machine; no textures are committed.

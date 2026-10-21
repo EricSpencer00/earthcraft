@@ -39,14 +39,17 @@ def canopy(lr, exclude, min_height=2.0):
 
 
 def detect_tops(smooth, min_height=4.0):
-    """Local maxima with a height-dependent suppression radius (1.5 m + 10% of height)."""
+    """Local maxima with a height-dependent suppression radius (3 m, or 30% of height if larger).
+
+    Urban street-tree crowns are 3-5 m in radius; two tops closer than that are one crown.
+    """
     peaks = (smooth == ndimage.maximum_filter(smooth, size=5)) & (smooth >= min_height)
     rows, cols = np.nonzero(peaks)
     order = np.argsort(-smooth[rows, cols], kind='stable')
     kept = []
     for i in order:
         r, c, h = rows[i], cols[i], smooth[rows[i], cols[i]]
-        radius = 1.5 + 0.1 * h
+        radius = max(3.0, 0.3 * h)
         if all((r - kr) ** 2 + (c - kc) ** 2 > radius ** 2 for kr, kc, _ in kept):
             kept.append((r, c, h))
     return kept
@@ -109,14 +112,16 @@ def classify(m):
     return 'oak'
 
 
-def admit(m, top_cell, near_building, min_area=5.0):
+def admit(m, top_cell, near_building, min_area=16.0, min_height=5.0):
     """Reasons a crown is rejected (empty list = admitted)."""
     reasons = []
     if m is None:
         return ['too_few_returns']
     if m['area'] < min_area:
         reasons.append('crown_too_small')
-    if m['height'] < 4.0:
+    # Small, low 'crowns' downtown are mostly poles, signs and vehicles in the
+    # unclassified returns; real street trees here are >= 5 m with >= 16 m2 crowns.
+    if m['height'] < min_height:
         reasons.append('too_low')
     if m['std'] < 0.6 or (m['height'] - m['p10']) < 1.5:
         reasons.append('planar_not_volumetric')

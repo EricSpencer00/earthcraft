@@ -161,6 +161,20 @@ PAVED = {'minecraft:gray_concrete', 'minecraft:light_gray_concrete', 'minecraft:
 # The base world routed orthophoto green onto some ground cells as green/lime concrete;
 # off the carriageway these are planters/lawns and render better as grass.
 ORTHO_GREEN = {'minecraft:green_concrete', 'minecraft:lime_concrete'}
+# Natural or orthophoto-green blocks the base world left inside the carriageway
+# (tree shadows and planters routed onto the road) read as grass wedges on asphalt.
+ROAD_PATCH = ORTHO_GREEN | {'minecraft:grass_block', 'minecraft:sand', 'minecraft:dirt', 'minecraft:coarse_dirt'}
+ASPHALT = 'minecraft:gray_concrete'
+
+
+def local_road_block(base, road, window=15):
+    """Per cell, the paved block most common on nearby carriageway (the base world paints
+    roads both gray and light gray, so a fixed block reads as a checkerboard)."""
+    candidates = [b for b in PAVED if (road & (base == b)).any()] or [ASPHALT]
+    counts = np.stack([ndimage.uniform_filter((road & (base == b)).astype(np.float32), size=window, mode='nearest')
+                       for b in candidates])
+    best = np.asarray(candidates, dtype=object)[counts.argmax(axis=0)]
+    return np.where(counts.max(axis=0) > 0, best, ASPHALT)
 SIDEWALK = 'minecraft:smooth_stone'
 CURB = 'minecraft:polished_andesite'
 PAINT_WHITE = 'minecraft:white_concrete'
@@ -194,7 +208,9 @@ def surface_classes(tile, world, road_mask, footprint_mask, osm, max_sidewalk_m=
                 ((distance <= max_sidewalk_m) | plaza_mask))
     curb = sidewalk & ndimage.binary_dilation(road_mask, structure=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))
     ortho_green = np.isin(base, list(ORTHO_GREEN)) & ~road_mask & ~built
+    road_patch = road_mask & np.isin(base, list(ROAD_PATCH)) & ~built
     return {'paved': paved, 'sidewalk': sidewalk, 'curb': curb, 'service': service_mask, 'parking': parking_mask,
+            'road_patch': road_patch,
             'green': (green_mask & ~built & ~road_mask) | ortho_green, 'ortho_green': ortho_green,
             'plaza': plaza_mask, 'built': built, 'road': road_mask}
 
