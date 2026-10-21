@@ -303,7 +303,9 @@ class Journal:
 
         One tile is one unit of work. Lane 'base' takes a tile whose sources are
         unfinished and leases sources, geometry and appearance together. Lane
-        'scans' takes a tile whose sources and geometry are complete and leases
+        'lq' is base without appearance: sources and geometry only, so the
+        fast verified LQ world covers the plan first and the slow scan upgrade
+        is left pending for the scans lane. Lane 'scans' takes a tile whose sources and geometry are complete and leases
         appearance alone. Failed or complete stages are never re-leased here;
         game_verify is never claimed. Earlier receipts are checked as in claim();
         a lost legacy receipt (written on the retired external drive) is accepted
@@ -311,8 +313,8 @@ class Journal:
         """
         now=time.time() if now is None else now
         if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:raise ValueError('Invalid worker lease')
-        if lane not in ('base','scans'):raise ValueError('Unsupported tile lane')
-        anchor=0 if lane=='base' else 2
+        if lane not in ('base','lq','scans'):raise ValueError('Unsupported tile lane')
+        anchor=2 if lane=='scans' else 0
         claimable="(state='pending' OR (state='running' AND expires<=?)) AND COALESCE(not_before,0)<=?"
         query=("SELECT * FROM jobs j WHERE j.stage=? AND (j.state='pending' OR (j.state='running' AND j.expires<=?)) "
                "AND COALESCE(j.not_before,0)<=? "
@@ -331,7 +333,7 @@ class Journal:
             if row:
                 prior=self._check_prior(row['tile'],anchor,legacy_ok=True)
                 later=[] if lane=='scans' else [r['stage'] for r in self.db.execute(
-                    'SELECT stage FROM jobs WHERE tile=? AND stage IN (1,2) AND '+claimable+' ORDER BY stage',
+                    'SELECT stage FROM jobs WHERE tile=? AND stage IN '+('(1)' if lane=='lq' else '(1,2)')+' AND '+claimable+' ORDER BY stage',
                     (row['tile'],now,now))]
                 stages=[anchor,*later];token=uuid.uuid4().hex
                 for index in stages:

@@ -96,8 +96,10 @@ def pending_work(control, lane, shard=None):
         return True
     with closing(sqlite3.connect(journal, timeout=20)) as db:  # WAL journal: a plain reader
         db.create_function('tile_shard', 2, tile_shard, deterministic=True)
-        if lane == 'base':
+        if lane in ('base', 'lq'):
             query = "SELECT count(*) FROM jobs j WHERE stage=0 AND state IN ('pending','running')"
+        elif lane == 'auto':
+            return pending_work(control, 'base', shard) or pending_work(control, 'scans', shard)
         else:
             query = ("SELECT count(*) FROM jobs j WHERE stage=2 AND state IN ('pending','running') AND NOT EXISTS "
                      "(SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<2 AND p.state!='complete')")
@@ -173,7 +175,10 @@ def run(args):
             stopping = True
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
-        workers = [f'{args.lane}-{i}' for i in range(1, args.workers + 1)]
+        # Worker ids stay 'base-N' for the base, lq and auto lanes so a lane change
+        # requeues the same owners' leases and keeps the same log files.
+        prefix = 'scans' if args.lane == 'scans' else 'base'
+        workers = [f'{prefix}-{i}' for i in range(1, args.workers + 1)]
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.resolve()))
         if (control / 'plan.json').exists() and (control / 'jobs.sqlite').exists():
             route_locality(args, env, logs)
@@ -245,7 +250,7 @@ def build_parser():
     parser.add_argument('--control', type=Path, default=ROOT / 'runs/regional/control')
     parser.add_argument('--frame', type=Path, required=True)
     parser.add_argument('--scratch', type=Path, default=ROOT / 'runs/scratch')
-    parser.add_argument('--lane', choices=('base', 'scans'), default='base')
+    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans'), default='base')
     parser.add_argument('--workers', type=int, default=int(os.environ.get('EARTHCRAFT_WORKERS') or 1),
                         help='concurrent tile workers (default EARTHCRAFT_WORKERS or 1)')
     parser.add_argument('--shard', type=parse_shard, default=parse_shard(os.environ.get('EARTHCRAFT_SHARD')),

@@ -211,6 +211,21 @@ class LifecycleTests(unittest.TestCase):
 
 
 class JournalTileClaimTests(unittest.TestCase):
+    def test_lq_lane_defers_appearance_and_auto_lane_is_base_first(self):
+        from regional_generate import claim_next
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory) / 'jobs.sqlite', plan_for(['0_0', '1_0']))
+            journal.db.execute("UPDATE jobs SET state='complete',evidence='tiles/v2/1_0/r.json',evidence_sha256='x' "
+                               "WHERE tile='1_0' AND stage IN (0,1)")
+            first = claim_next(journal, 'w', 'auto', shard=None)
+            self.assertEqual((first['tile'], first['lane'], first['stages']), ('0_0', 'lq', ['sources', 'geometry']))
+            state = journal.db.execute("SELECT state FROM jobs WHERE tile='0_0' AND stage=2").fetchone()[0]
+            self.assertEqual(state, 'pending')
+            second = claim_next(journal, 'w', 'auto', shard=None)
+            self.assertEqual((second['tile'], second['lane'], second['stages']), ('1_0', 'scans', ['appearance']))
+            self.assertIsNone(claim_next(journal, 'w', 'auto', shard=None))
+            journal.close()
+
     def test_lanes_lease_whole_tiles_and_accept_lost_legacy_receipts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
