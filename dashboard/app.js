@@ -177,6 +177,16 @@ function cellAtLocation({lng,lat}){
   });
 }
 
+let cellCanvas=null;
+function cellLayer(target){
+  cellCanvas??={canvas:document.createElement('canvas')};
+  if(cellCanvas.canvas.width!==target.width||cellCanvas.canvas.height!==target.height){
+    cellCanvas.canvas.width=target.width;cellCanvas.canvas.height=target.height;cellCanvas.ctx=null;
+  }
+  cellCanvas.ctx??=cellCanvas.canvas.getContext('2d');
+  return cellCanvas;
+}
+
 function drawGeography(ctx,cssWidth,cssHeight){
   // A flat Mercator camera makes every cell share one transform per frame.
   // Cache geographic corners; avoid projecting thousands of points while dragging.
@@ -184,6 +194,10 @@ function drawGeography(ctx,cssWidth,cssHeight){
   const reference=geoMap.project([first.bounds[0]+1,first.bounds[3]]);
   const scale=(reference.x-anchor.x)*360,colors=palette();
   let selected=null,hover=null;
+  // Translucent cells filled one by one double their alpha along shared antialiased
+  // edges and read as a dotted grid. Fill each colour opaque on a layer, then blend
+  // the layer once. One huge Path2D does the same but rasterizes ~200x slower.
+  const groups=new Map(),outlines=[];
   for(const cell of geoCells){
     const x=anchor.x+(cell.nw.x-first.nw.x)*scale,y=anchor.y+(cell.nw.y-first.nw.y)*scale;
     const w=(cell.se.x-cell.nw.x)*scale,h=(cell.se.y-cell.nw.y)*scale;
@@ -192,13 +206,32 @@ function drawGeography(ctx,cssWidth,cssHeight){
     const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
     const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
     const level=mapLayer==='detail'?detailLevel(cell.index):null;
-    ctx.fillStyle=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
-    ctx.globalAlpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
+    const fill=mapLayer==='detail'?detailColor(level):colors[code]||colors[0];
+    const alpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
     const points=cell.points.map(p=>({x:anchor.x+(p.x-first.nw.x)*scale,y:anchor.y+(p.y-first.nw.y)*scale}));
-    ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();
-    if(w>5){ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.strokeStyle=mapLayer==='detail'?ctx.fillStyle:colors[code];ctx.lineWidth=.6;ctx.stroke();}
+    const key=fill+'|'+alpha;
+    if(!groups.has(key))groups.set(key,{fill,alpha,cells:[]});
+    groups.get(key).cells.push(points);
+    if(w>5)outlines.push({points,stroke:mapLayer==='detail'?fill:colors[code]});
     if(cell.index===selectedIndex)selected=points;
     if(cell.index===hoverIndex)hover=points;
+  }
+  const layer=cellLayer(ctx.canvas);
+  for(const {fill,alpha,cells} of groups.values()){
+    layer.ctx.setTransform(1,0,0,1,0,0);layer.ctx.clearRect(0,0,layer.canvas.width,layer.canvas.height);
+    layer.ctx.setTransform(ctx.getTransform());layer.ctx.fillStyle=fill;
+    for(const points of cells){
+      // Grow each cell by a fraction of a pixel so neighbours meet without hairline gaps.
+      const cx=(points[0].x+points[2].x)/2,cy=(points[0].y+points[2].y)/2;
+      layer.ctx.beginPath();
+      points.forEach((p,i)=>{const dx=p.x-cx,dy=p.y-cy,d=Math.hypot(dx,dy)||1,qx=p.x+dx/d*.35,qy=p.y+dy/d*.35;i?layer.ctx.lineTo(qx,qy):layer.ctx.moveTo(qx,qy);});
+      layer.ctx.fill();
+    }
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=alpha;ctx.drawImage(layer.canvas,0,0);ctx.restore();
+  }
+  ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.lineWidth=.6;
+  for(const {points,stroke} of outlines){
+    ctx.strokeStyle=stroke;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
   ctx.globalAlpha=1;
   for(const [points,strong] of [[hover,false],[selected,true]])if(points){
