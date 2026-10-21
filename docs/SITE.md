@@ -36,6 +36,12 @@ Viewer URL options:
 | `layout=flat-packed` | Packed `.mcp` regions (`scripts/region_pack.py`) in that folder, as new `tiles/v2` tiles publish them. |
 | `qa=1` | Canvas only, for screenshots (used by `scripts/qa_sample.mjs`). |
 
+## Module versions
+
+Pages serves HTML for 10 minutes but scripts for 4 hours. When a module changes,
+bump its `?v=` tag everywhere it is imported, and bump the tag of every module that
+imports it, so returning visitors never mix new data with old code.
+
 ## View cache
 
 The Water Tower view is the most visited, so its chunks are packed into

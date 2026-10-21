@@ -743,7 +743,7 @@ function renderSelection(){
   const tile=source?`&base=${encodeURIComponent(source.base)}&layout=${source.layout}`:'';
   $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}${tile}`;$('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
-  cellPreview??=import('./cell-preview.mjs?v=cell-2');
+  cellPreview??=import('./cell-preview.mjs?v=tiles-1');
   cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,...(source||{})})).then(result=>{
     if(token!==cellToken||result.status==='aborted')return;
     $('cell-view').dataset.state=result.status;

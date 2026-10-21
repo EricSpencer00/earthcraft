@@ -1,6 +1,6 @@
 // Small in-panel 3D view of a selected map cell. Loaded on demand (pulls in three.js).
-import {ChunkViewer,installControls,spiral,autoFloor} from './chunk-viewer.mjs?v=pipeline-1';
-import {RegionClient,hfRegionBase,VIEW_CACHES} from './anvil.mjs?v=pipeline-1';
+import {ChunkViewer,installControls,spiral,autoFloor} from './chunk-viewer.mjs?v=tiles-1';
+import {RegionClient,hfRegionBase,VIEW_CACHES} from './anvil.mjs?v=tiles-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk} from './chunk-mesh.mjs?v=blocks-2';
 import * as THREE from './assets/vendor/three/three.module.min.js';
 
