@@ -740,8 +740,8 @@ function renderSelection(){
   $('cell').hidden=true;
   const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
   const source=blockSource(selectedIndex);
-  const link=new URLSearchParams({block:`${cx},${cz}`,radius:String(radius),...(source?{base:source.base,layout:source.layout}:{})});
-  $('cell-blocks').href=`./blocks.html?${link}`;$('cell-actions').hidden=false;
+  const tile=source?`&base=${encodeURIComponent(source.base)}&layout=${source.layout}`:'';
+  $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}${tile}`;$('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
   cellPreview??=import('./cell-preview.mjs?v=cell-2');
   cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,...(source||{})})).then(result=>{
