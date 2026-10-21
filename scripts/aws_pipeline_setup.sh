@@ -231,8 +231,8 @@ def recent_events(log, since, block=1 << 20):
 
 
 events = [e for log in sorted((control / 'logs').glob('*.log')) for e in recent_events(log, now - DAY)]
-published = sorted((at, e.get('tile')) for at, e in events if e.get('event') == 'tile_published')
-commits = sorted((at, e) for at, e in events if e.get('event') == 'commit_verified')
+published = sorted(((at, e.get('tile')) for at, e in events if e.get('event') == 'tile_published'), key=lambda item: item[0])
+commits = sorted(((at, e) for at, e in events if e.get('event') == 'commit_verified'), key=lambda item: item[0])
 last_commit = ({'oid': commits[-1][1].get('oid'), 'utc': commits[-1][1].get('utc'), 'label': commits[-1][1].get('label')}
                if commits else None)
 hour = sum(1 for at, _ in published if at >= now - 3600)
