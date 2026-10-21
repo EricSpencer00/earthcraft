@@ -1,6 +1,7 @@
 import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
 import {parseLocation} from './location-search.mjs?v=simple-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
+import {frameInverse} from './frame.mjs?v=frame-1';
 
 const $=id=>document.getElementById(id);
 new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
@@ -19,10 +20,27 @@ let cellBrowser=null;
 const DETAIL_URL='https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/world/index/detail-levels.json';
 const DETAIL_LEVELS=['none','low','high','hand'];
 let detail=null;
+// Levels are published per 512 m tile ("r.X.Z"); a 256 m cell X_Z lies in tile r.(X>>1).(Z>>1).
+function regionTile(id){
+  const m=/^(-?\d+)_(-?\d+)$/.exec(id||'');
+  return m?[Number(m[1])>>1,Number(m[2])>>1]:null;
+}
 function detailLevel(index){
-  const id=atlas?.cell_ids?.[index];
+  const id=atlas?.cell_ids?.[index],tile=regionTile(id);
   if(!detail||!id)return null;
-  return detail.cells?.[id]||null;
+  return detail.cells?.[id]||(tile&&detail.tiles?.[`r.${tile[0]}.${tile[1]}`])||null;
+}
+// Cells with a published tiles/v2 package read their blocks from it, at the snapshot's
+// dataset commit; others read the world/region capture the viewer pins.
+const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
+let publishedTiles=null;
+function blockSource(index){
+  const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
+  if(!tile||!world?.dataset_revision||!Array.isArray(world.v2_tiles))return null;
+  if(publishedTiles?.list!==world.v2_tiles)publishedTiles={list:world.v2_tiles,set:new Set(world.v2_tiles)};
+  const id=tile[0]+'_'+tile[1];
+  if(!publishedTiles.set.has(id)||!/^[0-9a-f]{40}$/.test(world.dataset_revision))return null;
+  return {base:`${HF_DATASET}/resolve/${world.dataset_revision}/tiles/v2/${id}/region/`,layout:'flat-auto'};
 }
 function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 function renderDetailCount(){
@@ -292,10 +310,20 @@ function stageCode(cell){
 function publishedAtlas(data){
   const world=$('area').value==='world'?data.generated_world:null;
   const defaults=world?.cell_defaults||{};
+  const size=Number(world?.cell_size_m)||256;
+  // Dataset cells carry only their id; place them exactly from the frame's projection.
+  const place=world?.projection?.method==='transverse_mercator_wgs84'?frameInverse(world.projection):null;
   const rows=(world?.cells||data.cells||[]).map(cell=>{
     const id=String(cell.tile_id||String(cell.id||'').split('/').pop()||'');
     const match=id.match(/^(-?\d+)_(-?\d+)$/);
-    return match?{...defaults,...cell,id,x:Number(match[1]),z:Number(match[2])}:null;
+    if(!match)return null;
+    const row={...defaults,...cell,id,x:Number(match[1]),z:Number(match[2])};
+    if(place&&!Number.isFinite(row.latitude)){
+      const x0=row.x*size,z0=row.z*size;
+      [row.longitude,row.latitude]=place(x0+size/2,z0+size/2).map(v=>Math.round(v*1e6)/1e6);
+      row.corners_lonlat=[place(x0,z0),place(x0+size,z0),place(x0+size,z0+size),place(x0,z0+size)];
+    }
+    return row;
   }).filter(Boolean);
   if(!rows.length)return null;
   const bounds=rows.reduce((box,row)=>({left:Math.min(box.left,row.x),top:Math.min(box.top,row.z),right:Math.max(box.right,row.x+1),bottom:Math.max(box.bottom,row.z+1)}),{left:Infinity,top:Infinity,right:-Infinity,bottom:-Infinity});
@@ -711,10 +739,12 @@ function renderSelection(){
   if(code<0){$('cell').hidden=false;$('cell').textContent='Not built yet.';return;}
   $('cell').hidden=true;
   const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
-  $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}`;$('cell-actions').hidden=false;
+  const source=blockSource(selectedIndex);
+  const link=new URLSearchParams({block:`${cx},${cz}`,radius:String(radius),...(source?{base:source.base,layout:source.layout}:{})});
+  $('cell-blocks').href=`./blocks.html?${link}`;$('cell-actions').hidden=false;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
   cellPreview??=import('./cell-preview.mjs?v=cell-2');
-  cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2})).then(result=>{
+  cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,...(source||{})})).then(result=>{
     if(token!==cellToken||result.status==='aborted')return;
     $('cell-view').dataset.state=result.status;
     $('cell-view-status').textContent=result.status==='empty'?'Not built yet.':'Drag to turn · scroll or pinch to zoom.';

@@ -12,7 +12,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-from pyproj import Transformer
+from pyproj import CRS
 
 REPO = 'EricSpencer00/earthcraft'
 HUB = 'https://huggingface.co'
@@ -83,20 +83,30 @@ def dataset_cells(index_bytes, v2_tiles):
     return cells
 
 
+def projection(frame):
+    """Transverse Mercator parameters of the frame, for the site's block -> WGS84 inverse."""
+    crs = CRS(frame['crs'])
+    params = {p.name: p.value for p in crs.coordinate_operation.params}
+    if (crs.coordinate_operation.method_name != 'Transverse Mercator' or crs.ellipsoid.name != 'WGS 84'
+            or params['False easting'] or params['False northing']):
+        raise ValueError('The site inverse supports only a WGS 84 Transverse Mercator frame without false origin')
+    return {'method': 'transverse_mercator_wgs84', 'lat_0': params['Latitude of natural origin'],
+            'lon_0': params['Longitude of natural origin'], 'k': params['Scale factor at natural origin'],
+            'west': frame['west'], 'north': frame['north']}
+
+
 def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
     frame = json.loads((Path(root) / 'configs/world-frame.json').read_text())
     commit, index_bytes, v2_tiles = fetch(revision)
     keys = dataset_cells(index_bytes, v2_tiles)
-    inverse = Transformer.from_crs(frame['crs'], 'EPSG:4326', always_xy=True)
-    rows = []
-    for x, z in sorted(keys, key=lambda k: (k[1], k[0])):
-        # Cell centres only: the app sizes each cell from latitude.
-        east, north = frame['west'] + (x + 0.5) * CELL, frame['north'] - (z + 0.5) * CELL
-        lon, lat = (round(v, 6) for v in inverse.transform(east, north))
-        rows.append({'tile_id': f'{x}_{z}', 'longitude': lon, 'latitude': lat})
+    # Cells carry only their id; the site places them with dashboard/frame.mjs from
+    # 'projection'. Per-cell coordinates would push the Pages artifact past its cap.
+    rows = [{'tile_id': f'{x}_{z}'} for x, z in sorted(keys, key=lambda k: (k[1], k[0]))]
     return {
         'schema_version': 1, 'basis': 'dataset_region_index',
         'dataset_revision': commit, 'native_tiles': len(v2_tiles),
+        # Published 512 m tiles (region X_Z); the site reads their blocks from tiles/v2 at this revision.
+        'v2_tiles': sorted(v2_tiles, key=lambda t: tuple(map(int, t.split('_')))),
         'omitted_declarations': 0, 'cell_size_m': CELL, 'unique_cells': len(rows),
         'unique_area_km2': len(rows) * CELL ** 2 / 1e6,
         'scan_upgrade_parent_tiles': 0, 'photo_colored_cells': 0,
@@ -105,6 +115,7 @@ def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
         'frame_sha256': hashlib.sha256(json.dumps(
             {k: frame[k] for k in ('crs', 'west', 'north')}, sort_keys=True).encode()).hexdigest(),
         # Fields every dataset cell shares; stored once to keep the Pages artifact small.
+        'projection': projection(frame),
         'cell_defaults': {
             'region_id': 'world', 'size_m': CELL, 'state': 'generated',
             'geometry_state': 'complete', 'appearance_state': 'pending',

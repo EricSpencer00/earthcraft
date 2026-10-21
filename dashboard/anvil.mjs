@@ -159,12 +159,12 @@ export class RegionClient{
     if(typeof base!=='string'||!base)throw Error('A region base URL is required.');
     const url=new URL(base.endsWith('/')?base:base+'/',globalThis.location?.href);
     if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error('Region base must be an http(s) URL without credentials.');
-    if(!['bucketed','flat','flat-packed'].includes(layout))throw Error('Unknown region layout.');
+    if(!['bucketed','flat','flat-packed','flat-auto'].includes(layout))throw Error('Unknown region layout.');
     this.base=url.href;this.layout=layout;this.fetch=fetcher;this.max=maxConcurrent;this.active=0;this.queue=[];
     this.headers=new LRU(headerCache);this.pending=new Map();this.chunkCache=new LRU(chunkCache);this.gap=gapSectors;this.maxRequestBytes=Math.max(HEADER_BYTES,Math.min(maxRequestBytes,MAX_REQUEST_BYTES));
     this.stats={requests:0,bytes:0,packRequests:0,packBytes:0};
     // Signed CDN URL each region's resolve URL redirected to; reusing it skips one 302 per read.
-    this.resolved=new Map();this.packUrls=packs;this.packs=null;
+    this.resolved=new Map();this.packUrls=packs;this.packs=null;this.formats=new Map();
   }
   // Prepacked chunk records (scripts/build_view_cache.mjs). Used only when the pack was built from
   // the same repo+revision this client reads; any failure falls back to Range reads.
@@ -188,7 +188,10 @@ export class RegionClient{
     for(const p of packs){const e=p.chunks.get(cx+','+cz);if(e&&e[0]+e[1]<=p.bytes.length)return p.bytes.subarray(e[0],e[0]+e[1]);}
     return null;
   }
-  url(rx,rz){return new URL(this.layout==='flat'?`r.${rx}.${rz}.mca`:this.layout==='flat-packed'?`r.${rx}.${rz}.mcp`:regionPath(rx,rz),this.base).href;}
+  url(rx,rz){
+    const flat=this.layout==='flat'||this.layout==='flat-auto'&&this.formats.get(rx+','+rz)==='mca';
+    return new URL(flat?`r.${rx}.${rz}.mca`:this.layout==='bucketed'?regionPath(rx,rz):`r.${rx}.${rz}.mcp`,this.base).href;
+  }
   slot(signal){
     signal?.throwIfAborted();
     if(this.active<this.max){this.active++;return Promise.resolve();}
@@ -227,11 +230,13 @@ export class RegionClient{
   header(rx,rz,signal){
     const key=rx+','+rz,cached=this.headers.get(key);if(cached!==undefined)return Promise.resolve(cached);
     if(this.pending.has(key))return this.pending.get(key);
-    const packed=this.layout==='flat-packed';
-    const promise=this.range(this.url(rx,rz),0,packed?PACKED_HEADER_BYTES:HEADER_BYTES,signal).then(bytes=>{
-      const header=!bytes||bytes.length===0?null:packed?parsePackedHeader(bytes):bytes.length<HEADER_BYTES?(()=>{throw Error('Region header is shorter than 8 KiB.');})():parseHeader(bytes);
-      this.headers.set(key,header);return header;
-    }).finally(()=>this.pending.delete(key));
+    const read=packed=>this.range(this.url(rx,rz),0,packed?PACKED_HEADER_BYTES:HEADER_BYTES,signal).then(bytes=>
+      !bytes||bytes.length===0?null:packed?parsePackedHeader(bytes):bytes.length<HEADER_BYTES?(()=>{throw Error('Region header is shorter than 8 KiB.');})():parseHeader(bytes));
+    // flat-auto: tiles published since packing are .mcp, older ones .mca; try packed first.
+    const promise=(this.layout==='flat-auto'
+      ?read(true).then(header=>{if(header)return header;this.formats.set(key,'mca');return read(false);})
+      :read(this.layout==='flat-packed')
+    ).then(header=>{this.headers.set(key,header);return header;}).finally(()=>this.pending.delete(key));
     this.pending.set(key,promise);return promise;
   }
   // Loads chunks by absolute chunk coordinate. Nearby sectors in one region are coalesced

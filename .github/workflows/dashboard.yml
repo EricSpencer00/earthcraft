@@ -56,6 +56,7 @@ jobs:
       - name: Check the atlas and capture each layout
         run: |
           node tests/anvil.mjs
+          node tests/frame.mjs
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs
           node tests/blocks_browser.mjs
