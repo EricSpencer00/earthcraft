@@ -159,7 +159,12 @@ async function initializeBasemap(){
     geoMap.on('move',()=>{scheduleDraw();updateZoomButtons();});
     geoMap.on('style.load',()=>{cellLayerKey='';scheduleDraw();});
     geoMap.on('movestart',()=>{document.body.dataset.camera='moving';});
-    geoMap.on('idle',()=>{document.body.dataset.camera='idle';});
+    // Idle means the cells are drawn too: the cell source is added a frame after the style
+    // and tiled in a worker, and MapLibre fires another idle once it has loaded.
+    geoMap.on('idle',()=>{
+      if(geographic()&&!(geoMap.getSource('cells')&&geoMap.isSourceLoaded('cells'))){scheduleDraw();return;}
+      document.body.dataset.camera='idle';
+    });
     geoMap.on('click',event=>{
       if(!geographic())return;
       const cell=cellAtLocation(event.lngLat);
