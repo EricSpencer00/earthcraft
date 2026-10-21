@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 import numpy as np
 from PIL import Image
+from chunk_cells import ChunkCells
 from inspect_world import chunks
 from material_router import texture_colors
 
@@ -62,6 +63,8 @@ def verify(world):
         fallback_cells = np.load(world/'missing-scan-fallback-voxels.npy')
         if len(fallback_cells) != report['missing_scan_fallback_voxels']:
             raise ValueError('Missing-scan fallback voxel count differs from receipt')
+    points_by_chunk=ChunkCells(point_cells) if point_cells is not None else None
+    fallback_by_chunk=ChunkCells(fallback_cells) if fallback_cells is not None else None
     derived_checks=0
     building_layer=None
     building_baseline=None
@@ -127,7 +130,7 @@ def verify(world):
             ground_checks+=256
             above_ground=np.arange(bottom,bottom+h)[:,None,None]>expected[zs,xs]
             if point_cells is not None:
-                local=point_cells[(point_cells[:,0]//16==cx)&(point_cells[:,2]//16==cz)]
+                local=points_by_chunk.get(cx,cz)
                 expected_structure=np.zeros_like(volume,dtype=bool)
                 expected_structure[local[:,1]-bottom,local[:,2]%16,local[:,0]%16]=True
                 if combined_roof is not None:
@@ -135,7 +138,7 @@ def verify(world):
                     expected_structure |= (combined_roof['mask'][zs,xs] &
                         (absolute_y >= combined_roof['floor_y'][zs,xs]) &
                         (absolute_y <= combined_roof['observed_top_y'][zs,xs]))
-                    local_fallback = fallback_cells[(fallback_cells[:,0]//16==cx)&(fallback_cells[:,2]//16==cz)]
+                    local_fallback = fallback_by_chunk.get(cx,cz)
                     expected_structure[local_fallback[:,1]-bottom,local_fallback[:,2]%16,local_fallback[:,0]%16] = True
                 if building_layer is not None:
                     shell=shell_for_chunk(building_layer,cx,cz,h,bottom,(ox,oz))

@@ -6,6 +6,13 @@ root), so four workers never open more than ``EARTHCRAFT_HOST_CONNECTIONS``
 (default 4) connections to one publisher. Transient failures (timeouts,
 resets, 429 and 5xx) back off exponentially with jitter and honour
 Retry-After; a changed archive (412 on If-Match) is never retried.
+
+A host that refuses or times out on two consecutive connections is marked down
+for ``HOST_DOWN_SECONDS`` for every worker on the machine (a marker beside the
+slot locks). Requests to it then fail at once with ``HostUnavailable`` (a
+URLError, so the tile is deferred, not failed), instead of each tile spending
+minutes in retries against a dead server: an ISGS outage made one scan tile
+wait 427 of its 538 seconds.
 """
 from contextlib import contextmanager
 import fcntl
@@ -20,6 +27,11 @@ import urllib.request
 
 MAX_RANGE = 16 * 2**20
 DEFAULT_CONNECTIONS = 4
+HOST_DOWN_SECONDS = 900
+
+
+class HostUnavailable(urllib.error.URLError):
+    """The host failed recent connections; skip it until its down marker expires."""
 
 
 def connections():
@@ -63,6 +75,37 @@ def host_slot(url, limit=None, poll=0.2):
         time.sleep(poll)
 
 
+def _down_marker(url):
+    host = urllib.parse.urlsplit(url).hostname or 'unknown'
+    return slots_root() / f'{host}.down', host
+
+
+def check_host(url, now=time.time):
+    """Raise HostUnavailable while another request marked this host down."""
+    marker, host = _down_marker(url)
+    try:
+        until = float(marker.read_text())
+    except (OSError, ValueError):
+        return
+    if now() < until:
+        raise HostUnavailable(f'{host} is unreachable (marked down until {time.strftime("%H:%M:%SZ", time.gmtime(until))})')
+
+
+def mark_host_down(url, seconds=HOST_DOWN_SECONDS, now=time.time):
+    marker, _ = _down_marker(url)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_name(marker.name + f'.{os.getpid()}')
+    temporary.write_text(str(now() + seconds))
+    temporary.replace(marker)
+
+
+def connection_failure(error):
+    """A failure to reach the server at all (not an HTTP status from it)."""
+    if isinstance(error, urllib.error.HTTPError):
+        return False
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
 def retryable(error):
     if isinstance(error, urllib.error.HTTPError):
         return error.code == 429 or error.code >= 500
@@ -74,7 +117,9 @@ def get_range(url, start, end, etag, length, attempts=6, timeout=60, sleep=time.
     size = end - start + 1
     if not 0 < size <= MAX_RANGE:
         raise ValueError('Bounded HTTP range required')
+    unreachable = 0
     for attempt in range(attempts):
+        check_host(url)
         try:
             with host_slot(url):
                 request = urllib.request.Request(url, headers={
@@ -97,6 +142,10 @@ def get_range(url, start, end, etag, length, attempts=6, timeout=60, sleep=time.
         except ValueError:
             raise
         except Exception as error:  # noqa: BLE001 - classified below
+            unreachable = unreachable + 1 if connection_failure(error) else 0
+            if unreachable >= 2:
+                mark_host_down(url)
+                raise HostUnavailable(f'{urllib.parse.urlsplit(url).hostname} unreachable: {error}') from error
             if not retryable(error) or attempt == attempts - 1:
                 raise
             delay = None

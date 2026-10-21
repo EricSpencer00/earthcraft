@@ -196,7 +196,7 @@ class LocalStore:
 def worker_args(control, frame, workdir, tiles, args):
     import regional_generate
     argv = ['--control', str(control), '--frame', str(frame), '--scratch', str(workdir),
-            '--worker-id', 'contrib-1', '--tiles', ','.join(tiles), '--limit', str(len(tiles)),
+            '--worker-id', 'contrib-1', '--tiles=' + ','.join(tiles), '--limit', str(len(tiles)),
             '--batch-tiles', str(len(tiles)), '--batch-seconds', '1e9', '--batch-cap', '4GiB',
             '--cache-cap', str(args.cache_cap), '--footprint-cap', str(args.footprint_cap),
             '--min-free', str(args.min_free), '--tile-cap', str(args.tile_cap), '--hf-cap', '1GiB',

@@ -21,6 +21,7 @@ from shapely.geometry import Polygon, LineString
 from shapely import make_valid
 from shapely.ops import transform as transform_geometry
 
+from chunk_cells import ChunkCells
 from inspect_world import chunks
 from osm_json_to_kml import metres,building_tag
 from material_router import APPEARANCE_BLOCKS, route
@@ -491,14 +492,15 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             for cx in range(int(cols.min())//16, int(cols.max())//16+1):
                 if building['mask'][cz*16:min(size,(cz+1)*16),cx*16:min(size,(cx+1)*16)].any():
                     buildings_by_chunk.setdefault((cx,cz),[]).append(building_index)
+    points_by_chunk = ChunkCells(point_cells) if point_cells is not None else None
     for cz in range(size//16):
         for cx in range(size//16):
             zs,xs = slice(cz*16,cz*16+16),slice(cx*16,cx*16+16)
             g = ground[zs,xs]
             local_buildings = [buildings[index] for index in buildings_by_chunk.get((cx,cz),())]
             local_points = None
-            if point_cells is not None:
-                local_points = point_cells[(point_cells[:,0]//16 == cx) & (point_cells[:,2]//16 == cz)]
+            if points_by_chunk is not None:
+                local_points = points_by_chunk.get(cx, cz)
             column_top = g.copy()
             # Point observations are the exclusive structure source in this
             # branch below; county shells are not written alongside them.
