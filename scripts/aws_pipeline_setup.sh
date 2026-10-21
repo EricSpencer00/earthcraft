@@ -147,8 +147,11 @@ update() {
     as_user git merge -q --ff-only FETCH_HEAD
   fi
   changed() { [ "$old" = none ] || ! as_user git cat-file -e "$old^{commit}" 2>/dev/null || ! as_user git diff --quiet "$old" "$new" -- "$@"; }
-  local restart=0
-  if changed scripts 'requirements*.txt' configs/aws || \
+  local restart=0 workers
+  # Only scripts the workers run; site-only edits must not drain the generator.
+  workers=$("$PY" scripts/worker_paths.py 2>/dev/null) || workers=scripts
+  # shellcheck disable=SC2086
+  if changed $workers scripts/worker_paths.py 'requirements*.txt' configs/aws || \
      ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline || \
      { [ -f /run/earthcraft/shard ] && [ "$(cat /run/earthcraft/shard)" != "$(shard)" ]; }; then
     restart=1
