@@ -6,7 +6,9 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from dataset_coverage import dataset_cells, read_dataset_coverage
+from dataset_coverage import dataset_cells, projection, read_dataset_coverage
+
+TM = '+proj=tmerc +lat_0=41.8972 +lon_0=-87.62443 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +units=m'
 
 
 def bitmap(*chunks):
@@ -33,14 +35,21 @@ class DatasetCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'configs').mkdir()
-            (root / 'configs/world-frame.json').write_text(json.dumps(
-                {'crs': 'EPSG:3857', 'west': -32, 'north': 33}))
+            (root / 'configs/world-frame.json').write_text(json.dumps({'crs': TM, 'west': -32, 'north': 33}))
             region = {'x': 0, 'z': 0, 'chunk_bitmap': bitmap((0, 0))}
             world = read_dataset_coverage(root, fetch=lambda _: ('a' * 40, index(region), {'1_1'}))
             self.assertEqual(world['unique_cells'], 5)
             self.assertEqual(world['dataset_revision'], 'a' * 40)
             self.assertFalse(world['current_block_fill_verified'])
             self.assertNotIn(str(root), json.dumps(world))
+            # Cells carry only ids; the site places them from the published projection.
+            self.assertEqual(world['cells'][0], {'tile_id': '0_0'})
+            self.assertEqual(world['projection'], {'method': 'transverse_mercator_wgs84', 'lat_0': 41.8972,
+                                                   'lon_0': -87.62443, 'k': 1.0, 'west': -32, 'north': 33})
+
+    def test_frames_the_site_cannot_invert_are_refused(self):
+        with self.assertRaisesRegex(ValueError, 'Transverse Mercator'):
+            projection({'crs': 'EPSG:3857', 'west': 0, 'north': 0})
 
 
 if __name__ == '__main__':

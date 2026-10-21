@@ -145,6 +145,18 @@ console.log('Range requests: header-first reads, coalescing, caching, caps, 404s
     const fromMca=await new RegionClient({base:'https://example.test/world/region/',fetch:host().fetcher}).loadChunks(coords);
     const view=list=>Object.fromEntries(list.map(r=>[r.cx+','+r.cz,r.status==='ok'?JSON.stringify(r.chunk.sections.map(s=>[s.y,s.palette,s.indices?[...s.indices]:null])):r.status]));
     assert.deepEqual(view(fromPack),view(fromMca));assert.ok(fromPack.some(r=>r.status==='ok'));
+    // flat-auto reads a packed tile, and falls back to .mca for tiles published before packing.
+    const serve=(path,file)=>async(url,{headers})=>{
+      if(new URL(url).pathname!==path)return new Response('',{status:404});
+      const [,a,b]=/bytes=(\d+)-(\d+)/.exec(headers.Range).map(Number),end=Math.min(b,file.length-1);
+      return new Response(file.slice(a,end+1),{status:206,headers:{'content-range':`bytes ${a}-${end}/${file.length}`}});
+    };
+    const autoPacked=new RegionClient({base:'https://example.test/tiles/v2/0_0/region/',layout:'flat-auto',fetch:serve('/tiles/v2/0_0/region/r.0.0.mcp',packed)});
+    const autoMca=new RegionClient({base:'https://example.test/tiles/v2/0_0/region/',layout:'flat-auto',fetch:serve('/tiles/v2/0_0/region/r.0.0.mca',region)});
+    assert.deepEqual(view(await autoPacked.loadChunks(coords)),view(fromMca));
+    assert.deepEqual(view(await autoMca.loadChunks(coords)),view(fromMca));
+    assert.equal(autoMca.url(0,0),'https://example.test/tiles/v2/0_0/region/r.0.0.mca');
+    assert.equal(autoPacked.url(0,0),'https://example.test/tiles/v2/0_0/region/r.0.0.mcp');
   }finally{await rm(dir,{recursive:true,force:true});}
 }
 console.log('Packed regions: Python-packed file decodes to the same chunks over Range passed');

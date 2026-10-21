@@ -18,7 +18,7 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
   const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
   const layout=q.get('layout')||'bucketed';
-  if(!['bucketed','flat','flat-packed'].includes(layout))throw Error('Unknown region layout.');
+  if(!['bucketed','flat','flat-packed','flat-auto'].includes(layout))throw Error('Unknown region layout.');
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
   if(chunk){
@@ -219,7 +219,7 @@ export function installBlocksPage(doc=document){
   let world=new BlockWorld(registry),state={center:params.center,radius:params.radius,floor:params.floor,floorY:-64,originX:0,originZ:0,statuses:new Map(),errors:[]},session=null,hover=null,pinned=null;
   viewer.setView(params.view,{yaw:params.yaw,pitch:params.pitch??DEFAULT_PITCH[params.view]});
   const setStatus=text=>{$('viewer-status').textContent=text;};
-  const regionName=([rx,rz])=>`r.${rx}.${rz}.mca`;
+  const regionName=([rx,rz])=>client.url(rx,rz).split('/').pop();
   if(params.custom)$('source-note').textContent='Blocks are read from a custom source: '+params.base;
   else{
     const link=doc.createElement('a');link.href='https://huggingface.co/datasets/'+HF_REPO;link.textContent='Earthcraft dataset on Hugging Face';
