@@ -659,14 +659,14 @@ def serialize_snapshot(snapshot):
     if world is None:
         return json.dumps(snapshot, indent=2) + '\n'
     public = {**snapshot, 'generated_world': {**world, 'cells': []}}
-    tiles = world.get('v2_tiles')
-    if tiles is not None:
-        public['generated_world']['v2_tiles'] = []
+    lists = {key: world[key] for key in ('v2_tiles', 'lake_tiles') if world.get(key) is not None}
+    for key in lists:
+        public['generated_world'][key] = []
     body = json.dumps(public, indent=2)
     start = body.index('"generated_world"')
-    if tiles is not None:  # one compact line, not one tile per line
-        at = body.index('"v2_tiles": []', start)
-        body = body[:at] + '"v2_tiles": ' + json.dumps(tiles, separators=(',', ':')) + body[at + len('"v2_tiles": []'):]
+    for key, tiles in lists.items():  # one compact line, not one tile per line
+        at = body.index(f'"{key}": []', start)
+        body = body[:at] + f'"{key}": ' + json.dumps(tiles, separators=(',', ':')) + body[at + len(f'"{key}": []'):]
     marker = body.index('"cells": []', start)
     rows = ',\n'.join('      ' + json.dumps(cell, separators=(',', ':')) for cell in world['cells'])
     return body[:marker] + '"cells": [\n' + rows + '\n    ]' + body[marker + len('"cells": []'):] + '\n'

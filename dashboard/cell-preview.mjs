@@ -1,7 +1,8 @@
 // Small in-panel 3D view of a selected map cell. Loaded on demand (pulls in three.js).
-import {ChunkViewer,installControls,spiral,autoFloor} from './chunk-viewer.mjs?v=tiles-1';
+import {ChunkViewer,installControls,spiral,autoFloor} from './chunk-viewer.mjs?v=lake-1';
 import {RegionClient,hfRegionBase,VIEW_CACHES} from './anvil.mjs?v=tiles-1';
 import {BlockWorld,BlockRegistry,prepareChunk,meshChunk} from './chunk-mesh.mjs?v=blocks-2';
+import {LakeClient} from './lake.mjs?v=lake-1';
 import * as THREE from './assets/vendor/three/three.module.min.js';
 
 const client=new RegionClient({base:hfRegionBase(),packs:VIEW_CACHES}),registry=new BlockRegistry();
@@ -20,7 +21,7 @@ export async function showCell(canvas,{x,z,radius=2,base=null,layout='bucketed'}
   viewer.clearChunks();viewer.requestRender();
   const center=[Math.floor(x/16),Math.floor(z/16)],coords=spiral(center,radius),world=new BlockWorld(registry);
   let loaded=0,errors=0,firstError=null;
-  const source=base?new RegionClient({base,layout,maxConcurrent:2}):client;
+  const source=layout==='lake'?new LakeClient({base}):base?new RegionClient({base,layout,maxConcurrent:2}):client;
   await source.loadChunks(coords,{signal,onChunk(r){if(r.chunk&&!signal.aborted){world.set(prepareChunk(r.chunk,registry));loaded++;}if(r.status==='error'){errors++;firstError??=r.error;}}});
   if(signal.aborted)return {status:'aborted'};
   if(!loaded){viewer.requestRender();if(errors)throw firstError||Error('Blocks could not be read.');return {status:'empty',chunks:0};}

@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import re
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -20,7 +21,7 @@ CELL = 256
 REGION = 512
 TILE = re.compile(r'^-?\d+_-?\d+$')
 MAX_BYTES = 32 * 2**20
-MAX_PAGES = 50
+MAX_PAGES = 200  # tiles/v2 listing pages of 1,000; the plan has 95,399 tiles
 
 
 def _get(url, limit=MAX_BYTES):
@@ -33,8 +34,22 @@ def _get(url, limit=MAX_BYTES):
     return body, headers
 
 
+def lake_tiles(commit):
+    """Lake water tile ids from lake/v1/index.json at this commit (none before it is published)."""
+    try:
+        body, _ = _get(f'{HUB}/datasets/{REPO}/resolve/{commit}/lake/v1/index.json', 8 * 2**20)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return set()
+        raise
+    index = json.loads(body)
+    if index.get('schema') != 'earthcraft.lake-tiles.v1':
+        raise ValueError('Unexpected lake index schema')
+    return {t for t in index['tiles'] if TILE.match(t)}
+
+
 def fetch_dataset(revision='main'):
-    """Return (commit, region index bytes, published v2 tile ids) from one revision."""
+    """Return (commit, region index bytes, published v2 tile ids, lake tile ids) from one revision."""
     index, headers = _get(f'{HUB}/datasets/{REPO}/resolve/{revision}/world/index/regions.json')
     commit = headers.get('X-Repo-Commit', '')
     if not re.fullmatch('[a-f0-9]{40}', commit):
@@ -48,7 +63,7 @@ def fetch_dataset(revision='main'):
                 tiles.add(tile)
         match = re.search(r'<([^>]+)>;\s*rel="next"', headers.get('Link', ''))
         if not match:
-            return commit, index, tiles
+            return commit, index, tiles, lake_tiles(commit)
         url = match.group(1)
     raise ValueError('Dataset tile listing exceeds the page cap')
 
@@ -65,7 +80,7 @@ def _present_cells(region):
     return out
 
 
-def dataset_cells(index_bytes, v2_tiles):
+def dataset_cells(index_bytes, v2_tiles, lake=()):
     index = json.loads(index_bytes)
     if index.get('schema') != 'earthcraft.world-regions.v1':
         raise ValueError('Unexpected region index schema')
@@ -77,7 +92,7 @@ def dataset_cells(index_bytes, v2_tiles):
             raise ValueError('Invalid region coordinates')
         for cx, cz in _present_cells(region):
             cells.add((x * per + cx, z * per + cz))
-    for tile in v2_tiles:
+    for tile in (*v2_tiles, *lake):
         x, z = map(int, tile.split('_'))
         cells.update((x * per + dx, z * per + dz) for dz in range(per) for dx in range(per))
     return cells
@@ -97,8 +112,8 @@ def projection(frame):
 
 def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
     frame = json.loads((Path(root) / 'configs/world-frame.json').read_text())
-    commit, index_bytes, v2_tiles = fetch(revision)
-    keys = dataset_cells(index_bytes, v2_tiles)
+    commit, index_bytes, v2_tiles, lake = fetch(revision)
+    keys = dataset_cells(index_bytes, v2_tiles, lake)
     # Cells carry only their id; the site places them with dashboard/frame.mjs from
     # 'projection'. Per-cell coordinates would push the Pages artifact past its cap.
     rows = [{'tile_id': f'{x}_{z}'} for x, z in sorted(keys, key=lambda k: (k[1], k[0]))]
@@ -107,6 +122,8 @@ def read_dataset_coverage(root, revision='main', fetch=fetch_dataset):
         'dataset_revision': commit, 'native_tiles': len(v2_tiles),
         # Published 512 m tiles (region X_Z); the site reads their blocks from tiles/v2 at this revision.
         'v2_tiles': sorted(v2_tiles, key=lambda t: tuple(map(int, t.split('_')))),
+        # Lake Michigan water tiles (lake/v1): built from bathymetry, not stored as regions.
+        'lake_tiles': sorted(lake, key=lambda t: tuple(map(int, t.split('_')))),
         'omitted_declarations': 0, 'cell_size_m': CELL, 'unique_cells': len(rows),
         'unique_area_km2': len(rows) * CELL ** 2 / 1e6,
         'scan_upgrade_parent_tiles': 0, 'photo_colored_cells': 0,

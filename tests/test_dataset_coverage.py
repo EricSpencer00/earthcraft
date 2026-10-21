@@ -37,8 +37,9 @@ class DatasetCoverageTests(unittest.TestCase):
             (root / 'configs').mkdir()
             (root / 'configs/world-frame.json').write_text(json.dumps({'crs': TM, 'west': -32, 'north': 33}))
             region = {'x': 0, 'z': 0, 'chunk_bitmap': bitmap((0, 0))}
-            world = read_dataset_coverage(root, fetch=lambda _: ('a' * 40, index(region), {'1_1'}))
-            self.assertEqual(world['unique_cells'], 5)
+            world = read_dataset_coverage(root, fetch=lambda _: ('a' * 40, index(region), {'1_1'}, {'3_3'}))
+            self.assertEqual(world['unique_cells'], 9)  # 1 + 4 (tile 1_1) + 4 (lake tile 3_3)
+            self.assertEqual(world['lake_tiles'], ['3_3'])
             self.assertEqual(world['dataset_revision'], 'a' * 40)
             self.assertFalse(world['current_block_fill_verified'])
             self.assertNotIn(str(root), json.dumps(world))
