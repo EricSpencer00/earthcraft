@@ -75,7 +75,7 @@ def spot_check_due(pr, head, rate):
 
 def regenerate(tile, args):
     """Chunk digests of the tile regenerated on this machine (contribute.py --check-tile)."""
-    command = [sys.executable, str(Path(__file__).with_name('contribute.py')), '--check-tile', tile,
+    command = [sys.executable, str(Path(__file__).with_name('contribute.py')), '--check-tile=' + tile,
                '--workdir', str(args.spot_workdir), '--keep-workdir', '--cache-cap', args.spot_cache_cap]
     if args.spot_cache_dir:
         command += ['--cache-dir', str(args.spot_cache_dir)]
