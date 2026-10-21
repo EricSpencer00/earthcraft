@@ -61,15 +61,30 @@ def build_context(a, frame):
     base = np.vectorize(lambda k: k.split('[', 1)[0])(world['surface_key'])
     water_mask = base == 'minecraft:water'
     protect = np.zeros_like(road_mask)
+    landmarks = []
     for f in osm:
-        if f['id'] in a.protect_osm:
+        if f['id'] in a.protect_osm or (is_landmark(f['tags']) and f['geom'].geom_type in ('Polygon', 'MultiPolygon')):
             protect |= tile.raster([(f['geom'].buffer(a.protect_buffer), 1)]).astype(bool)
+            if f['id'] not in a.protect_osm:
+                landmarks.append(f['id'])
     classes = st.surface_classes(tile, world, road_mask, footprint_mask, osm, protect=protect)
     paint_half, _ = st.intensity_paint(lrh, road_half)
     return dict(tile=tile, accept=accept, world=world, lr=lr, lrh=lrh, osm=osm, osm_meta=osm_meta,
                 chicago_buildings=chicago_buildings, footprint_mask=footprint_mask, ways=ways,
                 road_poly=poly, curb_receipt=curb_receipt, road_mask=road_mask, road_half=road_half,
-                water_mask=water_mask, classes=classes, protect=protect, paint_half=paint_half, surface_base=base)
+                water_mask=water_mask, classes=classes, protect=protect, paint_half=paint_half, surface_base=base,
+                landmarks=landmarks)
+
+
+# Mapped heritage buildings keep their scanned shape: closing shells or recolouring
+# would erase real recesses, battlements and ornament (the 1869 Pumping Station was
+# flattened this way). Every layer treats them like --protect-osm.
+LANDMARK_KEYS = ('historic', 'heritage', 'heritage:operator', 'ref:nrhp')
+LANDMARK_BUILDINGS = {'church', 'cathedral', 'chapel', 'mosque', 'synagogue', 'temple', 'castle'}
+
+
+def is_landmark(tags):
+    return any(tags.get(k) not in (None, 'no') for k in LANDMARK_KEYS) or tags.get('building') in LANDMARK_BUILDINGS
 
 
 def inside(accept, x, z):
@@ -150,6 +165,15 @@ def street_layer(ctx, frame, project, a):
         else:
             layer.add(x, gy[r, c], z, st.SIDEWALK, walk_src, expect=surf[r, c]); n_walk += 1
     report['sidewalk_cells'], report['curb_cells'], report['green_cells'] = n_walk, n_curb, n_green
+    patch_src = layer.source('carriageway_patch', 'OSM roads + measured carriageway', LIC['osm'] + '; ' + LIC['usgs'], 'derived',
+                             note='grass, sand or orthophoto-green blocks inside the carriageway resurfaced with the surrounding road block')
+    road_block = st.local_road_block(ctx['surface_base'], classes['road'] & ~classes['road_patch'])
+    n_patch = 0
+    for r, c in zip(*np.nonzero(classes['road_patch'])):
+        x, z = tile.x0 + c, tile.z0 + r
+        if inside(accept, x, z):
+            layer.add(x, gy[r, c], z, road_block[r, c], patch_src, expect=surf[r, c]); n_patch += 1
+    report['carriageway_patch_cells'] = n_patch
     # Crosswalks.
     crossings = st.crosswalk_cells(ctx['osm'], ctx['road_mask'], tile, ctx['lrh'], ctx['paint_half'])
     cross_mask = np.zeros_like(ctx['road_mask'])
@@ -360,7 +384,8 @@ def main():
     summary = {'tile': a.tile, 'halo': a.halo, 'context_seconds': round(time.time() - start, 1),
                'osm_base': ctx['osm_meta'].get('timestamp_osm_base'),
                'curb_sides_measured': sum(1 for r in ctx['curb_receipt'] for s in ('left_source', 'right_source') if r[s] == 'lidar_curb_profile'),
-               'curb_sides_total': 2 * len(ctx['curb_receipt'])}
+               'curb_sides_total': 2 * len(ctx['curb_receipt']),
+               'protected_landmarks': ctx['landmarks']}
     wanted = a.layers.split(',')
     extra = {'tile': {'x0': a.tile[0], 'z0': a.tile[1], 'size': a.tile[2]}, 'built_with': 'scripts/detail_build.py'}
     if 'buildings' in wanted:
