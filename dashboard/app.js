@@ -2,6 +2,7 @@ import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
 import {parseLocation} from './location-search.mjs?v=simple-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 import {frameInverse} from './frame.mjs?v=frame-1';
+import {decodeTileBitmap} from './fresh-tiles.mjs?v=fresh-1';
 
 const $=id=>document.getElementById(id);
 new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
@@ -33,7 +34,7 @@ function detailLevel(index){
 // Cells with a published tiles/v2 package read their blocks from it, at the snapshot's
 // dataset commit; others read the world/region capture the viewer pins.
 const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
-let publishedTiles=null;
+let publishedTiles=null,freshTiles=null;
 function tileSet(cache,list){return cache?.list===list?cache:{list,set:new Set(list||[])};}
 // Lake Michigan cells (marked in publishedAtlas) are built in the browser from the lake/v1
 // bathymetry by dashboard/lake.mjs.
@@ -45,7 +46,10 @@ function blockSource(index){
   if(isLake(index))return {base:`${root}/lake/v1/`,layout:'lake'};
   if(!Array.isArray(world.v2_tiles))return null;
   publishedTiles=tileSet(publishedTiles,world.v2_tiles);
-  return publishedTiles.set.has(id)?{base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
+  if(publishedTiles.set.has(id))return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
+  // Newer than the snapshot's commit: read it from main, which always has it.
+  freshTiles=tileSet(freshTiles,world.fresh_tiles);
+  return freshTiles.set.has(id)?{base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
 }
 function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 function renderDetailCount(){
@@ -638,10 +642,30 @@ async function readLocal(){
   atlas=chunkData;
 }
 
+// Tiles the pipeline published after the base snapshot, from the few-KB bitmap the AWS host
+// commits in status/pipeline.json every 15 minutes. The data only grows, so the 10 MB base
+// snapshot stays as it is and only newer tiles are added; a failure leaves the base map.
+async function publishedSince(world){
+  try{
+    const response=await fetch(`${HF_DATASET}/resolve/main/status/pipeline.json`,{cache:'no-cache',credentials:'omit',signal:AbortSignal.timeout(10000)});
+    if(!response.ok)return [];
+    const known=new Set(world.v2_tiles||[]);
+    return (await decodeTileBitmap((await response.json())?.published_tiles)).filter(id=>!known.has(id));
+  }catch{return [];}
+}
 async function readPublished(){
   const response=await fetch('./progress/earth.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)});
   if(!response.ok)throw Error('published snapshot unavailable');
-  const data={...await response.json(),source:'public'},nextAtlas=publishedAtlas(data);
+  const data={...await response.json(),source:'public'},world=data.generated_world;
+  if(world&&Array.isArray(world.v2_tiles)){
+    const fresh=await publishedSince(world),cells=new Set(world.cells.map(c=>c.tile_id));
+    for(const id of fresh){
+      const [x,z]=id.split('_').map(Number);
+      for(const [dx,dz] of [[0,0],[1,0],[0,1],[1,1]]){const cell=`${2*x+dx}_${2*z+dz}`;if(!cells.has(cell)){cells.add(cell);world.cells.push({tile_id:cell});}}
+    }
+    world.fresh_tiles=fresh;world.unique_cells=world.cells.length;
+  }
+  const nextAtlas=publishedAtlas(data);
   snapshot=data;
   atlas=nextAtlas;
 }

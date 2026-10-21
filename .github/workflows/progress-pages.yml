@@ -71,6 +71,7 @@ jobs:
           node tests/anvil.mjs
           node tests/frame.mjs
           node tests/lake.mjs
+          node tests/fresh-tiles.mjs
           node tests/view_cache.mjs
           node tests/dashboard_browser.mjs site
           node tests/blocks_browser.mjs site
