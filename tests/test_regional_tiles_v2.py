@@ -127,7 +127,7 @@ class LifecycleTests(unittest.TestCase):
                                              str(self.root / 'scratch'), '--min-free', '0', '--source-revision',
                                              'test-rev', '--batch-tiles', '2', *extra])
 
-    def fake_generate(self, tile, job, root, ctx):
+    def fake_generate(self, tile, job, root, ctx, phase=None):
         regional_cache.admit(ctx['cache_root'] / 'terrain' / '15-1-2.png', 10)
         (ctx['cache_root'] / 'terrain').mkdir(parents=True, exist_ok=True)
         (ctx['cache_root'] / 'terrain' / '15-1-2.png').write_bytes(b'png')
@@ -194,7 +194,7 @@ class LifecycleTests(unittest.TestCase):
     def test_a_tile_that_outgrows_the_cache_fails_explicitly_and_the_queue_moves_on(self):
         calls = []
 
-        def generate(tile, job, root, ctx):
+        def generate(tile, job, root, ctx, phase=None):
             calls.append(tile['id'])
             if tile['id'] == '0_0':
                 raise regional_cache.CacheCapacityError('Cache cap refuses: pinned + x > cap')

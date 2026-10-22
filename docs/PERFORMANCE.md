@@ -47,3 +47,17 @@ the LQ lane is CPU-bound; network and upload are minor.
   (years on one box). Next: per-county ArcGrid strips pinned once and tiles routed by
   strip (route_locality already exists), a larger cache (disk is 33 GiB free), and
   fewer scan workers (2) than LQ workers so strips are not refused.
+
+## Work that is never queued
+
+- **Open water.** Plan tiles listed in `lake/v1/index.json` are built from bathymetry, so workers
+  mark all their stages complete at start-up (`Worker.retire_lake`).
+- **Tiles with no buildings.** The scan upgrade adds roofs and building points; a tile that no
+  Overture footprint comes within 16 m of has none, so its LQ terrain is final and workers mark
+  its appearance stage complete with the footprint index as evidence (`Worker.retire_empty_scans`).
+  On the 2026-10-22 plan that is 21,728 of 73,784 land tiles (29%); a scan pass took ~15 minutes
+  per tile.
+
+Every packaged tile logs `phase_seconds` (indexes, sources, lq_build, scan_select, scan_surfaces,
+point_crops, scan_build, roof_colour, package) and records it in the manifest's `generator`, so
+the next slowest step shows up in the logs rather than in a one-off profile.
