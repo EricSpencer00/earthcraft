@@ -1557,8 +1557,9 @@ class DatasetReader:
         return urllib.parse.quote(safe_repo_path(path), safe='/')
 
     def head_revision(self):
+        # Only the commit: the full answer lists every file (5+ MB) and outgrew the read bound.
         def fetch():
-            with self._open(f'{self.endpoint}/api/datasets/{self.repo}/revision/{self.revision}') as response:
+            with self._open(f'{self.endpoint}/api/datasets/{self.repo}/revision/{self.revision}?expand%5B%5D=sha') as response:
                 return json.loads(response.read(4 * MiB))['sha']
         return self.retry.call(fetch, what='revision')
 
