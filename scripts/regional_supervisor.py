@@ -210,7 +210,7 @@ def run(args):
                         continue
                     if failures.get(owner, 0) >= 10 or time.time() < next_start.get(owner, 0):
                         continue
-                    if psutil.virtual_memory().available < 2 * GiB:
+                    if psutil.virtual_memory().available < args.min_memory:
                         waiting_for_memory.append(owner)
                         continue
                     if not (control / 'plan.json').exists():
@@ -262,6 +262,9 @@ def build_parser():
     parser.add_argument('--min-free', type=parse_size, default=40 * GiB)
     parser.add_argument('--tile-cap', type=parse_size, default=4 * GiB)
     parser.add_argument('--batch-tiles', type=int, default=6)
+    parser.add_argument('--min-memory', type=parse_size, default=parse_size(os.environ.get('EARTHCRAFT_MIN_MEMORY') or '2GiB'),
+                        help='available RAM needed to start a worker (default EARTHCRAFT_MIN_MEMORY or 2GiB; '
+                             'a 1 GiB host sets it lower and relies on swap)')
     parser.add_argument('--qos', choices=('utility', 'background'), default='utility',
                         help='macOS QoS clamp for workers (background also throttles network)')
     parser.add_argument('--ensure', action='store_true')
