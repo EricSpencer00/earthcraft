@@ -34,6 +34,8 @@ assert.equal(q.layout,'flat');assert.deepEqual(q.center,[-136*32+16,68*32+16]);
 assert.throws(()=>parseViewerParams('?layout=unknown'),/layout/);
 const packedSource=tileSource({...manifest,files:[{...manifest.files[0],path:'tiles/v2/-136_68/region/r.-136.68.mcp',bytes:501564}]},batches[0]);
 assert.equal(parseViewerParams(new URL(packedSource.href,'http://localhost').search).layout,'flat-packed');
+assert.equal(packedSource.layout,'flat-packed');  // the in-page preview reads the same packed file
+assert.equal(source.layout,'flat');
 assert.ok(new RegionClient({base:packedSource.base,layout:'flat-packed'}).url(-136,68).endsWith('/region/r.-136.68.mcp'));
 assert.throws(()=>tileSource({...manifest,files:[{...manifest.files[0],path:'tiles/v2/-136_68/region/r.-136.68.mcz'}]},batches[0]),/unavailable/);
 const countPrefix=`https://huggingface.co/api/datasets/EricSpencer00/earthcraft/tree/${revision}/tiles/v2`;

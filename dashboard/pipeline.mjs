@@ -38,7 +38,7 @@ export function tileSource(manifest,batch,tile=batch.tiles[0]){
   if(!packed&&region?.path!==`tiles/v2/${tile}/region/r.${x}.${z}.mca`||!Number.isFinite(region.bytes)||region.bytes<=0||!/^[a-f0-9]{64}$/.test(region.sha256||''))throw Error('The published region is unavailable.');
   const base=`${ROOT}/resolve/${batch.revision}/tiles/v2/${tile}/region/`;
   const query=new URLSearchParams({base,layout:packed?'flat-packed':'flat',region:`${x},${z}`,radius:'3',view:'iso'});
-  return {base,href:`./blocks.html?${query}`,x:x*512+256,z:z*512+256,tile};
+  return {base,layout:query.get('layout'),href:`./blocks.html?${query}`,x:x*512+256,z:z*512+256,tile};
 }
 
 async function jsonPage(url,limit=2*1024*1024){
@@ -86,7 +86,7 @@ const count=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?val
 
 export function installPipeline(doc=document){
   const $=id=>doc.getElementById(id);
-  let busy=false,current=null,preview=null,drawGeneration=0,shown='';
+  let busy=false,current=null,preview=null,drawGeneration=0,shown='',journalTiles=null;
   const text=(id,value)=>{$(id).textContent=value;};
   const link=(id,href)=>{$(id).href=href;$(id).hidden=false;};
   function host(status){
@@ -94,6 +94,8 @@ export function installPipeline(doc=document){
     text('worker-state',health.label);$('worker-state').dataset.state=health.state;
     text('worker-report',valid?`Report from ${dateLabel(health.at)} (${ageLabel(health.at)}). Reports arrive with tile batches and can lag publications.`:'The worker report is unavailable. Publication history can still show progress.');
     for(const [id,field] of [['rate-hour','tiles_last_hour'],['rate-day','tiles_last_24h'],['worker-count','workers']])text(id,valid?count(status[field]):'Unavailable');
+    // The host's journal bitmap counts every published tile exactly; the folder listing is capped.
+    journalTiles=valid&&Number.isFinite(status.published_tiles?.count)?status.published_tiles.count:null;
     text('worker-disk',valid&&Number.isFinite(status.disk?.free_bytes)?`${(status.disk.free_bytes/2**30).toFixed(1)} GiB`:'Unavailable');
     const list=$('pipeline-stages');list.replaceChildren();
     for(const [key,label] of ['Source data','Terrain & buildings','Surface detail','Minecraft checks'].entries()){
@@ -108,7 +110,7 @@ export function installPipeline(doc=document){
       try{
         preview??=await import('./cell-preview.mjs?v=lake-1');
         if(generation!==drawGeneration)return;
-        const result=await preview.showCell($('tile-canvas'),{...source,radius:2,layout:'flat'});
+        const result=await preview.showCell($('tile-canvas'),{...source,radius:2});
         if(generation!==drawGeneration)return;
         text('preview-status',result.status==='done'?'80 × 80 m excerpt · drag to turn · scroll to zoom':result.status==='empty'?'This excerpt has no stored chunks. Open the tile to explore another area.':'Preview interrupted.');
       }catch{if(generation===drawGeneration){text('preview-status','The block preview could not load. Tile details and source receipts are still available.');$('preview-retry').hidden=false;}}
@@ -135,7 +137,10 @@ export function installPipeline(doc=document){
         const manifest=await json(`${ROOT}/resolve/${latest.revision}/tiles/v2/${tile}/tile.json`,512*1024);
         current=tileSource(manifest,latest,tile);shown=latest.revision;
         text('published-tiles','Checking');
-        void publishedTileCount(latest.revision).then(result=>{
+        if(journalTiles!==null){
+          text('published-tiles',count(journalTiles));
+          text('published-basis','Distinct 512 × 512 m v2 tiles the AWS worker\'s journal records as published, from its latest report.');
+        }else void publishedTileCount(latest.revision).then(result=>{
           if(shown!==latest.revision)return;
           text('published-tiles',(result.complete?'':'At least ')+count(result.count));
           text('published-basis',`Distinct 512 × 512 m v2 tile folders at publication ${latest.revision.slice(0,8)}. Legacy v1 packages and saved-world declarations are separate; folders are not a full integrity audit.`);
