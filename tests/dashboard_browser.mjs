@@ -245,7 +245,7 @@ try{
   await expect(page.locator('#mapnote')).toContainText('12 cells with surface detail');
   await expect(page.locator('#legend-source-label')).toHaveText('Awaiting detail');
   await capture('surface-detail');
-  await expect(page.locator('#detail-count')).toHaveText(/Detail:\s*none ~40\s*low ~10,043\s*high 0\s*hand 0/);
+  await expect(page.locator('#detail-count')).toHaveText(/Detail:\s*none ≈40\s*low ≈10,043\s*high 0\s*hand 0/);
   await page.locator('#layer-detail').click();
   await expect(page.locator('#layer-detail')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#legend-finished')).toBeHidden();

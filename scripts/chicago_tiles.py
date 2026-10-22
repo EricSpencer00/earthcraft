@@ -343,6 +343,29 @@ class Journal:
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
 
+    def retire_tiles(self,tiles,evidence,sha256,commit,now=None):
+        """Complete the open generation stages of tiles published another way (lake/v1 open water).
+
+        Pending, failed and expired stages become complete with the dataset file
+        that publishes the tile as evidence, so no lane leases them again. Live
+        leases and game_verify are left alone. Returns the number of tiles changed.
+        """
+        now=time.time() if now is None else now
+        tiles=list(dict.fromkeys(str(tile) for tile in tiles))
+        if not tiles:return 0
+        open_stage="stage IN (0,1,2) AND (state IN ('pending','failed') OR (state='running' AND expires<=?)) AND tile IN (SELECT tile FROM retiring)"
+        self._begin_immediate()
+        try:
+            self.db.execute('CREATE TEMP TABLE IF NOT EXISTS retiring(tile TEXT PRIMARY KEY)')
+            self.db.execute('DELETE FROM retiring')
+            self.db.executemany('INSERT OR IGNORE INTO retiring VALUES (?)',[(tile,) for tile in tiles])
+            changed=self.db.execute('SELECT COUNT(DISTINCT tile) FROM jobs WHERE '+open_stage,(now,)).fetchone()[0]
+            self.db.execute("UPDATE jobs SET state='complete',token=NULL,owner=NULL,expires=NULL,not_before=0,"
+                            "evidence=?,evidence_sha256=?,evidence_commit=? WHERE "+open_stage,(evidence,sha256,commit,now))
+            self.db.execute('DELETE FROM retiring')
+            self.db.execute('COMMIT');return changed
+        except Exception:self.db.execute('ROLLBACK');raise
+
     def finish_remote(self,job,stage,path_in_repo,raw,commit,now=None):
         """Complete one leased stage with a receipt that is verified on the Hub.
 

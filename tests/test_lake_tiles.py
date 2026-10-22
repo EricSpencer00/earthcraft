@@ -58,6 +58,25 @@ class LakeTileTests(unittest.TestCase):
             self.assertEqual(chunk_digest(first), chunk_digest(second))
             self.assertEqual(bed, [20, 20])
 
+    def test_only_features_above_the_water_keep_a_tile_out(self):
+        self.assertFalse(lt.submerged({'man_made': 'breakwater'}))
+        self.assertFalse(lt.submerged({'man_made': 'crib', 'seamark:type': 'light_minor'}))
+        self.assertFalse(lt.submerged({'source': 'bing'}))  # shoreline way
+        self.assertTrue(lt.submerged({'waterway': 'fairway'}))
+        self.assertTrue(lt.submerged({'seamark:type': 'cable_submarine'}))
+        self.assertTrue(lt.submerged({'man_made': 'pipeline', 'location': 'underwater'}))
+
+    def test_a_way_marks_every_tile_it_crosses(self):
+        to_lonlat = lt.Transformer.from_crs(FRAME['crs'], 'EPSG:4326', always_xy=True)
+
+        def point(x, z):
+            lon, lat = to_lonlat.transform(FRAME['west'] + x, FRAME['north'] - z)
+            return {'lon': lon, 'lat': lat}
+        pier = {'type': 'way', 'tags': {'man_made': 'pier'}, 'geometry': [point(100, 100), point(1900, 100)]}
+        cable = {'type': 'way', 'tags': {'seamark:type': 'cable_submarine'}, 'geometry': [point(100, 900), point(1900, 900)]}
+        light = {'type': 'node', 'tags': {'man_made': 'lighthouse'}, **point(-300, 2000)}
+        self.assertEqual(lt.touched(FRAME, [pier, cable, light]), {'0_0', '1_0', '2_0', '3_0', '-1_3'})
+
 
 if __name__ == '__main__':
     unittest.main()
