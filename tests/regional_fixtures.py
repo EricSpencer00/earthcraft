@@ -40,7 +40,11 @@ class FakeOpener:
         files = self.hub.repos[self.repo]['files']
         api = f'/api/datasets/{self.repo}/'
         if url.path.startswith(api + 'revision/'):
-            return _Response(json.dumps({'sha': self.hub.repos[self.repo]['sha']}).encode())
+            info = {'sha': self.hub.repos[self.repo]['sha']}
+            if ('expand[]', 'sha') not in urllib.parse.parse_qsl(url.query):
+                # Like the Hub: the full answer lists every file, megabytes for this dataset.
+                info['siblings'] = [{'rfilename': f'tiles/v2/{i}_0/tile.json'} for i in range(120000)]
+            return _Response(json.dumps(info).encode())
         if url.path.startswith(api + 'paths-info/'):
             form = urllib.parse.parse_qs(request.data.decode())
             items = []
