@@ -36,17 +36,22 @@ function detailLevel(index){
 const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
 let publishedTiles=null,freshTiles=null;
 function tileSet(cache,list){return cache?.list===list?cache:{list,set:new Set(list||[])};}
-// Lake Michigan cells (marked in publishedAtlas) are built in the browser from the lake/v1
-// bathymetry by dashboard/lake.mjs.
+// Lake Michigan open water (marked in publishedAtlas) is drawn as water; a lake cell without
+// a tiles/v2 package is built in the browser from the lake/v1 bathymetry by dashboard/lake.mjs.
 function isLake(index){return atlas?.records?.[index]?.lake===true;}
+function hasPackage(index){
+  const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
+  if(!tile||!Array.isArray(world?.v2_tiles))return false;
+  publishedTiles=tileSet(publishedTiles,world.v2_tiles);
+  return publishedTiles.set.has(tile[0]+'_'+tile[1]);
+}
 function blockSource(index){
   const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
   if(!tile||!/^[0-9a-f]{40}$/.test(world?.dataset_revision||''))return null;
   const id=tile[0]+'_'+tile[1],root=`${HF_DATASET}/resolve/${world.dataset_revision}`;
+  if(hasPackage(index))return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
   if(isLake(index))return {base:`${root}/lake/v1/`,layout:'lake'};
   if(!Array.isArray(world.v2_tiles))return null;
-  publishedTiles=tileSet(publishedTiles,world.v2_tiles);
-  if(publishedTiles.set.has(id))return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
   // Newer than the snapshot's commit: read it from main, which always has it.
   freshTiles=tileSet(freshTiles,world.fresh_tiles);
   return freshTiles.set.has(id)?{base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
@@ -61,7 +66,7 @@ function renderDetailCount(){
     const value=sampled?(detail.estimated_totals?.[level]?.estimate??0):(detail.counts?.[level]??0);
     const item=document.createElement('span'),swatch=document.createElement('i');
     swatch.className='lvl-'+level;swatch.setAttribute('aria-hidden','true');
-    item.append(swatch,level+' '+(sampled&&value?'~':'')+number(value));
+    item.append(swatch,level+' '+(sampled&&value?'≈':'')+number(value));
     parts.push(item);
   }
   box.replaceChildren(...parts);
@@ -758,7 +763,7 @@ function renderSelection(){
   const rows=[['Size',number(size)+' × '+number(size)+' m']];
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
-  if(isLake(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
+  if(isLake(selectedIndex)&&!hasPackage(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
   if(detail&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');

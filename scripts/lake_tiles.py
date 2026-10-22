@@ -2,10 +2,10 @@
 
     PYTHONPATH=scripts python scripts/lake_tiles.py crop --frame configs/world-frame.json \
         --tif michigan_lld.tif --bbox -215 -168 114 251 --out lake/
-    PYTHONPATH=scripts python scripts/lake_tiles.py select --frame configs/world-frame.json \
-        --plan-tiles plan-tiles.json --out lake/
+    PYTHONPATH=scripts python scripts/lake_tiles.py features --frame configs/world-frame.json --out lake/
+    PYTHONPATH=scripts python scripts/lake_tiles.py select --frame configs/world-frame.json --out lake/
     PYTHONPATH=scripts python scripts/lake_tiles.py index --frame configs/world-frame.json \
-        --templates templates/ --out lake/
+        --templates templates/ --out lake/ --jobs 8
     PYTHONPATH=scripts python scripts/lake_tiles.py materialize --frame configs/world-frame.json \
         --templates templates/ --out lake/ --tiles 24_-168 --region-dir region/
 
@@ -14,16 +14,21 @@ inputs (``lake/v1``): ``bathymetry.bin.gz`` + ``bathymetry.json`` (the NOAA grid
 cropped to the plan's box, gzipped int16 decimetres, ~0.7 MB) and ``index.json`` (every lake tile,
 with the SHA-256 of its decompressed chunks). The installer rebuilds a tile with
 ``materialize`` and checks that digest; the site builds the same chunks in the
-browser (dashboard/lake.mjs). One packed water tile is ~540 KB, so storing the
-5,934 tiles of the plan's box would take ~3.2 GB; the inputs take ~1 MB.
+browser (dashboard/lake.mjs). One packed water tile is ~540 KB, so storing every
+open-water tile of the plan's box would take ~15 GB; the inputs take ~2 MB.
 
 Bed: NOAA NCEI Great Lakes Bathymetry, Lake Michigan, 3 arc-second (public
 domain; metres relative to Low Water Datum 176.0 m), bilinear at each block
 centre: bed y = 60 + round(depth). The surface is y=60 (OSM ``ele=176`` with the
 frame's -116 m vertical offset), as in the shore water layer. Each column holds
 a two-block sand bed, water up to the surface and air above; beds below the
-world floor are clamped and counted. A tile is selected when the plan does not
-cover it and at least 95% of a 16 m grid over it is lake.
+world floor are clamped and counted. A tile is selected when at least 95% of a
+16 m grid over it is lake and no OpenStreetMap feature inside Lake Michigan
+touches it (``osm-features.json.gz``: piers, breakwaters, groynes, cribs,
+lighthouses, beaches, the shoreline; ODbL). Charted-only and underwater
+features (fairways, submarine cables, wrecks, bays) do not count. Plan tiles
+that are selected are open water: the regional pipeline retires them instead
+of building them (Journal.retire_tiles).
 """
 import argparse
 import copy
@@ -31,6 +36,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 
 import nbtlib as n
@@ -53,6 +59,17 @@ SOURCE = {'name': 'NOAA NCEI Great Lakes Bathymetry, Lake Michigan (3 arc-second
           'url': 'https://www.ngdc.noaa.gov/mgg/greatlakes/michigan.html',
           'license': 'U.S. Government public domain',
           'vertical_datum': 'Low Water Datum 176.0 m (IGLD 1985); values are metres, negative below datum'}
+OVERPASS = 'https://overpass-api.de/api/interpreter'
+OSM = {'name': 'OpenStreetMap features inside Lake Michigan (Overpass API)', 'url': OVERPASS,
+       'license': 'ODbL 1.0 (c) OpenStreetMap contributors'}
+FEATURE_QUERY = ('[out:json][timeout:300][maxsize:67108864];'
+                 'area["name"="Lake Michigan"]["natural"="water"]->.lake;'
+                 '(node(area.lake)({s},{w},{n},{e})[~"."~"."];way(area.lake)({s},{w},{n},{e}););out geom tags qt;')
+FEATURE_CAP = 64 * 2**20
+FEATURE_STEP = 64  # metres between points tested along a way
+SUBMERGED = {'waterway': {'fairway', 'flowline', 'link'}, 'natural': {'bay', 'water', 'shoal', 'strait'}}
+CHARTED = ('cable_submarine', 'pipeline_submarine', 'wreck', 'anchorage', 'restricted_area', 'fairway',
+           'sea_area', 'recommended_track', 'navigation_line', 'separation')
 
 
 class Bathymetry:
@@ -126,24 +143,86 @@ def crop(a):
     print(f'crop {grid.shape[1]} x {grid.shape[0]} cells, {(a.out / "bathymetry.bin.gz").stat().st_size} bytes gzipped')
 
 
+def features(a):
+    """Fetch the OSM features inside Lake Michigan over the crop (one Overpass query)."""
+    import urllib.parse
+    import urllib.request
+    header = json.loads((a.out / 'bathymetry.json').read_text())
+    w, n = header['west'], header['north']
+    e, s = w + header['width'] * header['step_deg'], n - header['height'] * header['step_deg']
+    query = FEATURE_QUERY.format(s=round(s, 4), w=round(w, 4), n=round(n, 4), e=round(e, 4))
+    request = urllib.request.Request(OVERPASS, urllib.parse.urlencode({'data': query}).encode(),
+                                     headers={'User-Agent': 'earthcraft-lake-tiles'})
+    with urllib.request.urlopen(request, timeout=400) as response:
+        raw = response.read(FEATURE_CAP + 1)
+    if len(raw) > FEATURE_CAP:
+        raise ValueError(f'Overpass answer exceeds {FEATURE_CAP} bytes')
+    data = json.loads(raw)
+    if not isinstance(data.get('elements'), list):
+        raise ValueError('Overpass answer has no elements: ' + raw[:200].decode(errors='replace'))
+    out = {'schema': 'earthcraft.lake-osm-features.v1', 'source': OSM, 'query': query, 'response': data}
+    (a.out / 'osm-features.json.gz').write_bytes(gzip.compress(json.dumps(out, separators=(',', ':')).encode(), 9, mtime=0))
+    print(f'{len(data["elements"])} OSM features, {(a.out / "osm-features.json.gz").stat().st_size} bytes gzipped')
+
+
+def submerged(tags):
+    """True for a feature with nothing above the water: charted lines and areas, underwater cables and pipes."""
+    if tags.get('location') in ('underwater', 'underground'):
+        return True
+    if 'man_made' in tags or 'building' in tags:
+        return False
+    if any(tags.get(key) in values for key, values in SUBMERGED.items()):
+        return True
+    return tags.get('seamark:type', '').startswith(CHARTED)
+
+
+def touched(frame, elements):
+    """Tile ids that any non-submerged feature touches; ways are tested every FEATURE_STEP metres."""
+    to_frame = Transformer.from_crs('EPSG:4326', frame['crs'], always_xy=True)
+    tiles = set()
+    for element in elements:
+        if submerged(element.get('tags') or {}):
+            continue
+        points = ([(element['lon'], element['lat'])] if element['type'] == 'node'
+                  else [(p['lon'], p['lat']) for p in element.get('geometry') or [] if p])
+        if not points:
+            continue
+        east, north = to_frame.transform(*map(np.asarray, zip(*points)))
+        x, z = np.atleast_1d(east - frame['west']), np.atleast_1d(frame['north'] - north)
+        xs, zs = [x[:1]], [z[:1]]
+        for i in range(1, len(x)):
+            steps = max(1, math.ceil(math.hypot(x[i] - x[i - 1], z[i] - z[i - 1]) / FEATURE_STEP))
+            t = np.arange(1, steps + 1) / steps
+            xs.append(x[i - 1] + (x[i] - x[i - 1]) * t)
+            zs.append(z[i - 1] + (z[i] - z[i - 1]) * t)
+        tx, tz = np.floor(np.concatenate(xs) / TILE).astype(int), np.floor(np.concatenate(zs) / TILE).astype(int)
+        tiles.update(f'{i}_{j}' for i, j in zip(tx.tolist(), tz.tolist()))
+    return tiles
+
+
 def select(a):
     frame = json.loads(a.frame.read_text())
     bathy = Bathymetry(a.out, frame)
-    plan = set(json.loads(a.plan_tiles.read_text()))
+    raw = (a.out / 'osm-features.json.gz').read_bytes()
+    blocked = touched(frame, json.loads(gzip.decompress(raw))['response']['elements'])
     x0, z0, x1, z1 = json.loads((a.out / 'bathymetry.json').read_text())['bbox_tiles']
     grid = np.arange(8, TILE, 16)
     gx, gz = np.meshgrid(grid, grid)
-    tiles = []
+    tiles, kept_out = [], 0
     for tz in range(z0, z1 + 1):
         for tx in range(x0, x1 + 1):
-            if f'{tx}_{tz}' in plan:
-                continue
             depth = bathy.sample(tx * TILE + gx, tz * TILE + gz)
-            if np.mean(np.nan_to_num(depth, nan=1.0) < 0) >= LAKE_FRACTION:
+            if np.mean(np.nan_to_num(depth, nan=1.0) < 0) < LAKE_FRACTION:
+                continue
+            if f'{tx}_{tz}' in blocked:
+                kept_out += 1
+            else:
                 tiles.append(f'{tx}_{tz}')
-    (a.out / 'selection.json').write_text(json.dumps({'tiles': tiles, 'lake_fraction': LAKE_FRACTION,
-                                                      'plan_tiles_excluded': len(plan)}))
-    print(f'{len(tiles)} lake tiles outside the plan')
+    (a.out / 'selection.json').write_text(json.dumps({
+        'tiles': tiles, 'lake_fraction': LAKE_FRACTION,
+        'osm_features': {'file': 'osm-features.json.gz', 'sha256': hashlib.sha256(raw).hexdigest(),
+                         'source': OSM, 'open_water_tiles_kept_out': kept_out}}))
+    print(f'{len(tiles)} open-water tiles; {kept_out} more touch an OSM feature and stay with the pipeline')
 
 
 def chunk_tag(sample, cx, cz, bed):
@@ -202,22 +281,51 @@ def template_sample(templates):
     return copy.deepcopy(sample)
 
 
+_worker = None
+
+
+def _index_start(folder, frame, templates):
+    global _worker
+    scratch = Path(folder) / f'index-{os.getpid()}'
+    scratch.mkdir(exist_ok=True)
+    _worker = (Bathymetry(folder, frame), template_sample(templates), scratch)
+
+
+def _index_tile(tile):
+    bathy, sample, scratch = _worker
+    raw, bed, clamped = region_bytes(bathy, sample, tile, scratch)
+    return tile, {'chunks_sha256': chunk_digest(raw), 'bed_y': bed, **({'clamped_columns': clamped} if clamped else {})}
+
+
 def index(a):
+    """Digest every selected tile; entries of an earlier index over the same bathymetry are kept, not rebuilt."""
+    import multiprocessing
+    import shutil
     frame = json.loads(a.frame.read_text())
-    bathy = Bathymetry(a.out, frame)
-    sample = template_sample(a.templates)
-    tiles = json.loads((a.out / 'selection.json').read_text())['tiles']
+    selection = json.loads((a.out / 'selection.json').read_text())
+    tiles = selection['tiles']
     header = json.loads((a.out / 'bathymetry.json').read_text())
     entries = {}
-    for i, tile in enumerate(tiles, 1):
-        raw, bed, clamped = region_bytes(bathy, sample, tile, a.out)
-        entries[tile] = {'chunks_sha256': chunk_digest(raw), 'bed_y': bed, **({'clamped_columns': clamped} if clamped else {})}
-        if i % 500 == 0:
-            print(f'{i}/{len(tiles)}', flush=True)
+    previous = a.out / 'index.json'
+    if previous.exists():
+        old = json.loads(previous.read_text())
+        if old.get('bathymetry', {}).get('bin_sha256') == header['bin_sha256']:
+            entries = {tile: old['tiles'][tile] for tile in tiles if tile in old['tiles']}
+    todo = [tile for tile in tiles if tile not in entries]
+    print(f'{len(entries)} tiles kept from the earlier index, {len(todo)} to build', flush=True)
+    with multiprocessing.get_context('spawn').Pool(a.jobs, _index_start, (str(a.out), frame, str(a.templates))) as pool:
+        for i, (tile, entry) in enumerate(pool.imap_unordered(_index_tile, todo, chunksize=8), 1):
+            entries[tile] = entry
+            if i % 500 == 0:
+                print(f'{i}/{len(todo)}', flush=True)
+    for scratch in a.out.glob('index-*'):
+        shutil.rmtree(scratch, ignore_errors=True)
+    entries = {tile: entries[tile] for tile in tiles}
     out = {'schema': SCHEMA, 'frame': {k: frame[k] for k in ('crs', 'west', 'north')}, 'projection': projection(frame),
            'surface_y': SURFACE_Y, 'surface_m': 176.0, 'bed_depth_blocks': BED_DEPTH, 'min_y': MIN_Y,
            'lake_fraction': LAKE_FRACTION, 'bathymetry': {'json': 'bathymetry.json', 'bin_sha256': header['bin_sha256'],
                                                            'source': header['source']},
+           'osm_features': selection.get('osm_features'),
            'generator': 'scripts/lake_tiles.py (materialize)', 'site_generator': 'dashboard/lake.mjs',
            'digest': 'chunks_sha256 = contributions.chunk_digest: SHA-256 of every decompressed chunk, slot by slot',
            'tiles': entries}
@@ -247,19 +355,20 @@ def materialize(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
-    for name in ('crop', 'select', 'index', 'materialize'):
+    commands = {'crop': crop, 'features': features, 'select': select, 'index': index, 'materialize': materialize}
+    for name in commands:
         s = sub.add_parser(name)
         s.add_argument('--frame', type=Path, required=True)
         s.add_argument('--out', type=Path, required=True, help='folder holding the lake inputs and index')
     sub.choices['crop'].add_argument('--tif', type=Path, required=True)
     sub.choices['crop'].add_argument('--bbox', type=int, nargs=4, required=True, metavar=('X0', 'Z0', 'X1', 'Z1'))
-    sub.choices['select'].add_argument('--plan-tiles', type=Path, required=True)
     for name in ('index', 'materialize'):
         sub.choices[name].add_argument('--templates', type=Path, required=True)
+    sub.choices['index'].add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     sub.choices['materialize'].add_argument('--tiles', nargs='+', required=True)
     sub.choices['materialize'].add_argument('--region-dir', type=Path, required=True)
     a = p.parse_args()
-    {'crop': crop, 'select': select, 'index': index, 'materialize': materialize}[a.command](a)
+    commands[a.command](a)
 
 
 if __name__ == '__main__':

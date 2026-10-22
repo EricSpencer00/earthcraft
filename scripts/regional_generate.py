@@ -71,6 +71,7 @@ EX_TEMPFAIL = 75  # the guard refused; the supervisor waits and retries
 STATUS_PATH = 'status/pipeline.json'  # optional host status, committed with a tile batch
 STATUS_INTERVAL = 900  # the status file carries the published-tile bitmap the map reads
 CONTROL_ALLOWANCE = 512 * MiB
+LAKE_INDEX = 'lake/v1/index.json'
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
 INDEX_PREFIX = 'sources/indexes'
@@ -772,6 +773,21 @@ class Worker:
                 'cook_catalog': self.control / 'cook2022' / 'catalog.json',
                 'will_catalog': self.control / 'will2021' / 'catalog.json'}
 
+    def retire_lake(self, journal):
+        """Open-water plan tiles are published as lake/v1 (built from bathymetry): never lease them."""
+        try:
+            commit = self.reader.head_revision()
+            expected = self.reader.info([LAKE_INDEX], commit).get(LAKE_INDEX)
+            if expected is None:
+                return
+            raw = self.reader.read(LAKE_INDEX, limit=32 * MiB, revision=commit, expected=expected)
+            tiles = [tile for tile in json.loads(raw)['tiles'] if tile in self.tiles]
+        except Exception as error:  # noqa: BLE001 - the queue still works without it, just slower
+            self.log(event='lake_index_unavailable', reason=str(error)[:300])
+            return
+        retired = journal.retire_tiles(tiles, LAKE_INDEX, hashlib.sha256(raw).hexdigest(), commit)
+        self.log(event='lake_tiles_retired', tiles=retired, lake_plan_tiles=len(tiles), commit=commit)
+
     def sweep(self, journal):
         """Remove scratch left by an earlier, interrupted attempt (never a live lease's)."""
         now = time.time()
@@ -991,6 +1007,7 @@ class Worker:
             batch = Batch(self, journal, keeper)
             try:
                 journal.requeue_owner_leases(self.worker_id)
+                self.retire_lake(journal)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
                        'footprints': a.footprints, **self.catalogs()}
