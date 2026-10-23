@@ -2,6 +2,17 @@
 
 These apply to every agent (Codex, Claude, scripts) working on Earthcraft.
 
+## Budget (2026-10-23)
+
+Earthcraft is Eric's separate personal project, not HorneSci. Its AWS spend is capped at **$35/month
+all in** (compute, disks, public IPv4), confirmed by Eric after a same-day pause note that set
+$10/month. The runner is the m5a.large spot `i-0f3b8770dfbc726a4` (us-west-2, max $0.040/h); the
+older t3a.micro `i-01ebb8cc2839b2d5d` stays stopped. Use free, keyless open data only.
+
+Preserve existing disks, snapshots, checkpoints and published Hugging Face data. For the persistent
+Spot request `sir-faiznjrj`, manual stop disables the request. Do not cancel a disabled request:
+AWS would terminate its stopped instance.
+
 ## One of everything
 
 - **One checkout:** `~/earthcraft` on the MacBook. Do not create clones, worktrees, or copies of this
