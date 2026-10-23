@@ -18,7 +18,7 @@ such tiles were generated on the retired drive but never installed).
 Generated tiles are never reported as installed; hf_install.py installs them
 into the save.
 
-  regional_generate.py --control runs/regional/control --frame FRAME [--lane base|scans]
+  regional_generate.py --control runs/regional/control --frame FRAME [--lane base|scans|quality]
       [--tiles ID,...] [--limit N] [--footprints] [--hf-python PATH]
   regional_generate.py --control ... --frame ... --status
   regional_generate.py --control ... --frame ... --seed-control     (archived plan, journal, catalogs)
@@ -61,7 +61,7 @@ from regional_cache import CacheCapacityError, Footprint, SourceCache
 from regional_scans import acquire, discover, frozen_get
 from regional_sources import validate as validate_sources
 from regional_store import region_hashes
-from regional_tiles import TILE_ID, TILE_SCHEMA, package_tile, receipt_bytes, tile_prefix
+from regional_tiles import TILE_ID, TILE_SCHEMA, package_tile, receipt_bytes, region_name, tile_prefix
 from verify_metric_world import verify
 from worker_lease import LeaseKeeper
 from world_templates import chunk_template, height_template
@@ -73,6 +73,7 @@ STATUS_INTERVAL = 900  # the status file carries the published-tile bitmap the m
 CONTROL_ALLOWANCE = 512 * MiB
 LAKE_INDEX = 'lake/v1/index.json'
 EMPTY_PAD = 16  # metres: a building just over the tile edge still sends the tile to the scans
+SPARSE_BUILDINGS = 25  # mapped footprints at or below which a tile skips the scan (LQ shells + trees)
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
 INDEX_PREFIX = 'sources/indexes'
@@ -761,19 +762,35 @@ def generate_tile(tile, job, root, ctx, phase=None):
     receipts['sources'] = json.loads((root / 'sources-receipt.json').read_text())
     phase.lap('sources')
     world, staging = root / 'world', root / 'world.building'
-    build(root / 'sources', staging, world_frame=frame)
-    checks = verify(staging)
-    staging.rename(world)
-    phase.lap('lq_build')
-    receipts['geometry'] = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass', 'world': str(world.resolve()),
-                            'quality': 'LQ', 'installed': False, 'world_manifest_sha256': sha(world / 'earthcraft.json'),
-                            'regions': region_hashes(world), 'checks': checks}
+    footprints = (json.loads((root / 'sources' / 'sources.json').read_text()).get('lq_footprint_receipt') or {}).get('count')
+    sparse = footprints is not None and footprints <= ctx.get('sparse_buildings', SPARSE_BUILDINGS)
+    # A scan of a published tile keeps its published LQ as the upgrade baseline: it is what saves have
+    # installed, and rebuilding it with newer code would neither match them nor be needed by the scan.
+    published = (published_lq(ctx['reader'], tile, world)
+                 if job['stages'] == ['appearance'] and not sparse and ctx.get('reader') is not None else None)
+    if published is not None:
+        receipts['geometry'] = published
+        phase.lap('lq_reused')
+    else:
+        build(root / 'sources', staging, world_frame=frame)
+        checks = verify(staging)
+        staging.rename(world)
+        phase.lap('lq_build')
+        receipts['geometry'] = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass', 'world': str(world.resolve()),
+                                'quality': 'LQ', 'installed': False, 'world_manifest_sha256': sha(world / 'earthcraft.json'),
+                                'regions': region_hashes(world), 'checks': checks}
     # The LQ world is delivered unless a measured world supersedes it. In the
     # scans lane that matters too: many tiles completed geometry on the retired
     # drive but were never installed or archived, and installing an LQ tile
     # only ever adds chunks that are absent.
     delivered, lq = world, None
-    if 'appearance' in job['stages']:
+    if 'appearance' in job['stages'] and sparse:
+        # A few farm buildings, or none: measured roofs add little; the LQ shells plus LiDAR trees are the tile.
+        receipts['appearance'] = {'tile': tile['id'], 'stage': 'appearance', 'result': 'pass', 'quality': 'LQ',
+                                  'scan_status': f'Sparse tile ({footprints} mapped footprints): LQ shells and LiDAR '
+                                                 'trees; scan skipped', 'footprints_in_tile': footprints, 'installed': False}
+        phase.lap('scan_select')
+    elif 'appearance' in job['stages']:
         try:
             county = select_pair(tile, frame, ctx['catalog'])
             pair = county
@@ -791,13 +808,48 @@ def generate_tile(tile, job, root, ctx, phase=None):
         except (DiskGuardError, IndexUnavailable):
             raise
         except Exception as error:  # noqa: BLE001 - a base tile still delivers its verified LQ
-            if job['lane'] == 'scans':
+            if job['lane'] == 'scans' or job['stages'] == ['appearance']:  # its LQ is already delivered
                 raise
             failures['appearance'] = error
     if ctx.get('trees') and delivered is not None:
         plant_trees(tile, frame, delivered, root, ctx, receipts, failures)
         phase.lap('trees')
     return receipts, failures, delivered, lq
+
+
+def published_lq(reader, tile, world):
+    """The tile's published LQ world (region and manifest) written to world, with its geometry receipt; None
+    when the tile is not published as LQ or anything fails to verify (the caller then builds it)."""
+    from region_pack import unpack
+    base = tile_prefix(tile['id'])
+    try:
+        info = reader.info([f'{base}/tile.json'])
+        if not info:
+            return None
+        manifest = json.loads(reader.read(f'{base}/tile.json', limit=4 * MiB, expected=info[f'{base}/tile.json']))
+        files = {item['role']: item for item in manifest.get('files', [])}
+        stage = manifest.get('stages', {}).get('geometry')
+        if manifest.get('quality') != 'LQ' or stage is None or 'region' not in files or 'world-manifest' not in files:
+            return None
+        region = files['region']
+        raw = reader.read(region['path'], limit=64 * MiB)
+        if region.get('decoded'):
+            raw = unpack(raw)
+            if hashlib.sha256(raw).hexdigest() != region['decoded']['sha256']:
+                return None
+        world_manifest = reader.read(files['world-manifest']['path'], limit=4 * MiB)
+        receipt_raw = reader.read(stage['receipt'], limit=MiB)
+        if hf_store.hash_bytes(receipt_raw).sha256 != stage['sha256']:
+            return None
+    except Exception:  # noqa: BLE001 - building the LQ instead is always correct, only slower
+        return None
+    (world / 'region').mkdir(parents=True, exist_ok=True)
+    atomic(world / 'region' / region_name(tile['id']), raw)
+    atomic(world / 'earthcraft.json', world_manifest)
+    receipt = json.loads(receipt_raw)
+    receipt.update(world=str(world.resolve()), world_manifest_sha256=sha(world / 'earthcraft.json'),
+                   reused_from=f'{base}/tile.json')
+    return receipt
 
 
 def plant_trees(tile, frame, delivered, root, ctx, receipts, failures):
@@ -908,6 +960,12 @@ class Worker:
             return
         retired = journal.retire_tiles(tiles, LAKE_INDEX, hashlib.sha256(raw).hexdigest(), commit)
         self.log(event='lake_tiles_retired', tiles=retired, lake_plan_tiles=len(tiles), commit=commit)
+
+    def reopen_empty_scans(self, journal):
+        """Appearance stages retired as 'no buildings' (before trees) become pending for the sparse path."""
+        reopened = journal.reopen_stage(2, evidence_suffix='#no-buildings')
+        if reopened:
+            self.log(event='empty_scans_reopened', tiles=reopened)
 
     def retire_empty_scans(self, journal, indexes):
         """A tile with no mapped building has nothing for the scan upgrade to add: its LQ is final."""
@@ -1149,11 +1207,14 @@ class Worker:
             try:
                 journal.requeue_owner_leases(self.worker_id)
                 self.retire_lake(journal)
-                if a.footprints:
+                if a.footprints and not a.trees:
                     self.retire_empty_scans(journal, indexes)
+                elif a.trees:  # an empty tile still has trees: it takes the sparse path (LQ + trees)
+                    self.reopen_empty_scans(journal)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
                        'footprints': a.footprints, 'trees': a.trees, 'scan_surfaces': a.scan_surfaces,
+                       'sparse_buildings': a.sparse_buildings, 'reader': self.reader,
                        **self.catalogs()}
                 if a.prefetch and a.scan_surfaces == 'county':  # ArcGrid strips: nothing to prefetch for EPT
                     self.prefetcher = Prefetcher(self, ctx)
@@ -1411,7 +1472,7 @@ def build_parser():
     parser.add_argument('--batch-tiles', type=int, default=6, help='tiles per commit (6)')
     parser.add_argument('--batch-seconds', type=float, default=1200, help='commit a partial batch after this (1200)')
     parser.add_argument('--watch-seconds', type=float, default=5)
-    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans'), default='base',
+    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans', 'quality'), default='base',
                         help="auto: LQ for the whole plan first, then scan upgrades; lq: sources+geometry only; "
                              "base: sources+geometry+appearance per tile; scans: appearance only")
     parser.add_argument('--worker-id', default='base-1')
@@ -1422,6 +1483,8 @@ def build_parser():
                              'east-west bands, band mod N); default EARTHCRAFT_SHARD or all tiles')
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
     parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
+    parser.add_argument('--sparse-buildings', type=int, default=SPARSE_BUILDINGS,
+                        help='tiles with at most this many mapped footprints skip the scan (default %(default)s)')
     parser.add_argument('--scan-surfaces', choices=('ept', 'county'), default='ept',
                         help='scan DTM/DSM from the newest USGS EPT survey (default) or county rasters')
     parser.add_argument('--nice', type=int, default=10, help='raise niceness by this much (default 10)')

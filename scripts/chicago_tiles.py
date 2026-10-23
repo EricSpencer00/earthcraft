@@ -306,20 +306,27 @@ class Journal:
         'lq' is base without appearance: sources and geometry only, so the
         fast verified LQ world covers the plan first and the slow scan upgrade
         is left pending for the scans lane. Lane 'scans' takes a tile whose sources and geometry are complete and leases
-        appearance alone. Failed or complete stages are never re-leased here;
+        appearance alone. Lane 'quality' takes the next tile by priority whose appearance is unfinished: its
+        open sources and geometry ride along when its LQ is not done yet, so finished tiles go nearest-first
+        and no tile waits for a lane change. Failed or complete stages are never re-leased here;
         game_verify is never claimed. Earlier receipts are checked as in claim();
         a lost legacy receipt (written on the retired external drive) is accepted
         because the pass regenerates every input it needs.
         """
         now=time.time() if now is None else now
         if not owner or not math.isfinite(now) or not 1<=lease_seconds<=3600:raise ValueError('Invalid worker lease')
-        if lane not in ('base','lq','scans'):raise ValueError('Unsupported tile lane')
-        anchor=2 if lane=='scans' else 0
+        if lane not in ('base','lq','scans','quality'):raise ValueError('Unsupported tile lane')
+        anchor=0 if lane in ('base','lq') else 2
         claimable="(state='pending' OR (state='running' AND expires<=?)) AND COALESCE(not_before,0)<=?"
         query=("SELECT * FROM jobs j WHERE j.stage=? AND (j.state='pending' OR (j.state='running' AND j.expires<=?)) "
-               "AND COALESCE(j.not_before,0)<=? "
-               "AND NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')")
+               "AND COALESCE(j.not_before,0)<=? ")
         params=[anchor,now,now]
+        if lane=='quality':  # earlier stages complete, or open for this lease (never failed or live elsewhere)
+            query+=("AND NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete' "
+                    "AND NOT ((p.state='pending' OR (p.state='running' AND p.expires<=?)) AND COALESCE(p.not_before,0)<=?))")
+            params+=[now,now]
+        else:
+            query+="AND NOT EXISTS (SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<j.stage AND p.state!='complete')"
         if tiles is not None:
             tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
             if not tiles:return None
@@ -331,16 +338,35 @@ class Journal:
         try:
             row=self.db.execute(query,params).fetchone();result=None
             if row:
-                prior=self._check_prior(row['tile'],anchor,legacy_ok=True)
-                later=[] if lane=='scans' else [r['stage'] for r in self.db.execute(
-                    'SELECT stage FROM jobs WHERE tile=? AND stage IN '+('(1)' if lane=='lq' else '(1,2)')+' AND '+claimable+' ORDER BY stage',
-                    (row['tile'],now,now))]
-                stages=[anchor,*later];token=uuid.uuid4().hex
+                if lane=='quality':
+                    opened=[r['stage'] for r in self.db.execute(
+                        'SELECT stage FROM jobs WHERE tile=? AND stage<2 AND '+claimable+' ORDER BY stage',(row['tile'],now,now))]
+                    prior=self._check_prior(row['tile'],opened[0] if opened else anchor,legacy_ok=True)
+                    stages=[*opened,anchor]
+                else:
+                    prior=self._check_prior(row['tile'],anchor,legacy_ok=True)
+                    later=[] if lane=='scans' else [r['stage'] for r in self.db.execute(
+                        'SELECT stage FROM jobs WHERE tile=? AND stage IN '+('(1)' if lane=='lq' else '(1,2)')+' AND '+claimable+' ORDER BY stage',
+                        (row['tile'],now,now))]
+                    stages=[anchor,*later]
+                token=uuid.uuid4().hex
                 for index in stages:
                     self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?",
                         (token,owner,now+lease_seconds,row['tile'],index))
                 result={'tile':row['tile'],'lane':lane,'token':token,'stages':[STAGES[i] for i in stages],'prior':prior}
             self.db.execute('COMMIT');return result
+        except Exception:self.db.execute('ROLLBACK');raise
+
+    def reopen_stage(self,stage,evidence_suffix):
+        """Return completed stages whose evidence ends with evidence_suffix to pending (e.g. scans retired as
+        'no buildings' once trees are wanted there). Running or failed stages are untouched. Returns the count."""
+        if not evidence_suffix or stage not in (0,1,2):raise ValueError('A completion reason and generation stage required')
+        self._begin_immediate()
+        try:
+            changed=self.db.execute("UPDATE jobs SET state='pending',evidence=NULL,evidence_sha256=NULL,evidence_commit=NULL,"
+                                    "not_before=0 WHERE stage=? AND state='complete' AND evidence LIKE ?",
+                                    (stage,'%'+evidence_suffix)).rowcount
+            self.db.execute('COMMIT');return changed
         except Exception:self.db.execute('ROLLBACK');raise
 
     def retire_tiles(self,tiles,evidence,sha256,commit,now=None,stages=(0,1,2)):
