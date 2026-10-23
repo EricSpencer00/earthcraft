@@ -363,8 +363,9 @@ class Journal:
         if not evidence_suffix or stage not in (0,1,2):raise ValueError('A completion reason and generation stage required')
         self._begin_immediate()
         try:
+            # A route rank kept from before the stage completed would jump it ahead of plan priority.
             changed=self.db.execute("UPDATE jobs SET state='pending',evidence=NULL,evidence_sha256=NULL,evidence_commit=NULL,"
-                                    "not_before=0 WHERE stage=? AND state='complete' AND evidence LIKE ?",
+                                    "not_before=0,route_rank=NULL,route_label=NULL WHERE stage=? AND state='complete' AND evidence LIKE ?",
                                     (stage,'%'+evidence_suffix)).rowcount
             self.db.execute('COMMIT');return changed
         except Exception:self.db.execute('ROLLBACK');raise
