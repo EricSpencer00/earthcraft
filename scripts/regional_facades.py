@@ -222,7 +222,7 @@ def recorded_walls(index, meta, lab):
             for label, v in votes.items()}
 
 
-def paint(tile, frame, world, sources, work, assessor=None):
+def paint(tile, frame, world, sources, work, assessor=None, surface=None, defer=False):
     """Facade detail into world/region in place. Returns the facade receipt."""
     from detail_apply import apply
     from material_router import texture_colors
@@ -233,7 +233,7 @@ def paint(tile, frame, world, sources, work, assessor=None):
     if not shapes:
         return {'result': 'no mapped buildings', 'buildings': 0}
     grid = tile_grid(tile, frame)
-    surface = tile_surface(world, grid, volume=True)
+    surface = surface if surface is not None else tile_surface(world, grid, volume=True)
     vol, names, ylo = surface['vol'], surface['names'], surface['ylo']
     solid = np.array([n.split('[', 1)[0] not in ('minecraft:air', 'minecraft:cave_air', 'minecraft:void_air')
                       for n in names])
@@ -242,7 +242,6 @@ def paint(tile, frame, world, sources, work, assessor=None):
     if cells is None:
         return {'result': 'no exposed walls', 'buildings': 0}
     current = np.asarray(names, dtype=object)[vol[cells['z'], cells['x'], cells['y'] - ylo]]
-    del vol
     recorded = recorded_walls(assessor, meta, lab) if assessor is not None else {}
     edits, buildings = plan(cells, shapes, surface['ground_y'], surface['top_y'], surface['surface_key'],
                             grid.x0, grid.z0, texture_colors(), recorded)
@@ -282,6 +281,9 @@ def paint(tile, frame, world, sources, work, assessor=None):
         return report
     guard = WriteGuard(work, CAP, FLOOR)
     layer.write(work / 'layer', guard, {'tile': tile['id']})
+    if defer:  # applied with the other passes' layers by the caller
+        report.update(_layer=str(work / 'layer'))
+        return report
     manifest = json.loads((world / 'earthcraft.json').read_text())
     receipt = apply(world / 'region', [work / 'layer'], work / 'region', guard, height=manifest['dimension_height'])
     name = f'r.{grid.x0 >> 9}.{grid.z0 >> 9}'

@@ -517,7 +517,7 @@ def measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_cata
                 if imagery.exists():imagery.rename(root/f'naip.incomplete-{time.time_ns()}')
                 imagery_acquire(Path(meta['dem_path']).parent,imagery,preferred_year=pair['year'])
             if not painted.exists():
-                imagery_result=paint_roofs(world,imagery,painted)
+                imagery_result=paint_roofs(world,imagery,painted,verified=True)  # verified just above
             else:
                 imagery_result=json.loads((painted/'roof-colour.json').read_text());verify(painted)
             world=painted;checks=json.loads((painted/'block-verification.json').read_text())
@@ -829,17 +829,62 @@ def generate_tile(tile, job, root, ctx, phase=None):
             if job['lane'] == 'scans' or job['stages'] == ['appearance']:  # its LQ is already delivered
                 raise
             failures['appearance'] = error
-    if ctx.get('trees') and delivered is not None:
-        plant_trees(tile, frame, delivered, root, ctx, receipts, failures)
-        phase.lap('trees')
-    if ctx.get('facades') and delivered is not None:
-        paint_facades(tile, frame, delivered, root, receipts, failures, ctx.get('indexes'))
-        phase.lap('facades')
+    if (ctx.get('trees') or ctx.get('facades')) and delivered is not None:
+        decorate(tile, frame, delivered, root, ctx, receipts, failures, phase)
     return receipts, failures, delivered, lq
 
 
-def paint_facades(tile, frame, delivered, root, receipts, failures, indexes=None):
-    """Keyless facade detail (floors, windows, door, wall material) into the delivered world."""
+def decorate(tile, frame, delivered, root, ctx, receipts, failures, phase):
+    """Trees and facades into the delivered world from one block window and one region rewrite.
+
+    Trees only fill air and facades only change exterior walls, so both layers apply together; the
+    region was read, re-encoded and verified once per pass before (about nine full parses a tile)."""
+    import regional_trees
+    from detail_apply import apply
+    from detail_guard import WriteGuard
+    grid = regional_trees.tile_grid(tile, frame)
+    surface = regional_trees.tile_surface(delivered, grid, volume=True)
+    reports = {}
+    if ctx.get('trees'):
+        reports['trees'] = plant_trees(tile, frame, delivered, root, ctx, failures, surface)
+        phase.lap('trees')
+    if ctx.get('facades'):
+        reports['facades'] = paint_facades(tile, frame, delivered, root, failures, ctx.get('indexes'), surface)
+        phase.lap('facades')
+    del surface
+    reports = {name: report for name, report in reports.items() if report is not None}
+    layers = [report.pop('_layer') for report in reports.values() if report.get('_layer')]
+    if layers:
+        manifest = json.loads((delivered / 'earthcraft.json').read_text())
+        work = root / 'decorate'
+        receipt = apply(delivered / 'region', layers, work / 'region', WriteGuard(work, 600 * MiB, 4 * GiB),
+                        height=manifest['dimension_height'], grow=True)
+        name = region_name(tile['id'])[:-len('.mca')]
+        applied = receipt['regions'].get(name, {})
+        if not applied.get('verified'):
+            failures['decorate'] = ValueError(f'{name}: decorated region did not verify')
+            return
+        os.replace(work / 'region' / f'{name}.mca', delivered / 'region' / f'{name}.mca')
+        kinds = applied.get('by_kind', {})
+        for key, report in reports.items():
+            prefix = 'tree_' if key == 'trees' else 'facade_'
+            report.update(blocks_applied=sum(v for k, v in kinds.items() if k.startswith(prefix)),
+                          region_before_sha256=applied.get('input_sha256'), region_after_sha256=applied.get('output_sha256'))
+        report_all = {'precondition_failed': applied.get('precondition_failed', 0), 'layers': len(layers)}
+        for report in reports.values():
+            report['apply'] = report_all
+        phase.lap('decorate_apply')
+    import regional_facades
+    if 'trees' in reports:
+        regional_trees.record(delivered, reports['trees'])
+    if 'facades' in reports:
+        regional_facades.record(delivered, reports['facades'])
+    if reports:
+        restamp(receipts, delivered, **reports)
+
+
+def paint_facades(tile, frame, delivered, root, failures, indexes=None, surface=None):
+    """Keyless facade layer (floors, windows, door, wall material) for the delivered world; None on failure."""
     import regional_facades
     try:
         assessor = None
@@ -848,14 +893,13 @@ def paint_facades(tile, frame, delivered, root, receipts, failures, indexes=None
                 assessor = indexes.ensure(regional_facades.ASSESSOR_INDEX)
             except IndexUnavailable:
                 pass
-        report = regional_facades.paint(tile, frame, delivered, root / 'sources', root / 'facades', assessor=assessor)
+        return regional_facades.paint(tile, frame, delivered, root / 'sources', root / 'facades', assessor=assessor,
+                                      surface=surface, defer=True)
     except DiskGuardError:
         raise
     except Exception as error:  # noqa: BLE001 - the tile still delivers without facade detail
         failures['facades'] = error
-        return
-    regional_facades.record(delivered, report)
-    restamp(receipts, delivered, facades=report)
+        return None
 
 
 def published_lq(reader, tile, world):
@@ -893,19 +937,18 @@ def published_lq(reader, tile, world):
     return receipt
 
 
-def plant_trees(tile, frame, delivered, root, ctx, receipts, failures):
-    """LiDAR trees into the delivered world; its receipt then names the planted region."""
+def plant_trees(tile, frame, delivered, root, ctx, failures, surface=None):
+    """LiDAR tree layer for the delivered world; None on failure."""
     import regional_trees
     try:
-        report = regional_trees.plant(tile, frame, delivered, root / 'trees', ctx.get('point_catalog'),
-                                      cache=ctx['cache_root'] / 'ept', points=root / 'scan-surfaces' / 'ept-points')
+        return regional_trees.plant(tile, frame, delivered, root / 'trees', ctx.get('point_catalog'),
+                                    cache=ctx['cache_root'] / 'ept', points=root / 'scan-surfaces' / 'ept-points',
+                                    surface=surface, defer=True)
     except DiskGuardError:
         raise
     except Exception as error:  # noqa: BLE001 - the tile still delivers without trees
         failures['trees'] = error
-        return
-    regional_trees.record(delivered, report)
-    restamp(receipts, delivered, trees=report)
+        return None
 
 
 def restamp(receipts, delivered, **extra):
