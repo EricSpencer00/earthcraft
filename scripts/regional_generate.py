@@ -55,7 +55,7 @@ from hf_store import DatasetReader, DiskGuardError, GiB, MiB, StoreClient, human
 from metric_way_index import MetricWayIndex
 from metric_world import build
 from municipal_generate import presentation_ways
-from region_expansion import atomic, sha
+from region_expansion import atomic, sha, sha_memo
 import regional_cache
 from regional_cache import CacheCapacityError, Footprint, SourceCache
 from regional_scans import acquire, discover, frozen_get
@@ -84,7 +84,7 @@ SEED_FILES = ('plan.json', 'jobs.sqlite', 'scans/catalog.json', 'point-surveys/c
               'will2021/catalog.json', 'metro.geojson', 'metro.geojson.receipt.json', 'kenosha.geojson',
               'kenosha.geojson.receipt.json')
 COVERAGE_SCHEMA = 'earthcraft.way-index-coverage.v1'
-ROUTE_VERSION = 1  # bump when locality_route() changes; workers re-rank pending tiles once
+ROUTE_VERSION = 2  # bump when the dispatch route changes; workers re-rank pending tiles once
 _SCAN_COVERAGES = {}
 
 
@@ -265,8 +265,13 @@ def locality_route(plan, frame, catalog, tile_ids):
     return route + sorted(rest, key=position.__getitem__), len(groups)
 
 
-def apply_locality_route(control, plan, frame, catalog, log=print):
-    """Rank pending tiles by locality_route() once per plan and scheduler version (idempotent)."""
+def apply_locality_route(control, plan, frame, catalog, log=print, scan_surfaces='ept'):
+    """Rank pending tiles once per plan and scheduler version (idempotent).
+
+    With EPT scan surfaces (the default) no tile shares a county strip, so the
+    route is the plan's own priority, nearest the origin first: every route rank
+    is cleared. County surfaces keep locality_route() so strip readers stay together.
+    """
     control = Path(control)
     marker = control / 'route-locality.json'
     plan_sha = digest(plan)
@@ -276,15 +281,22 @@ def apply_locality_route(control, plan, frame, catalog, log=print):
             return record
     journal = Journal(control / 'jobs.sqlite', plan)
     try:
-        pending = [row[0] for row in journal.db.execute(
-            "SELECT tile FROM jobs WHERE stage=0 AND state='pending' ORDER BY tile")]
         started = time.monotonic()
-        route, groups = locality_route(plan, frame, catalog, pending)
-        changed = journal.prioritize_tiles(route, 'locality-v%d' % ROUTE_VERSION,
-                                           stages=('sources', 'geometry', 'appearance')) if route else 0
+        if scan_surfaces == 'ept':
+            route, groups = [], 0
+            changed = journal.db.execute("UPDATE jobs SET route_rank=NULL,route_label=NULL "
+                                         "WHERE state='pending' AND route_rank IS NOT NULL").rowcount
+            journal.db.commit()
+        else:
+            pending = [row[0] for row in journal.db.execute(
+                "SELECT tile FROM jobs WHERE stage=0 AND state='pending' ORDER BY tile")]
+            route, groups = locality_route(plan, frame, catalog, pending)
+            changed = journal.prioritize_tiles(route, 'locality-v%d' % ROUTE_VERSION,
+                                               stages=('sources', 'geometry', 'appearance')) if route else 0
     finally:
         journal.close()
-    record = {'plan_sha256': plan_sha, 'version': ROUTE_VERSION, 'tiles': len(route), 'arcgrid_groups': groups,
+    record = {'plan_sha256': plan_sha, 'version': ROUTE_VERSION, 'route': 'plan priority' if scan_surfaces == 'ept'
+              else 'arcgrid locality', 'tiles': len(route), 'arcgrid_groups': groups,
               'rows_ranked': changed, 'seconds': round(time.monotonic() - started, 1), 'created_utc': utc_now()}
     atomic(marker, json.dumps(record).encode())
     log(json.dumps({'event': 'locality_route', **record}))
@@ -345,9 +357,12 @@ class Prefetcher:
 
 
 def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, cook_catalog=None, will_catalog=None,
-              footprint_index=None, phase=None):
+              footprint_index=None, phase=None, county_pair=None):
     """Measured appearance for one tile whose sources and LQ geometry are in root.
 
+    pair: a county raster pair, or an 'ept' pair (ept_surfaces) whose DTM/DSM and
+    building points all come from one USGS 3DEP survey; county_pair is the
+    fallback when that survey's ground disagrees with the LQ terrain.
     footprint_index: the Overture footprint sqlite used to associate
     unclassified returns with mapped buildings (None leaves it out).
     """
@@ -360,13 +375,38 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
         return {'tile': tile['id'], 'stage': 'appearance', 'result': 'pass',
             'scan_status': 'No usable paired county scan; retain LQ', 'quality': 'LQ', 'installed': False}
     source = root/'sources'
+    imagery = root/'naip-imagery'
+    naip = threading.Thread(target=prefetch_naip, args=(source, imagery, pair['year']), name='naip-prefetch', daemon=True)
+    naip.start()  # four slow service requests; they overlap surfaces, points and the build
+    try:
+        return measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_catalog, will_catalog,
+                             footprint_index, phase, county_pair, naip)
+    finally:
+        naip.join()  # never leave it writing into a tile scratch that is about to be removed
+
+
+def measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_catalog, will_catalog,
+                  footprint_index, phase, county_pair, naip):
+    """scan_tile's measured pass (surfaces, points, build, roof colour) once a pair is chosen."""
+    source = root/'sources'
     scan_source = root/'scan-sources'
     surfaces = root/'scan-surfaces'
     world = root/'world.scanned'
+    imagery = root/'naip-imagery'
     if not (scan_source/'sources.json').exists():
         with np.load(source/'rasters.npz') as rasters:
-            elevation, record = acquire(pair, json.loads((source/'sources.json').read_text()),
-                                         surfaces, rasters['elevation'])
+            grid = json.loads((source/'sources.json').read_text())
+            if pair.get('kind') == 'ept':
+                import ept_surfaces
+                try:
+                    elevation, record = ept_surfaces.acquire(pair, grid, surfaces, rasters['elevation'], point_cache, frame)
+                except ValueError:
+                    if county_pair is None:
+                        raise
+                    shutil.rmtree(surfaces)
+                    pair = county_pair
+            if pair.get('kind') != 'ept':
+                elevation, record = acquire(pair, grid, surfaces, rasters['elevation'])
             cover = rasters['cover'].copy()
         shutil.copytree(source, scan_source, ignore=shutil.ignore_patterns('._*'))
         np.savez_compressed(scan_source/'rasters.npz', elevation=elevation, cover=cover)
@@ -415,7 +455,10 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
                     accepted.append(record);attempts.append({'project':record['project'],'result':'acquired','building_points':record['building_points']})
                 except (ValueError,urllib.error.URLError,TimeoutError) as error:
                     attempts.append({'project':project,'result':'unavailable','reason':str(error)})
-            for survey in candidates(tile,frame,point_catalog):
+            surveys=candidates(tile,frame,point_catalog)
+            if pair.get('kind')=='ept':  # same survey as the surfaces: one epoch, nodes already cached
+                surveys=[survey for survey in surveys if survey['project']==pair['project']]
+            for survey in surveys:
                 point_root=root/'point-crops'/survey['project']
                 try:
                     if (point_root/'manifest.json').exists():
@@ -460,7 +503,8 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
     if meta.get('roof_source_cells',0):
         from naip_imagery import acquire as imagery_acquire
         from roof_color import apply as paint_roofs
-        imagery=root/'naip-imagery'; painted=root/'world.scan-roof-colour'
+        painted=root/'world.scan-roof-colour'
+        naip.join()
         try:
             if not (imagery/'imagery.json').exists():
                 if imagery.exists():imagery.rename(root/f'naip.incomplete-{time.time_ns()}')
@@ -479,6 +523,16 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
         'roof_source_cells': meta['roof_source_cells'], 'scan_source': pair,
         'checks': checks, 'facade_measured': False, 'raw_points_acquired': quality=='scan-points-and-roof',
         'point_survey_attempts': attempts, 'roof_appearance': imagery_result, 'installed': False}
+
+
+def prefetch_naip(source, imagery, year):
+    """Fetch the tile's NAIP roof imagery ahead of the roof-colour step; on failure that step retries."""
+    from naip_imagery import acquire
+    try:
+        if not (imagery/'imagery.json').exists():
+            acquire(source, imagery, preferred_year=year)
+    except Exception:  # noqa: BLE001 - the roof-colour step fetches again and records the reason
+        pass
 
 
 def point_only_tile(tile,frame,root,catalog,cache):
@@ -659,7 +713,7 @@ class IndexSet:
         local = self.ensure(FOOTPRINT_INDEX)
         if FOOTPRINT_INDEX not in self.open:
             record = json.loads(local.with_suffix('.json').read_text())
-            if sha(local) != record['sha256'] or record['crs'] != self.frame['crs']:
+            if sha_memo(local) != record['sha256'] or record['crs'] != self.frame['crs']:
                 raise ValueError('Regional footprint index differs from its receipt or frame')
             self.open[FOOTPRINT_INDEX] = local
         regional_cache.touch(local)
@@ -721,11 +775,16 @@ def generate_tile(tile, job, root, ctx, phase=None):
     delivered, lq = world, None
     if 'appearance' in job['stages']:
         try:
-            pair = select_pair(tile, frame, ctx['catalog'])
+            county = select_pair(tile, frame, ctx['catalog'])
+            pair = county
+            if ctx.get('scan_surfaces', 'ept') == 'ept':
+                import ept_surfaces
+                pair = ept_surfaces.pair_for(tile, frame, ctx['point_catalog']) or county
             footprint = ctx['indexes'].footprints() if ctx['footprints'] and pair is not None else None
             phase.lap('scan_select')
             receipt = scan_tile(tile, frame, root, pair, ctx['point_catalog'], ctx['cache_root'] / 'ept',
-                                ctx['cook_catalog'], ctx['will_catalog'], footprint_index=footprint, phase=phase)
+                                ctx['cook_catalog'], ctx['will_catalog'], footprint_index=footprint, phase=phase,
+                                county_pair=county if pair is not county else None)
             receipts['appearance'] = receipt
             if receipt.get('world'):
                 delivered, lq = Path(receipt['world']), world
@@ -745,7 +804,8 @@ def plant_trees(tile, frame, delivered, root, ctx, receipts, failures):
     """LiDAR trees into the delivered world; its receipt then names the planted region."""
     import regional_trees
     try:
-        report = regional_trees.plant(tile, frame, delivered, root / 'trees', ctx.get('point_catalog'))
+        report = regional_trees.plant(tile, frame, delivered, root / 'trees', ctx.get('point_catalog'),
+                                      cache=ctx['cache_root'] / 'ept', points=root / 'scan-surfaces' / 'ept-points')
     except DiskGuardError:
         raise
     except Exception as error:  # noqa: BLE001 - the tile still delivers without trees
@@ -1093,8 +1153,9 @@ class Worker:
                     self.retire_empty_scans(journal, indexes)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
-                       'footprints': a.footprints, 'trees': a.trees, **self.catalogs()}
-                if a.prefetch:
+                       'footprints': a.footprints, 'trees': a.trees, 'scan_surfaces': a.scan_surfaces,
+                       **self.catalogs()}
+                if a.prefetch and a.scan_surfaces == 'county':  # ArcGrid strips: nothing to prefetch for EPT
                     self.prefetcher = Prefetcher(self, ctx)
                 processed = consecutive = deferred_run = 0
                 outcomes = {}
@@ -1361,6 +1422,8 @@ def build_parser():
                              'east-west bands, band mod N); default EARTHCRAFT_SHARD or all tiles')
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
     parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
+    parser.add_argument('--scan-surfaces', choices=('ept', 'county'), default='ept',
+                        help='scan DTM/DSM from the newest USGS EPT survey (default) or county rasters')
     parser.add_argument('--nice', type=int, default=10, help='raise niceness by this much (default 10)')
     parser.add_argument('--no-wait', action='store_true', help='exit instead of pausing when the guard refuses')
     parser.add_argument('--no-adopt', action='store_true')
@@ -1396,7 +1459,7 @@ def main(argv=None):
         plan = json.loads((control / 'plan.json').read_text())
         scans = control / 'scans' / 'catalog.json'
         catalog = localize(json.loads(scans.read_text()), args.scratch.resolve() / 'cache') if scans.exists() else {'sources': []}
-        apply_locality_route(control, plan, plan['frame'], catalog)
+        apply_locality_route(control, plan, plan['frame'], catalog, scan_surfaces=args.scan_surfaces)
         return 0
     if args.prepare:
         return prepare(args)

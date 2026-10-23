@@ -12,6 +12,7 @@ import sqlite3
 
 import osmium
 from pyproj import CRS,Transformer
+from region_expansion import sha_memo
 
 
 def sha(path):
@@ -79,7 +80,7 @@ class MetricWayIndex:
     def __init__(self,path,source,crs,*,dataset_path=None):
         self.path=Path(path).resolve();self.dataset_path=dataset_path
         receipt=json.loads(self.path.with_suffix('.json').read_text())
-        if sha(self.path)!=receipt['index_sha256']:raise ValueError('Frozen OSM index changed')
+        if sha_memo(self.path)!=receipt['index_sha256']:raise ValueError('Frozen OSM index changed')
         self.index_sha256=receipt['index_sha256']
         self.db=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True)
         try:

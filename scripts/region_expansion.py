@@ -27,6 +27,24 @@ def sha(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def sha_memo(path):
+    """sha(path), remembered beside the file by its identity (device, inode, size, mtime, ctime):
+    a multi-GB index is hashed once, not at every worker start. Any change re-hashes it."""
+    path = Path(path)
+    stat = path.stat()
+    identity = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+    memo = path.with_name(path.name + '.sha256.json')
+    try:
+        record = json.loads(memo.read_text())
+        if record.get('identity') == identity:
+            return record['sha256']
+    except (OSError, ValueError):
+        pass
+    digest = sha(path)
+    atomic(memo, json.dumps({'identity': identity, 'sha256': digest}).encode())
+    return digest
+
+
 def records(raw):
     """Read compressed Anvil records without decompressing the block volume."""
     if not raw:

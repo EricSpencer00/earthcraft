@@ -48,6 +48,28 @@ the LQ lane is CPU-bound; network and upload are minor.
   strip (route_locality already exists), a larger cache (disk is 33 GiB free), and
   fewer scan workers (2) than LQ workers so strips are not refused.
 
+## EPT scan surfaces (2026-10-23)
+
+The county scan read 0.8–1.2 GB ISGS ArcGrid strips (and 3 GB county LAS members) per tile from a
+single host, `clearinghouse.isgs.illinois.edu`, which also went down for hours. Those rasters are
+derived from the same airborne LiDAR that USGS publishes as EPT in the runner's own region. A scan
+now crops the newest classified EPT survey once (~30 MB of LAZ, cached per node) and derives both
+surfaces from it (`ept_surfaces.py`: DTM from ground returns, DSM from non-vegetation returns), takes
+building points from the same survey, and plants trees from the same crop. County rasters remain
+the fallback where no EPT survey exists or its ground disagrees with the LQ terrain.
+
+Measured on the m5a.large spot (2 vCPU), Elmhurst tiles, 2 scan workers running alongside:
+
+| Step | Before | Now |
+| --- | --- | --- |
+| Scan tile, `scan-points-and-roof` | median 2,008 s (county) | 54–92 s warm, 158 s first tile |
+| Trees | 50–57 s (own crop, region read block by block) | 14–22 s (shared crop, palette-mapped read) |
+| Roof colour (NAIP) | 39–51 s, after the build | 10–39 s, prefetched during the build |
+| Index hashing per worker start | ~37 s (3.4 GB + 2.9 GB) | once per file identity (`sha_memo`) |
+
+Also: dispatch follows plan priority (nearest the origin first; route v2) instead of putting every
+Kendall then Will ArcGrid tile first, and the ArcGrid prefetcher only runs with county surfaces.
+
 ## Work that is never queued
 
 - **Open water.** Plan tiles listed in `lake/v1/index.json` are built from bathymetry, so workers
