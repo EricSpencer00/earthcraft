@@ -52,6 +52,14 @@ class QualityLaneTests(unittest.TestCase):
         self.assertEqual((state['0_0'], state['1_0']), ('pending', 'complete'))
         self.assertEqual(self.journal.reopen_stage(2, '#no-buildings'), 0)
 
+    def test_reopened_stage_drops_an_old_route_rank(self):
+        self.journal.prioritize_tiles(['3_0'], 'locality-v1', stages=('sources', 'geometry', 'appearance'))
+        complete(self.journal, '3_0', (0, 1));complete(self.journal, '3_0', (2,), 'f.sqlite#no-buildings')
+        complete(self.journal, '0_0', (0, 1))
+        self.journal.reopen_stage(2, '#no-buildings')
+        job = self.journal.claim_tile('w', 'quality', now=1)
+        self.assertEqual(job['tile'], '0_0')  # plan priority, not the stale locality rank of 3_0
+
 
 class FakeReader:
     def __init__(self, files):

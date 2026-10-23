@@ -85,7 +85,8 @@ SEED_FILES = ('plan.json', 'jobs.sqlite', 'scans/catalog.json', 'point-surveys/c
               'will2021/catalog.json', 'metro.geojson', 'metro.geojson.receipt.json', 'kenosha.geojson',
               'kenosha.geojson.receipt.json')
 COVERAGE_SCHEMA = 'earthcraft.way-index-coverage.v1'
-ROUTE_VERSION = 2  # bump when the dispatch route changes; workers re-rank pending tiles once
+ROUTE_VERSION = 3  # bump when the dispatch route changes; workers re-rank pending tiles once
+# 3: also clears the locality ranks that tiles reopened by reopen_stage carried back from before v2
 _SCAN_COVERAGES = {}
 
 
