@@ -73,6 +73,8 @@ def worker_command(args, owner):
         command += ['--hf-python', str(args.hf_python)]
     if args.footprints:
         command.append('--footprints')
+    if args.trees:
+        command.append('--trees')
     if args.shard:
         command += ['--shard', '%d/%d' % args.shard]
     return low_priority(command + ['--nice', '0'], args.qos)
@@ -145,6 +147,8 @@ def ensure(args):
             command += ['--hf-python', str(args.hf_python)]
         if args.footprints:
             command.append('--footprints')
+        if args.trees:
+            command.append('--trees')
         if args.shard:
             command += ['--shard', '%d/%d' % args.shard]
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.resolve()))
@@ -257,6 +261,7 @@ def build_parser():
                         help='i/N: this machine\'s deterministic share of the plan (default EARTHCRAFT_SHARD)')
     parser.add_argument('--hf-python', type=Path, default=None)
     parser.add_argument('--footprints', action='store_true')
+    parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
     parser.add_argument('--cache-cap', type=parse_size, default=12 * GiB)
     parser.add_argument('--footprint-cap', type=parse_size, default=25 * GiB)
     parser.add_argument('--min-free', type=parse_size, default=40 * GiB)

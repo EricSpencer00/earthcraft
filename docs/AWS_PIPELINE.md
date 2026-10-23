@@ -11,7 +11,8 @@ MacBook coordinates it with the AWS CLI and ssh only.
 | Item | Value |
 | --- | --- |
 | Region / AZ | us-west-2 (next to the public USGS LiDAR bucket), us-west-2d (cheapest m6a spot) |
-| Instance | m6a.large spot (2 vCPU, 8 GB), persistent request, interruption behaviour `stop` |
+| Instance | m5a.large spot (2 vCPU, 8 GB), max price $0.040/h, persistent request, interruption behaviour `stop` |
+| Work | `EARTHCRAFT_LANE=scans`, 2 workers: scan upgrades with LiDAR trees, nearest the plan origin first |
 | Disk | 60 GB gp3 root, deleted with the instance |
 | Image | Ubuntu 24.04 LTS x86_64 |
 | Access | security group `earthcraft-pipeline`: SSH from the coordinator's IP only; key pair `earthcraft-pipeline` |
@@ -19,7 +20,7 @@ MacBook coordinates it with the AWS CLI and ssh only.
 | Tags | `Project=earthcraft`, `Owner=EricSpencer00`, `Name=earthcraft-pipeline` |
 | Budget | `earthcraft-monthly`, $35, e-mail at 80% actual and 100% forecast |
 
-Approximate monthly cost: spot about $0.034/h x 730 h = $25, 60 GB gp3 = $4.80,
+Approximate monthly cost (cap: $35 all in): spot about $0.030/h x 730 h = $22, 60 GB gp3 = $4.80,
 public IPv4 $3.65, egress to the Hub a few dollars at most (packages are a
 few MB per tile; data transfer out is $0.09/GB after the first 100 GB/month,
 which the account's free tier covers at the measured rate). Source reads from
