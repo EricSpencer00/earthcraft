@@ -40,14 +40,30 @@ def fetch(url, limit=96 * 2**20, attempts=3):
             time.sleep(2 ** attempt)
 
 
-def hierarchy_nodes(base, metadata, query, budget=4096):
+def getter(base, cache=None):
+    """(relative EPT path, byte limit) -> bytes. With a cache, read through the regional LAZ
+    cache ept_buildings fills (same local paths and receipts), so a node is downloaded once
+    per worker whichever crop asks first; its limits are the cache's (4 MiB JSON, 64 MiB LAZ)."""
+    if cache is None:
+        return lambda relative, limit: fetch(f'{base}/{relative}', limit)
+    from regional_scans import frozen_get
+    project = Path(cache) / base.rsplit('/', 1)[-1]
+
+    def get(relative, limit):
+        local = relative.replace('ept-hierarchy/', 'hierarchy/').replace('ept-data/', 'data/')
+        return frozen_get(f'{base}/{relative}', project / local, 64 * 2**20 if local.endswith('.laz') else 4 * 2**20)
+    return get
+
+
+def hierarchy_nodes(base, metadata, query, budget=4096, get=None):
+    get = get or getter(base)
     nodes, seen = {}, set()
 
     def walk(key):
         if key in seen or len(seen) > 64:
             raise ValueError('EPT hierarchy loop or excessive hierarchy pages')
         seen.add(key)
-        table = json.loads(fetch(f'{base}/ept-hierarchy/{key}.json', 16 * 2**20))
+        table = json.loads(get(f'ept-hierarchy/{key}.json', 16 * 2**20))
         for address, count in table.items():
             if not overlaps(node_bounds(metadata['bounds'], address), query):
                 continue
@@ -62,10 +78,11 @@ def hierarchy_nodes(base, metadata, query, budget=4096):
     return nodes, sorted(seen)
 
 
-def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_download=600 * 2**20):
+def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_download=600 * 2**20, cache=None):
     """Crop ``[west-halo, west+size+halo) x (north-size-halo, north+halo]`` in frame metres."""
     base = EPT_ROOT + project
-    metadata = json.loads(fetch(base + '/ept.json'))
+    get = getter(base, cache)
+    metadata = json.loads(get('ept.json', 96 * 2**20))
     if metadata['dataType'] != 'laszip' or metadata['hierarchyType'] != 'json':
         raise ValueError('Only LAZ/JSON EPT is supported')
     native = metadata['srs']['wkt']
@@ -74,13 +91,13 @@ def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_dow
     w, e, n, s = west - halo, west + size + halo, north + halo, north - size - halo
     xx, yy = forward.transform([w, e, w, e], [n, n, s, s])
     query = [min(xx) - 2, min(yy) - 2, max(xx) + 2, max(yy) + 2]
-    nodes, pages = hierarchy_nodes(base, metadata, query)
+    nodes, pages = hierarchy_nodes(base, metadata, query, get=get)
     receipts, parts, downloaded = [], [], 0
 
     def one(item):
         key, count = item
         url = f'{base}/ept-data/{key}.laz'
-        raw = fetch(url)
+        raw = get(f'ept-data/{key}.laz', 96 * 2**20)
         las = laspy.read(io.BytesIO(raw))
         if len(las.points) != count:
             raise ValueError(f'{key}: payload has {len(las.points)} points, hierarchy says {count}')

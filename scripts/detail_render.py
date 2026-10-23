@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from detail_anvil import ChunkVolume, block_name, read_region
+from detail_anvil import ChunkVolume, block_name, decode_states, read_region
 
 # Plains biome tints (vanilla colormap samples at temperature 0.8, downfall 0.4).
 GRASS_TINT = np.array([145, 189, 89]) / 255
@@ -164,12 +164,16 @@ def load_window(region_dir, bounds, ylo, yhi):
                 bx, bz = cx * 16, cz * 16
                 if bx + 16 <= x0 or bx >= x1 or bz + 16 <= z0 or bz >= z1:
                     continue
-                chunk = ChunkVolume(record['tag'])
+                sections = {int(s['Y']): s for s in record['tag']['sections']}
                 xs = slice(max(bx, x0), min(bx + 16, x1)); zs = slice(max(bz, z0), min(bz + 16, z1))
                 for sy in range(ylo >> 4, ((yhi - 1) >> 4) + 1):
-                    section = chunk.section(sy)
-                    ids = np.fromiter((keys.setdefault(k, len(keys)) for k in section), np.uint16, 4096)
-                    ids = ids.reshape(16, 16, 16)
+                    section = sections.get(sy)
+                    if section is None or 'block_states' not in section:
+                        continue  # absent section: air, already zero
+                    # Map the palette once, then index it: not one Python step per block.
+                    palette, values = decode_states(section['block_states'])
+                    lookup = np.fromiter((keys.setdefault(k, len(keys)) for k in palette), np.uint16, len(palette))
+                    ids = lookup[values].reshape(16, 16, 16)
                     lo, hi = max(sy * 16, ylo), min(sy * 16 + 16, yhi)
                     part = ids[lo - sy * 16:hi - sy * 16, zs.start - bz:zs.stop - bz, xs.start - bx:xs.stop - bx]
                     vol[zs.start - z0:zs.stop - z0, xs.start - x0:xs.stop - x0, lo - ylo:hi - ylo] = part.transpose(1, 2, 0)

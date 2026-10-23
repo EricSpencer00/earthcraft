@@ -81,8 +81,12 @@ def layer_for(trees, labels, chm, surface, grid, frame, project):
     return layer
 
 
-def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20):
-    """Plant LiDAR trees into world/region in place. Returns the tree receipt."""
+def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=None, points=None):
+    """Plant LiDAR trees into world/region in place. Returns the tree receipt.
+
+    points: an existing crop of the same survey (the scan surfaces'), reused as is;
+    cache: the regional EPT node cache, so a fresh crop downloads nothing twice.
+    """
     from detail_apply import apply
     from regional_point_catalog import candidates
     world, work = Path(world), Path(work)
@@ -91,9 +95,16 @@ def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20):
         return {'result': 'no classified survey over the tile', 'trees_admitted': 0}
     project = surveys[0]['project']
     guard = WriteGuard(work, TREE_CAP, TREE_FLOOR)
-    points = detail_points.crop(project, frame, tile['west'], tile['north'], tile['size'], 0, guard,
-                                work / 'points', max_download=max_download)
-    xyz, cls, _, _, intensity = detail_points.load(work / 'points')
+    shared = points is not None and (Path(points) / 'manifest.json').exists() and \
+        json.loads((Path(points) / 'manifest.json').read_text()).get('project') == project
+    if shared:
+        crop_dir = Path(points)
+        points = json.loads((crop_dir / 'manifest.json').read_text())
+    else:
+        crop_dir = work / 'points'
+        points = detail_points.crop(project, frame, tile['west'], tile['north'], tile['size'], 0, guard,
+                                    crop_dir, max_download=max_download, cache=cache)
+    xyz, cls, _, _, intensity = detail_points.load(crop_dir)
     grid = tile_grid(tile, frame)
     surface = tile_surface(world, grid)
     lr = lidar_rasters((xyz, cls, np.zeros(len(cls), np.uint16) if intensity is None else intensity), grid)
@@ -105,7 +116,8 @@ def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20):
     trees, rejected, labels, chm = tr.build_trees(lr, surface, surface['built'], paved, water, grid, accept)
     report = {'result': 'pass', 'survey': project, 'survey_year': surveys[0].get('year_from_project_name'),
               'points': points['cropped_points'], 'points_sha256': points['points_sha256'],
-              'downloaded_bytes': points['downloaded_bytes'], 'trees_admitted': len(trees),
+              'downloaded_bytes': 0 if shared else points['downloaded_bytes'], 'crop_shared_with_scan': shared,
+              'trees_admitted': len(trees),
               'candidate_tops': len(trees) + sum(rejected.values()), 'rejected': rejected,
               'shapes': {shape: sum(t['shape'] == shape for t in trees) for shape in sorted({t['shape'] for t in trees})},
               'height_m_percentiles': np.percentile([t['height'] for t in trees], [10, 50, 90]).round(1).tolist()
