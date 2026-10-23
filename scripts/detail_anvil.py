@@ -205,6 +205,19 @@ def encode_region(chunks):
     return bytes(header + body)
 
 
+_FLAGS = {}
+
+
+def _heightmap_flags(key):
+    """(solid, motion-blocking, leaves) of one block state key, memoised."""
+    flags = _FLAGS.get(key)
+    if flags is None:
+        name = block_name(key)
+        solid = name not in AIR_LIKE
+        flags = _FLAGS[key] = (solid, solid and name not in NON_BLOCKING, name.endswith('_leaves'))
+    return flags
+
+
 class ChunkVolume:
     """Lazy per-section decoded view of one chunk's block states."""
 
@@ -278,12 +291,13 @@ class ChunkVolume:
         ys = sorted(sy for sy, s in self.sections.items() if 'block_states' in s)
         tops = np.zeros((4, 16, 16), np.int64)
         for sy in reversed(ys):
-            keys = self.section(sy).reshape(16, 16, 16)
-            names = np.vectorize(block_name, otypes=[object])(keys)
-            solid = ~np.isin(names, list(AIR_LIKE))
-            blocking = solid & ~np.isin(names, list(NON_BLOCKING))
-            leaves = np.char.endswith(names.astype(str), '_leaves')
-            fluid = np.isin(names, list(FLUIDS))
+            # A section holds a handful of distinct states: classify those once (memoised across chunks),
+            # not each of its 4096 cells (block_name per cell was ~12 M calls a tile).
+            lookup = {}
+            codes = np.fromiter((lookup.setdefault(k, len(lookup)) for k in self.section(sy)), np.int32, 4096)
+            flags = np.array([_heightmap_flags(k) for k in lookup], bool)[codes].reshape(16, 16, 16, 3)
+            solid, blocking, leaves = flags[..., 0], flags[..., 1], flags[..., 2]
+            fluid = np.array([block_name(k) in FLUIDS for k in lookup], bool)[codes].reshape(16, 16, 16)
             rules = [solid, blocking, blocking & ~leaves, blocking & ~fluid]
             for i, mask in enumerate(rules):
                 any_y = mask.any(axis=0)

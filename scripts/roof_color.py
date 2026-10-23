@@ -51,7 +51,8 @@ def protected_roof_cells(world, selected, top, offset):
     return result, len(anchors)
 
 
-def apply(source_world, imagery, destination):
+def apply(source_world, imagery, destination, verified=False):
+    """verified: the caller verified source_world in this process just now (skip a second full pass)."""
     source_world, imagery, destination = map(Path, (source_world, imagery, destination))
     if destination.exists():
         raise FileExistsError(destination)
@@ -70,7 +71,8 @@ def apply(source_world, imagery, destination):
             owner = model['geometry_owner'] if 'geometry_owner' in model else model['owner']
             top = model['top'].astype(np.int32)
     else:
-        verify(source_world)
+        if not verified:
+            verify(source_world)
         with np.load(source_world/'roof-observations.npz', allow_pickle=False) as model:
             owner = model['mask'].astype(np.uint8)
         top = np.load(source_world/'top-heights.npy').astype(np.int32)

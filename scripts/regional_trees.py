@@ -84,11 +84,14 @@ def layer_for(trees, labels, chm, surface, grid, frame, project):
     return layer
 
 
-def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=None, points=None):
+def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=None, points=None,
+          surface=None, defer=False):
     """Plant LiDAR trees into world/region in place. Returns the tree receipt.
 
     points: an existing crop of the same survey (the scan surfaces'), reused as is;
     cache: the regional EPT node cache, so a fresh crop downloads nothing twice.
+    surface: the world's tile_surface when the caller already loaded it; defer: write the layer and return
+    it in the report ('_layer') for the caller to apply with others, instead of applying it here.
     """
     from detail_apply import apply
     from regional_point_catalog import candidates
@@ -114,7 +117,7 @@ def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=
     guard = WriteGuard(work, TREE_CAP, TREE_FLOOR)
     xyz, cls, _, _, intensity = detail_points.load(crop_dir)
     grid = tile_grid(tile, frame)
-    surface = tile_surface(world, grid)
+    surface = surface if surface is not None else tile_surface(world, grid)
     lr = lidar_rasters((xyz, cls, np.zeros(len(cls), np.uint16) if intensity is None else intensity), grid)
     del xyz
     base = np.vectorize(lambda key: key.split('[', 1)[0])(surface['surface_key'])
@@ -134,6 +137,9 @@ def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=
         return report
     layer = layer_for(trees, labels, chm, surface, grid, frame, project)
     layer.write(work / 'layer', guard, {'tile': tile['id']})
+    if defer:
+        report.update(edits_by_kind=layer.counts_by_kind(), _layer=str(work / 'layer'))
+        return report
     manifest = json.loads((world / 'earthcraft.json').read_text())
     receipt = apply(world / 'region', [work / 'layer'], work / 'region', guard,
                     height=manifest['dimension_height'], grow=True)
