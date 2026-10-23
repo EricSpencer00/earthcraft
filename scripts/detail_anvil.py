@@ -10,6 +10,7 @@ Packed long arrays follow the 1.16+ layout: entries never span two longs,
 palette has no ``data`` array, and heightmaps use ``ceil(log2(height + 1))``
 bits per column.
 """
+import copy
 import io
 import math
 import re
@@ -207,11 +208,14 @@ def encode_region(chunks):
 class ChunkVolume:
     """Lazy per-section decoded view of one chunk's block states."""
 
-    def __init__(self, tag, min_y=-64, height=None):
+    def __init__(self, tag, min_y=-64, height=None, grow=False):
+        """height: the dimension's block height (heightmap width). grow: create absent
+        sections inside it, for sparse worlds that store only occupied sections."""
         self.tag = tag
         self.sections = {int(s['Y']): s for s in tag['sections']}
         self.min_y = int(tag.get('yPos', min_y // 16)) * 16
         self.height = height
+        self.grow = grow and height is not None
         self._decoded = {}
         self.dirty = set()
 
@@ -231,10 +235,22 @@ class ChunkVolume:
     def set(self, x, y, z, key):
         sy = y >> 4
         if sy not in self.sections:
-            raise ValueError(f'Section {sy} absent from chunk; refusing to extend the world height')
+            if not self.grow or not self.min_y <= y < self.min_y + self.height:
+                raise ValueError(f'Section {sy} absent from chunk; refusing to extend the world height')
+            self.add_section(sy)
         data = self.section(sy)
         data[((y & 15) << 8) | ((z & 15) << 4) | (x & 15)] = key
         self.dirty.add(sy)
+
+    def add_section(self, sy):
+        """An all-air section; biomes copied from the nearest existing section."""
+        section = n.Compound({'Y': n.Byte(sy), 'block_states': encode_states(np.full(4096, AIR, dtype=object))})
+        biomed = [y for y, s in self.sections.items() if 'biomes' in s]
+        if biomed:
+            section['biomes'] = copy.deepcopy(self.sections[min(biomed, key=lambda y: abs(y - sy))]['biomes'])
+        self.tag['sections'] = n.List[n.Compound](sorted([*self.tag['sections'], section], key=lambda s: int(s['Y'])))
+        self.sections[sy] = section
+        self._decoded.pop(sy, None)
 
     def flush(self):
         """Re-encode dirty sections, refresh heightmaps, request relighting."""

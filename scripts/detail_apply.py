@@ -40,7 +40,7 @@ def refuse_save(path):
             raise PermissionError(f'{path} is inside a Minecraft save ({parent}); write to a copy elsewhere')
 
 
-def apply(regions, layers, out, guard):
+def apply(regions, layers, out, guard, height=None, grow=False):
     regions, out = Path(regions).resolve(), Path(out).resolve()
     if regions == out or regions in out.parents:
         raise PermissionError('Output must be a new directory outside the input region directory')
@@ -69,7 +69,7 @@ def apply(regions, layers, out, guard):
                 if record is None:
                     stats['missing_chunk'] += len(edits)
                     continue
-                volume = volumes.setdefault((cx, cz), ChunkVolume(record['tag']))
+                volume = volumes.setdefault((cx, cz), ChunkVolume(record['tag'], height=height, grow=grow))
                 for lx, y, lz, state, expect, src in edits:
                     current = volume.get(lx, y, lz)
                     ok = (block_name(current) in AIR_LIKE) if expect is None else (block_name(current) == block_name(expect))
@@ -92,7 +92,7 @@ def apply(regions, layers, out, guard):
             raise RuntimeError(f'{source} changed while it was being read; use a frozen copy')
         target = out / f'{name}.mca'
         guard.write_bytes(target, encode_region(chunks))
-        problems = verify_region(target, expected_chunks=set(chunks))
+        problems = verify_region(target, expected_chunks=set(chunks), height=height)
         if problems:
             raise ValueError(f'{target} failed verification: {problems[:5]}')
         stats.update({'chunks_changed': changed, 'input_sha256': before_hash, 'output_sha256': sha(target),
@@ -105,7 +105,7 @@ def apply(regions, layers, out, guard):
     return receipt
 
 
-def verify_region(path, expected_chunks=None, data_version=None):
+def verify_region(path, expected_chunks=None, data_version=None, height=None):
     """Structural 1.21.x checks: NBT parses, palettes/packed longs/heightmaps are consistent."""
     problems = []
     chunks = read_region(path)
@@ -122,7 +122,7 @@ def verify_region(path, expected_chunks=None, data_version=None):
         ys = [int(s['Y']) for s in tag['sections']]
         if len(ys) != len(set(ys)):
             problems.append(f'{where} duplicate section Y')
-        height = 16 * len([s for s in tag['sections'] if 'block_states' in s])
+        dimension = height or 16 * len([s for s in tag['sections'] if 'block_states' in s])
         for section in tag['sections']:
             if 'block_states' not in section:
                 continue
@@ -153,11 +153,11 @@ def verify_region(path, expected_chunks=None, data_version=None):
             for array in light:
                 if array is not None and len(array) != 2048:
                     problems.append(f'{where} light array length')
-        hbits = height.bit_length()
+        hbits = dimension.bit_length()
         for name, words in tag['Heightmaps'].items():
             if len(words) != math.ceil(256 / (64 // hbits)):
                 problems.append(f'{where} heightmap {name} length {len(words)}')
-            elif unpack(words, hbits, 256).max() > height:
+            elif unpack(words, hbits, 256).max() > dimension:
                 problems.append(f'{where} heightmap {name} above dimension')
     return problems
 

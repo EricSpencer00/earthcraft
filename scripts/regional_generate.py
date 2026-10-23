@@ -735,7 +735,27 @@ def generate_tile(tile, job, root, ctx, phase=None):
             if job['lane'] == 'scans':
                 raise
             failures['appearance'] = error
+    if ctx.get('trees') and delivered is not None:
+        plant_trees(tile, frame, delivered, root, ctx, receipts, failures)
+        phase.lap('trees')
     return receipts, failures, delivered, lq
+
+
+def plant_trees(tile, frame, delivered, root, ctx, receipts, failures):
+    """LiDAR trees into the delivered world; its receipt then names the planted region."""
+    import regional_trees
+    try:
+        report = regional_trees.plant(tile, frame, delivered, root / 'trees', ctx.get('point_catalog'))
+    except DiskGuardError:
+        raise
+    except Exception as error:  # noqa: BLE001 - the tile still delivers without trees
+        failures['trees'] = error
+        return
+    regional_trees.record(delivered, report)
+    stage = next(s for s in ('appearance', 'geometry')
+                 if receipts.get(s, {}).get('world') and Path(receipts[s]['world']).resolve() == delivered.resolve())
+    receipts[stage].update(regions=region_hashes(delivered), trees=report,
+                           world_manifest_sha256=sha(delivered / 'earthcraft.json'))
 
 
 class Worker:
@@ -1073,7 +1093,7 @@ class Worker:
                     self.retire_empty_scans(journal, indexes)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
-                       'footprints': a.footprints, **self.catalogs()}
+                       'footprints': a.footprints, 'trees': a.trees, **self.catalogs()}
                 if a.prefetch:
                     self.prefetcher = Prefetcher(self, ctx)
                 processed = consecutive = deferred_run = 0
@@ -1340,6 +1360,7 @@ def build_parser():
                         help='i/N: claim only this machine\'s deterministic share of the plan (4-tile '
                              'east-west bands, band mod N); default EARTHCRAFT_SHARD or all tiles')
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
+    parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
     parser.add_argument('--nice', type=int, default=10, help='raise niceness by this much (default 10)')
     parser.add_argument('--no-wait', action='store_true', help='exit instead of pausing when the guard refuses')
     parser.add_argument('--no-adopt', action='store_true')
