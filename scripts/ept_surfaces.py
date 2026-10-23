@@ -27,16 +27,92 @@ CROP_CAP = 700 * 2**20
 CROP_FLOOR = 4 * 2**30
 
 
+MIN_POINTS = 100_000  # returns a survey must have inside the tile: its bounding box can cover tiles it never flew
+
+
+def pair_of(survey):
+    return {'kind': 'ept', 'project': survey['project'], 'county': f"USGS 3DEP {survey['project']}",
+            'year': survey.get('year_from_project_name'),
+            'dtm': {'vertical_reference': 'EPT native vertical (NAVD88 metres for USGS 3DEP)'}}
+
+
 def pair_for(tile, frame, catalog):
     """The newest classified EPT survey over the tile, as a scan pair (None without one)."""
     from regional_point_catalog import candidates
     surveys = candidates(tile, frame, catalog) if catalog else []
-    if not surveys:
-        return None
-    survey = surveys[0]
-    return {'kind': 'ept', 'project': survey['project'], 'county': f"USGS 3DEP {survey['project']}",
-            'year': survey.get('year_from_project_name'),
-            'dtm': {'vertical_reference': 'EPT native vertical (NAVD88 metres for USGS 3DEP)'}}
+    return pair_of(surveys[0]) if surveys else None
+
+
+def select(tile, frame, catalog, destination, cache, min_points=MIN_POINTS):
+    """(pair, crop manifest) of the newest survey with returns in the tile, cropped once into
+    destination/'ept-points' for the surfaces, building points and trees; (None, None) without one.
+    A survey whose bounding box covers the tile but holds no returns there is skipped."""
+    import shutil
+    from regional_point_catalog import candidates
+    destination = Path(destination)
+    for survey in (candidates(tile, frame, catalog) if catalog else []):
+        trial = destination / ('ept-points.' + survey['project'])
+        if trial.exists():
+            shutil.rmtree(trial)
+        crop = detail_points.crop(survey['project'], frame, tile['west'], tile['north'], tile['size'], 0,
+                                  WriteGuard(destination, CROP_CAP, CROP_FLOOR), trial, cache=cache)
+        if crop['cropped_points'] >= min_points:
+            trial.rename(destination / 'ept-points')
+            return pair_of(survey), crop
+        shutil.rmtree(trial)
+    return None, None
+
+
+def building_cells(points, grid):
+    """Distinct 1 m cells holding a classified building return (class 6)."""
+    xyz, cls, _, _, _ = detail_points.load(points)
+    keep = cls == 6
+    col = np.floor(xyz[keep, 0] - grid['west']).astype(np.int64)
+    row = np.floor(grid['north'] - xyz[keep, 1]).astype(np.int64)
+    inside = (col >= 0) & (col < grid['size']) & (row >= 0) & (row < grid['size'])
+    return int(len(np.unique(row[inside] * grid['size'] + col[inside])))
+
+
+def building_points(points, grid, destination, dtm, valid, surface_context=None,
+                    ground_reference='paired LiDAR DTM'):
+    """ept_buildings.crop's output (same admission, schema and receipt) from the tile's existing crop,
+    so the scan does not download and decode every node a second time."""
+    from scan_envelope import admit
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    manifest = json.loads((Path(points) / 'manifest.json').read_text())
+    xyz, cls, _, _, _ = detail_points.load(points)
+    size = grid['size']
+    inside = ((xyz[:, 0] >= grid['west']) & (xyz[:, 0] < grid['west'] + size) &
+              (xyz[:, 1] > grid['north'] - size) & (xyz[:, 1] <= grid['north']))
+    ground = np.flatnonzero(inside & (cls == 2))
+    rows = np.floor(grid['north'] - xyz[ground, 1]).astype(int)
+    cols = np.floor(xyz[ground, 0] - grid['west']).astype(int)
+    selected = valid[rows, cols]
+    residual = xyz[ground, 2][selected] - dtm[rows, cols][selected]
+    if len(residual) < 20 or np.median(np.abs(residual)) > 2:
+        raise ValueError('EPT Z does not agree with the selected metre ground reference: ' + ground_reference)
+    building, classified, associated = admit(xyz, cls, grid, surface_context)
+    np.savez_compressed(destination / 'points.npz', xyz=xyz[building])
+    record = {'schema': 'earthcraft-classified-ept-building-crop-v1', 'project': manifest['project'],
+              'output_horizontal_crs': grid['crs'], 'grid': {k: grid[k] for k in ('crs', 'west', 'north', 'size')},
+              'points_sha256': sha(destination / 'points.npz'),
+              'assets': [{'key': n['key'], 'sha256': n['sha256'], 'points': n['points']} for n in manifest['node_receipts']],
+              'building_points': int(building.sum()), 'all_intersecting_octree_levels_acquired': True, 'downsampling': False,
+              'retained_classes': [1, 6] if surface_context is not None else [6],
+              'classified_class6_points': int(classified.sum()), 'associated_class1_points': int(associated.sum()),
+              'point_admission': 'Provider class 6; class 1 requires mapped building, paired DSM/DTM envelope and >2 m '
+                                 'ground clearance' if surface_context is not None else 'Provider class 6 only',
+              'vertical_reference': 'Original EPT Z; metre interpretation checked against ' + ground_reference,
+              'ground_reference': ground_reference, 'ground_comparison_points': int(len(residual)),
+              'median_absolute_ground_residual_m': float(np.median(np.abs(residual))),
+              'independent_accuracy_verified': False, 'facade_colour_measured': False,
+              'derived_from_crop': manifest['points_sha256']}
+    if surface_context is not None:
+        from scan_envelope import identity
+        record['association_context_sha256'] = identity(surface_context)
+    atomic(destination / 'manifest.json', json.dumps(record, indent=2).encode())
+    return record
 
 
 def rasters(xyz, cls, grid):
@@ -79,10 +155,12 @@ def acquire(pair, grid, destination, fallback, cache, frame):
     from rasterio.transform import from_origin
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    guard = WriteGuard(destination, CROP_CAP, CROP_FLOOR)
     points = destination / 'ept-points'
-    crop = detail_points.crop(pair['project'], frame, grid['west'], grid['north'], grid['size'], 0, guard, points,
-                              cache=cache)
+    if (points / 'manifest.json').exists() and json.loads((points / 'manifest.json').read_text())['project'] == pair['project']:
+        crop = json.loads((points / 'manifest.json').read_text())  # selected and cropped already (select)
+    else:
+        crop = detail_points.crop(pair['project'], frame, grid['west'], grid['north'], grid['size'], 0,
+                                  WriteGuard(destination, CROP_CAP, CROP_FLOOR), points, cache=cache)
     xyz, cls, _, _, _ = detail_points.load(points)
     dtm, dsm, ground = rasters(xyz, cls, grid)
     del xyz

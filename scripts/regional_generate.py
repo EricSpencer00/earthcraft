@@ -74,6 +74,7 @@ CONTROL_ALLOWANCE = 512 * MiB
 LAKE_INDEX = 'lake/v1/index.json'
 EMPTY_PAD = 16  # metres: a building just over the tile edge still sends the tile to the scans
 SPARSE_BUILDINGS = 25  # mapped footprints at or below which a tile skips the scan (LQ shells + trees)
+SPARSE_ROOF_CELLS = 4000  # ...and at most this many 1 m cells of LiDAR building returns (~25 houses)
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
 INDEX_PREFIX = 'sources/indexes'
@@ -467,6 +468,10 @@ def measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_cata
                         record=json.loads((point_root/'manifest.json').read_text())
                         if sha(point_root/'points.npz')!=record['points_sha256']:
                             raise ValueError('Original full-density crop changed')
+                    elif pair.get('kind')=='ept' and survey['project']==pair['project'] and (surfaces/'ept-points').exists():
+                        import ept_surfaces  # the surfaces' own crop: no second download or decode of every node
+                        record=ept_surfaces.building_points(surfaces/'ept-points',grid,point_root,arrays['dtm'],arrays['valid'],
+                                                            surface_context=context)
                     else:
                         record=crop(survey['project'],grid,point_root,point_cache,arrays['dtm'],arrays['valid'],surface_context=context)
                     with np.load(point_root/'points.npz') as observed_points: pieces.append(observed_points['xyz'].copy())
@@ -764,7 +769,19 @@ def generate_tile(tile, job, root, ctx, phase=None):
     phase.lap('sources')
     world, staging = root / 'world', root / 'world.building'
     footprints = (json.loads((root / 'sources' / 'sources.json').read_text()).get('lq_footprint_receipt') or {}).get('count')
-    sparse = footprints is not None and footprints <= ctx.get('sparse_buildings', SPARSE_BUILDINGS)
+    survey = lidar_roofs = None
+    if 'appearance' in job['stages'] and (ctx.get('scan_surfaces', 'ept') == 'ept' or ctx.get('trees')):
+        import ept_surfaces
+        (root / 'scan-surfaces').mkdir(exist_ok=True)
+        survey, crop = ept_surfaces.select(tile, frame, ctx.get('point_catalog'), root / 'scan-surfaces',
+                                           ctx['cache_root'] / 'ept')
+        if crop is not None:
+            lidar_roofs = ept_surfaces.building_cells(root / 'scan-surfaces' / 'ept-points',
+                                                      json.loads((root / 'sources' / 'sources.json').read_text()))
+        phase.lap('survey')
+    # Sparse: few mapped footprints, and the LiDAR agrees (a new subdivision can be missing from the maps).
+    sparse = (footprints is not None and footprints <= ctx.get('sparse_buildings', SPARSE_BUILDINGS) and
+              (lidar_roofs is None or lidar_roofs <= SPARSE_ROOF_CELLS))
     # A scan of a published tile keeps its published LQ as the upgrade baseline: it is what saves have
     # installed, and rebuilding it with newer code would neither match them nor be needed by the scan.
     published = (published_lq(ctx['reader'], tile, world)
@@ -788,16 +805,16 @@ def generate_tile(tile, job, root, ctx, phase=None):
     if 'appearance' in job['stages'] and sparse:
         # A few farm buildings, or none: measured roofs add little; the LQ shells plus LiDAR trees are the tile.
         receipts['appearance'] = {'tile': tile['id'], 'stage': 'appearance', 'result': 'pass', 'quality': 'LQ',
-                                  'scan_status': f'Sparse tile ({footprints} mapped footprints): LQ shells and LiDAR '
-                                                 'trees; scan skipped', 'footprints_in_tile': footprints, 'installed': False}
+                                  'scan_status': f'Sparse tile ({footprints} mapped footprints, {lidar_roofs} LiDAR '
+                                                 'building cells): LQ shells and LiDAR trees; scan skipped',
+                                  'footprints_in_tile': footprints, 'lidar_building_cells': lidar_roofs, 'installed': False}
         phase.lap('scan_select')
     elif 'appearance' in job['stages']:
         try:
             county = select_pair(tile, frame, ctx['catalog'])
             pair = county
             if ctx.get('scan_surfaces', 'ept') == 'ept':
-                import ept_surfaces
-                pair = ept_surfaces.pair_for(tile, frame, ctx['point_catalog']) or county
+                pair = survey or county
             footprint = ctx['indexes'].footprints() if ctx['footprints'] and pair is not None else None
             phase.lap('scan_select')
             receipt = scan_tile(tile, frame, root, pair, ctx['point_catalog'], ctx['cache_root'] / 'ept',
