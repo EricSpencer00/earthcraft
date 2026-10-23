@@ -4,6 +4,7 @@
 //   node scripts/qa_sample.mjs --count 24 --out runs/scratch/qa/<id> [--base URL] [--revision SHA]
 //        [--site URL] [--seed N] [--region X,Z] [--chromium PATH]
 //   node scripts/qa_sample.mjs --tiles 35_110,-3_4 --out runs/scratch/qa/<id>   (tiles/v2 packages)
+//        [--tiles-base URL/ (serves <id>/region/r.X.Z.mca) | --tiles-world]
 //
 // Without --site, dashboard/ is served from this checkout on a free local port. Writes
 // <out>/samples.json and three PNGs per sample (iso, top, street). Output is capped by
@@ -58,7 +59,9 @@ function pickTiles(ids){
   return ids.map((id,i)=>{
     const [x,z]=id.split('_').map(Number),lx=4+Math.floor(rand()*24),lz=4+Math.floor(rand()*24);
     return {tile:id,region:[x,z],chunk:[x*32+lx,z*32+lz],stratum:i%4,yaw:Math.round(rand()*360),
-      base:`${DATASET}${revision}/tiles/v2/${id}/region/`,layout:'flat-auto'};
+      // --tiles-base renders unpublished packages from a local Range server; --tiles-world the older world/ save.
+      base:args['tiles-world']?`${DATASET}${revision}/world/region/`:`${args['tiles-base']||`${DATASET}${revision}/tiles/v2/`}${id}/region/`,
+      layout:args['tiles-world']?'bucketed':'flat-auto'};
   });
 }
 
