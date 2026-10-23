@@ -70,6 +70,21 @@ Measured on the m5a.large spot (2 vCPU), Elmhurst tiles, 2 scan workers running 
 Also: dispatch follows plan priority (nearest the origin first; route v2) instead of putting every
 Kendall then Will ArcGrid tile first, and the ArcGrid prefetcher only runs with county surfaces.
 
+## Corner cuts (2026-10-23)
+
+* **Lane `quality`.** Claims the next tile by plan priority whose appearance is unfinished, leasing its
+  open LQ stages with it. The scans lane only takes tiles whose LQ is done, so the 16,606 tiles never
+  started would have waited for a lane change; now every tile goes straight to its final quality,
+  nearest the origin first.
+* **Sparse tiles.** A tile with at most 25 mapped footprints (`--sparse-buildings`) skips the scan:
+  LQ shells plus LiDAR trees (measured: 49 s vs ~150 s scanned).
+* **Empty tiles get trees.** With `--trees`, tiles with no building are no longer retired from the
+  appearance stage; those retired before (21,437) are reopened once and take the sparse path.
+* **Published LQ reused.** A scan-only lease downloads the tile's published LQ (region, manifest,
+  geometry receipt; hash-verified) as the upgrade baseline instead of rebuilding it: 1.8 s vs ~6 s,
+  and the baseline is exactly what saves installed.
+* Next: trees on heavy-canopy tiles (123 s for 1,114 trees on a rural tile) are the slowest step left.
+
 ## Work that is never queued
 
 - **Open water.** Plan tiles listed in `lake/v1/index.json` are built from bathymetry, so workers

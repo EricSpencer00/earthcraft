@@ -1,5 +1,16 @@
 # AWS pipeline host
 
+> **Intentional pause — 2026-10-23 UTC:** The user stopped paid generation and
+> set a **$10/month total recurring limit** for this personal project. Both
+> `i-01ebb8cc2839b2d5d` and `i-0f3b8770dfbc726a4` are to remain stopped. Do not
+> start, replace or launch generation without new explicit user authorization.
+> Both 60 GiB checkpoint disks are retained with `DeleteOnTermination=false`;
+> their $9.60/month plus snapshots exceeds the target. No data deletion is
+> authorized. The $35 budget and always-on plan below are historical, superseded
+> assumptions; the existing AWS budget is an alert, not a spending hard cap.
+> Do not cancel disabled Spot request `sir-faiznjrj`: AWS would terminate its
+> stopped instance. See [AWS Spot stop/cancellation behavior](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-spot-instances-request.html).
+
 One small always-on EC2 spot instance runs the regional generator
 ([Chicagoland scans](CHICAGOLAND_SCANS.md)) continuously and commits each batch of
 tiles straight to the public dataset under `tiles/v2/<tile>/`
@@ -12,8 +23,8 @@ MacBook coordinates it with the AWS CLI and ssh only.
 | --- | --- |
 | Region / AZ | us-west-2 (next to the public USGS LiDAR bucket), us-west-2d (cheapest m6a spot) |
 | Instance | m5a.large spot (2 vCPU, 8 GB), max price $0.040/h, persistent request, interruption behaviour `stop` |
-| Work | `EARTHCRAFT_LANE=scans`, 2 workers: scan upgrades with LiDAR trees, nearest the plan origin first |
-| Disk | 60 GB gp3 root, deleted with the instance |
+| Work | `EARTHCRAFT_LANE=quality`, 2 workers: every tile to its final quality (EPT scan, or LQ + trees when sparse), nearest the plan origin first |
+| Disk | 60 GiB gp3 roots on both retained hosts, `DeleteOnTermination=false` |
 | Image | Ubuntu 24.04 LTS x86_64 |
 | Access | security group `earthcraft-pipeline`: SSH from the coordinator's IP only; key pair `earthcraft-pipeline` |
 | Secrets | HF write token in SSM SecureString `/earthcraft/hf_token`; the instance role `earthcraft-pipeline` may only `ssm:GetParameter` it (and decrypt with the default `aws/ssm` key). It is read into the service's environment at start and never written to disk. |
@@ -102,7 +113,10 @@ fresh control directory is seeded from `archive/mini-worker-20260929/`
 The supervisor keeps its 45-day deadline in `control/supervisor-deadline.json`;
 remove that file to extend the run.
 
-## Tear down
+## Tear down (historical; not authorized during the pause)
+
+Do not execute this section under the current stop-and-preserve instruction.
+Cancellation of a disabled Spot request can terminate its stopped instance.
 
 Cancel the spot request first (otherwise it relaunches), then terminate:
 

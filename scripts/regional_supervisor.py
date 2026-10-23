@@ -102,6 +102,9 @@ def pending_work(control, lane, shard=None):
             query = "SELECT count(*) FROM jobs j WHERE stage=0 AND state IN ('pending','running')"
         elif lane == 'auto':
             return pending_work(control, 'base', shard) or pending_work(control, 'scans', shard)
+        elif lane == 'quality':  # an unfinished appearance whose earlier stages are not failed
+            query = ("SELECT count(*) FROM jobs j WHERE stage=2 AND state IN ('pending','running') AND NOT EXISTS "
+                     "(SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<2 AND p.state='failed')")
         else:
             query = ("SELECT count(*) FROM jobs j WHERE stage=2 AND state IN ('pending','running') AND NOT EXISTS "
                      "(SELECT 1 FROM jobs p WHERE p.tile=j.tile AND p.stage<2 AND p.state!='complete')")
@@ -254,7 +257,7 @@ def build_parser():
     parser.add_argument('--control', type=Path, default=ROOT / 'runs/regional/control')
     parser.add_argument('--frame', type=Path, required=True)
     parser.add_argument('--scratch', type=Path, default=ROOT / 'runs/scratch')
-    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans'), default='base')
+    parser.add_argument('--lane', choices=('auto', 'lq', 'base', 'scans', 'quality'), default='base')
     parser.add_argument('--workers', type=int, default=int(os.environ.get('EARTHCRAFT_WORKERS') or 1),
                         help='concurrent tile workers (default EARTHCRAFT_WORKERS or 1)')
     parser.add_argument('--shard', type=parse_shard, default=parse_shard(os.environ.get('EARTHCRAFT_SHARD')),
