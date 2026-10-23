@@ -24,7 +24,7 @@ import urllib.request
 PORTAL = 'https://datacatalog.cookcountyil.gov/resource/'
 CHARACTERISTICS, PARCELS = 'x54s-btds', 'pabr-t5kh'
 LICENSE = 'Cook County Open Data (datacatalog.cookcountyil.gov) terms of use; Cook County Assessor\'s Office'
-EXT_WALL = {'1': 'frame', '2': 'masonry', '3': 'frame_masonry', '4': 'stucco'}
+EXT_WALL = {'1': 'Frame', '2': 'Masonry', '3': 'Frame + Masonry', '4': 'Stucco'}  # the portal mostly returns the labels
 PAGE = 50_000
 MAX_BYTES = 400 * 2**20
 

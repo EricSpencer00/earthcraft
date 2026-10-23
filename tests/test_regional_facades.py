@@ -83,5 +83,16 @@ class RecordedWallTests(unittest.TestCase):
         self.assertEqual((buildings['osm/1']['wall_role'], buildings['osm/1']['floors_role']), ('tagged', 'tagged'))
 
 
+class AssessorLabelTests(unittest.TestCase):
+    def test_portal_labels_map_to_walls_and_storeys(self):
+        from unittest.mock import patch
+        lab = np.zeros((32, 32), np.int32);lab[4:12, 5:15] = 1
+        meta = {'west': 0.0, 'north': 32.0, 'size': 32}
+        rows = [(8.5, 24.5, 'Frame + Masonry', '1.5 Story'), (9.5, 24.5, 'Frame + Masonry', '2 Story'),
+                (10.5, 23.5, 'Masonry', '2 Story'), (30.5, 1.5, 'Stucco', '1 Story')]  # the last is outside
+        with patch('cook_assessor_index.walls', return_value=rows):
+            self.assertEqual(rf.recorded_walls('index', meta, lab), {1: ('frame_masonry', 2)})
+
+
 if __name__ == '__main__':
     unittest.main()

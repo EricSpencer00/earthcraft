@@ -52,7 +52,9 @@ RECORDED = {  # Cook County Assessor exterior wall -> plausible blocks (colour w
     'frame_masonry': ('minecraft:bricks', 'minecraft:birch_planks'),
     'stucco': ('minecraft:smooth_sandstone', 'minecraft:white_concrete', 'minecraft:white_terracotta'),
 }
-TYPE_FLOORS = {'1': 1, '2': 2, '3': 3, '4': 2, '5': 1, '6': 1, '7': 2}  # assessor residence type -> storeys
+# Assessor labels as the open data portal publishes them (counts in the 2024 index).
+WALL_LABELS = {'masonry': 'masonry', 'frame': 'frame', 'frame + masonry': 'frame_masonry', 'stucco': 'stucco'}
+TYPE_FLOORS = {'1 story': 1, '1.5 story': 1, '2 story': 2, '3 story +': 3, 'split level': 2}  # residence type -> storeys
 GLASS = {'house': 'minecraft:gray_stained_glass', 'mid': 'minecraft:gray_stained_glass',
          'tall': 'minecraft:light_blue_stained_glass'}
 ASSESSOR_LICENSE = "Cook County Open Data terms of use; Cook County Assessor's Office"
@@ -213,7 +215,8 @@ def recorded_walls(index, meta, lab):
     for x, y, wall, kind in cook_assessor_index.walls(index, meta):
         row, col = int(np.floor(meta['north'] - y)), int(np.floor(x - meta['west']))
         if 0 <= row < lab.shape[0] and 0 <= col < lab.shape[1] and lab[row, col] > 0:
-            votes.setdefault(int(lab[row, col]), []).append((wall, TYPE_FLOORS.get(str(kind))))
+            votes.setdefault(int(lab[row, col]), []).append((WALL_LABELS.get(str(wall).strip().lower()),
+                                                             TYPE_FLOORS.get(str(kind).strip().lower())))
     return {label: (Counter(w for w, _ in v if w).most_common(1)[0][0] if any(w for w, _ in v) else None,
                     Counter(f for _, f in v if f).most_common(1)[0][0] if any(f for _, f in v) else None)
             for label, v in votes.items()}
