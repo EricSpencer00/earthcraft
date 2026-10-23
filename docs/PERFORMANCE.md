@@ -93,6 +93,20 @@ Kendall then Will ArcGrid tile first, and the ArcGrid prefetcher only runs with 
   returns is scanned, not left as empty streets.
 * Next: trees on heavy-canopy tiles (123 s for 1,114 trees on a rural tile) are the slowest step left.
 
+## Runner profile (2026-10-23, m5a.large spot, 2 workers, live tiles)
+
+| Phase (median, scan tiles) | Before | After | What changed |
+| --- | --- | --- | --- |
+| Lidar crop (`survey`) | 117.5 s | 10.9 s | #77, #79: `SourceCache.admit` walked all ~100k cached files under the shared lock on every node (~250 a tile); a shared tally now decides, and evictions free down to 80% of the cap |
+| Trees | 29.4 s | 9.0 s | #78: one block window and one region rewrite for trees and facades |
+| Facades | 10.1 s | 1.5 s + 10 s shared apply | #78 |
+| Heightmaps | (inside apply) | | #78: each section's distinct states classified once, not 4096 cells |
+| Roof colour | 13.8 s | 8.0 s | #78: no second verify of the scan world |
+| **Tile** | **204 s (p90 398 s)** | **84 s (p90 108 s)** | about 35 -> 86 scan tiles an hour |
+
+Left: scan build ~15 s, shared apply ~10 s, building points ~10 s, LQ build ~7 s. The box is CPU-bound
+(both vCPUs busy), so a cut there is a cut in tile time. The cache cap is 30 GiB (`EARTHCRAFT_CACHE_GIB`).
+
 ## Work that is never queued
 
 - **Open water.** Plan tiles listed in `lake/v1/index.json` are built from bathymetry, so workers
