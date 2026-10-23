@@ -3,6 +3,8 @@
 //
 //   node scripts/qa_sample.mjs --count 24 --out runs/scratch/qa/<id> [--base URL] [--revision SHA]
 //        [--site URL] [--seed N] [--region X,Z] [--chromium PATH]
+//   node scripts/qa_sample.mjs --tiles 35_110,-3_4 --out runs/scratch/qa/<id>   (tiles/v2 packages)
+//        [--tiles-base URL/ (serves <id>/region/r.X.Z.mca) | --tiles-world]
 //
 // Without --site, dashboard/ is served from this checkout on a free local port. Writes
 // <out>/samples.json and three PNGs per sample (iso, top, street). Output is capped by
@@ -52,6 +54,17 @@ function pick(regions){
   return picks;
 }
 
+// --tiles: one sample per published tiles/v2 package (one region each, packed or not), away from its edge.
+function pickTiles(ids){
+  return ids.map((id,i)=>{
+    const [x,z]=id.split('_').map(Number),lx=4+Math.floor(rand()*24),lz=4+Math.floor(rand()*24);
+    return {tile:id,region:[x,z],chunk:[x*32+lx,z*32+lz],stratum:i%4,yaw:Math.round(rand()*360),
+      // --tiles-base renders unpublished packages from a local Range server; --tiles-world the older world/ save.
+      base:args['tiles-world']?`${DATASET}${revision}/world/region/`:`${args['tiles-base']||`${DATASET}${revision}/tiles/v2/`}${id}/region/`,
+      layout:args['tiles-world']?'bucketed':'flat-auto'};
+  });
+}
+
 async function bytesUnder(dir){
   let total=0;
   for(const name of await readdir(dir).catch(()=>[]))total+=(await stat(path.join(dir,name))).size;
@@ -83,9 +96,8 @@ const served=args.site?null:await serveDashboard();
 const site=args.site||served.url;
 const {chromium}=await import('@playwright/test').catch(()=>import('playwright'));
 await mkdir(out,{recursive:true});
-const index=await (await fetch(indexUrl)).json();
-const regions=index.regions.map(r=>({...r,chunks:present(r.chunk_bitmap).length}));
-const samples=pick(regions);
+const samples=args.tiles?pickTiles(args.tiles.split(',')):pick((await (await fetch(indexUrl)).json()).regions
+  .map(r=>({...r,chunks:present(r.chunk_bitmap).length})));
 const browser=await chromium.launch({args:['--use-angle=swiftshader','--enable-unsafe-swiftshader'],
   ...(args.chromium?{executablePath:args.chromium}:{})});
 const page=await browser.newPage({viewport:{width:960,height:640}});
@@ -94,7 +106,8 @@ for(const [i,sample] of samples.entries()){
   const entry={id:`s${String(i).padStart(3,'0')}`,...sample,images:{},status:'pending'};
   for(const view of views){
     guard(out,await bytesUnder(out));
-    const url=`${site}/blocks.html?qa=1&base=${encodeURIComponent(base)}&region=${sample.region}`+
+    const url=`${site}/blocks.html?qa=1&base=${encodeURIComponent(sample.base||base)}&region=${sample.region}`+
+      (sample.layout?`&layout=${sample.layout}`:'')+
       `&chunk=${sample.chunk}&radius=${view==='street'?2:3}&view=${view}&yaw=${sample.yaw}&w=960&h=640`;
     await page.goto(url);
     const state=await page.waitForFunction(()=>window.__earthcraftRender?.status!=='loading'&&window.__earthcraftRender,
