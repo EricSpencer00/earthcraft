@@ -100,7 +100,7 @@ class SourceCacheTests(unittest.TestCase):
     def test_least_recently_used_unit_is_evicted_first_and_whole(self):
         put(self.root / 'terrain' / 'old.png', 40 * KiB, 10)
         put(self.root / 'terrain' / 'old.json', 1 * KiB, 10)
-        put(self.root / 'terrain' / 'recent.png', 40 * KiB, 20)
+        put(self.root / 'terrain' / 'recent.png', 10 * KiB, 20)  # small enough that evicting old reaches low water
         self.cache.touch(self.root / 'terrain' / 'recent.png')  # stamped at clock 1000
         self.cache.admit(self.root / 'terrain' / 'new.png', 30 * KiB)
         self.assertFalse((self.root / 'terrain' / 'old.png').exists())
@@ -199,7 +199,7 @@ class GeneratorGuardTests(unittest.TestCase):
 
 
 class AdmitWalkTests(unittest.TestCase):
-    def test_admit_counts_every_file_only_near_the_cap(self):
+    def test_admit_walks_only_when_the_tally_reaches_the_cap(self):
         from unittest.mock import patch
         import regional_cache
         with tempfile.TemporaryDirectory() as folder:
@@ -211,13 +211,25 @@ class AdmitWalkTests(unittest.TestCase):
                 walks.append(Path(path))
                 return real(path)
             with patch('regional_cache.entry_bytes', counted):
-                for index in range(20):  # far from the cap: the tracked size, no walk per admit
+                for index in range(90):  # up to ~9 MiB of 10: the shared tally, no walk per admit
                     cache.admit(Path(folder) / 'cache' / 'ept' / f'n{index}.laz', 100 * 2**10)
                 far = sum(1 for p in walks if p == cache.root)
-                cache.admit(Path(folder) / 'cache' / 'ept' / 'big.laz', 15 * 2**19)  # 2 + 7.5 MiB > 0.9 x cap: walk
+                cache.admit(Path(folder) / 'cache' / 'ept' / 'big.laz', 2 * 2**20)  # would pass the cap: walk
                 near = sum(1 for p in walks if p == cache.root)
             self.assertLessEqual(far, 1)
             self.assertEqual(near, far + 1)
+
+    def test_an_eviction_frees_down_to_the_low_water_mark(self):
+        import regional_cache
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / 'cache'
+            cache = regional_cache.SourceCache(root, cap=10 * 2**20)
+            for index in range(9):
+                put(root / 'ept' / f'n{index}.laz', 2**20, 10 + index)
+            cache.admit(root / 'ept' / 'new.laz', 2 * 2**20)  # 9 + 2 > 10 MiB: evict to 80% minus the newcomer
+            left = sum(1 for index in range(9) if (root / 'ept' / f'n{index}.laz').exists())
+            self.assertLessEqual(left, 6)
+            self.assertFalse((root / 'ept' / 'n0.laz').exists())  # oldest first
 
 
 if __name__ == '__main__':

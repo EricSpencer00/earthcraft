@@ -48,7 +48,7 @@ DEFAULT_CACHE_CAP = 12 * GiB
 DEFAULT_FOOTPRINT_CAP = 25 * GiB
 DEFAULT_MIN_FREE = 40 * GiB
 STALE_STAGING_SECONDS = 24 * 3600
-NEAR_CAP = 0.9  # within this share of the cap, admit counts every file before evicting or refusing
+LOW_WATER = 0.8  # an eviction frees down to this share of the cap, so the admits after it stay cheap
 
 
 GRID_NAMESPACE = 'arcgrid'
@@ -438,10 +438,10 @@ class SourceCache:
                 used, walked = self.used(fresh=True), now
             else:
                 used, walked = row
-            if used + incoming > NEAR_CAP * self.cap and walked != now:
+            if used + incoming > self.cap and walked != now:  # the tally never under-counts: walk only to decide
                 used, walked = self.used(fresh=True), now
-            if used + incoming > self.cap:
-                used, walked = self._evict(used + incoming - self.cap, keep=unit), now  # _evict ends with a walk
+            if used + incoming > self.cap:  # free well below the cap at once, not one unit per admit
+                used = self._evict(used + incoming - int(LOW_WATER * self.cap), keep=unit)  # ends with a walk
             if used + incoming > self.cap:
                 raise CacheCapacityError(
                     f'Cache cap refuses {what}: {human(used)} pinned/in use + {human(incoming)} > cap '
