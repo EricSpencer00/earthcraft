@@ -129,8 +129,9 @@ def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_dow
     # Centimetre integers relative to the crop corner: compact and lossless at source scale (0.01 m).
     origin = np.array([w, s, 0.0])
     ints = np.rint((xyz - origin) * 100).astype(np.int32)
-    np.savez_compressed(buffer, xyz_cm=ints, origin=origin, cls=attrs[:, 0], ret=attrs[:, 1], nret=attrs[:, 2],
-                        intensity=intensity)
+    # Uncompressed: a crop is tile scratch, read twice and deleted with the tile; zlib cost ~14 s a tile.
+    np.savez(buffer, xyz_cm=ints, origin=origin, cls=attrs[:, 0], ret=attrs[:, 1], nret=attrs[:, 2],
+             intensity=intensity)
     points_path = guard.write_bytes(Path(out) / 'points.npz', buffer.getvalue())
     classes = {str(c): int(v) for c, v in zip(*np.unique(attrs[:, 0], return_counts=True))}
     manifest = {'schema': 'earthcraft.detail-points.v1', 'project': project, 'source': base,
