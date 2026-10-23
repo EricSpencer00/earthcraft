@@ -72,6 +72,7 @@ STATUS_PATH = 'status/pipeline.json'  # optional host status, committed with a t
 STATUS_INTERVAL = 900  # the status file carries the published-tile bitmap the map reads
 CONTROL_ALLOWANCE = 512 * MiB
 LAKE_INDEX = 'lake/v1/index.json'
+EMPTY_PAD = 16  # metres: a building just over the tile edge still sends the tile to the scans
 WAY_INDEXES = ('illinois-ways', 'indiana-ways', 'wisconsin-ways')  # first wins where state extracts overlap
 FOOTPRINT_INDEX = 'regional-footprints'
 INDEX_PREFIX = 'sources/indexes'
@@ -341,15 +342,17 @@ class Prefetcher:
 
 
 def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, cook_catalog=None, will_catalog=None,
-              footprint_index=None):
+              footprint_index=None, phase=None):
     """Measured appearance for one tile whose sources and LQ geometry are in root.
 
     footprint_index: the Overture footprint sqlite used to associate
     unclassified returns with mapped buildings (None leaves it out).
     """
+    phase = phase or Phases()
     if pair is None:
         if point_catalog is not None:
             result=point_only_tile(tile,frame,root,point_catalog,point_cache)
+            phase.lap('point_only')
             if result is not None:return result
         return {'tile': tile['id'], 'stage': 'appearance', 'result': 'pass',
             'scan_status': 'No usable paired county scan; retain LQ', 'quality': 'LQ', 'installed': False}
@@ -373,6 +376,7 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
             from regional_footprints import crop as footprint_crop
             meta['scan_footprint_receipt']=footprint_crop(footprint_index,meta,scan_source/'scan-footprints.geojson')
         atomic(scan_source/'sources.json', json.dumps(meta).encode())
+    phase.lap('scan_surfaces')
     quality = 'scan-roof'
     attempts = []
     grid=json.loads((scan_source/'sources.json').read_text())
@@ -438,6 +442,7 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
                 combined_meta=json.loads((build_source/'sources.json').read_text())
                 combined_meta['classified_point_receipt']=record
                 atomic(build_source/'sources.json',json.dumps(combined_meta).encode())
+    phase.lap('point_crops')
     # Determine point coverage first, then serialize the final geometry once.
     # The immutable LQ baseline is used only at installation, not read back here.
     if not world.exists():
@@ -446,6 +451,7 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
         build(build_source,staging,surface_source=surfaces,point_source=points,world_frame=frame)
         checks=verify(staging);staging.rename(world)
     else:checks=verify(world)
+    phase.lap('scan_build')
     meta=json.loads((world/'earthcraft.json').read_text())
     imagery_result = None
     if meta.get('roof_source_cells',0):
@@ -463,6 +469,7 @@ def scan_tile(tile, frame, root, pair, point_catalog=None, point_cache=None, coo
             world=painted;checks=json.loads((painted/'block-verification.json').read_text())
         except (ValueError, urllib.error.URLError, TimeoutError) as error:
             imagery_result={'result':'unavailable','reason':str(error)}
+        phase.lap('roof_colour')
     return {'tile': tile['id'], 'stage': 'appearance', 'result': 'pass', 'quality': quality,
         'world': str(world.resolve()), 'world_manifest_sha256': sha(world/'earthcraft.json'),
         'regions': {path.name: sha(path) for path in (world/'region').glob('r.*.*.mca')},
@@ -514,6 +521,31 @@ there is no current measured DSM to reject conflicting older structures.
                 'vertical_check_reference':'LQ terrain; absolute vertical datum unverified',
                 'prior_survey_attempts':attempts}
     return None
+
+
+class Phases:
+    """Seconds per phase of one tile: lap(name) charges the time since the previous lap to name."""
+
+    def __init__(self):
+        self.seconds, self.last = {}, time.monotonic()
+
+    def lap(self, name):
+        now = time.monotonic()
+        self.seconds[name] = round(self.seconds.get(name, 0) + now - self.last, 1)
+        self.last = now
+
+
+def empty_tiles(tiles, footprint_index, pad=EMPTY_PAD):
+    """Ids of the tiles (plan entries) that no footprint in the R-tree comes within pad metres of."""
+    import sqlite3
+    db = sqlite3.connect(f'file:{footprint_index}?mode=ro', uri=True)
+    try:
+        query = 'SELECT 1 FROM bounds WHERE maxx>=? AND minx<=? AND maxy>=? AND miny<=? LIMIT 1'
+        return [tile['id'] for tile in tiles
+                if db.execute(query, (tile['west'] - pad, tile['west'] + tile['size'] + pad,
+                                      tile['north'] - tile['size'] - pad, tile['north'] + pad)).fetchone() is None]
+    finally:
+        db.close()
 
 
 def update_elevation(path, array):
@@ -659,18 +691,22 @@ def index_coverage(control, plan, frame, indexes):
 # One pass, one tile
 
 
-def generate_tile(tile, job, root, ctx):
+def generate_tile(tile, job, root, ctx, phase=None):
     """Run every stage of one tile in root; returns (receipts, failures, delivered world, LQ world)."""
     frame = ctx['frame']
+    phase = phase or Phases()
     receipts, failures = {}, {}
     readers = ctx['indexes'].readers_for(tile)
+    phase.lap('indexes')
     make_source(tile, frame, root, readers, ctx['cache_root'] / 'terrain')
     validate_sources(root, tile)
     receipts['sources'] = json.loads((root / 'sources-receipt.json').read_text())
+    phase.lap('sources')
     world, staging = root / 'world', root / 'world.building'
     build(root / 'sources', staging, world_frame=frame)
     checks = verify(staging)
     staging.rename(world)
+    phase.lap('lq_build')
     receipts['geometry'] = {'tile': tile['id'], 'stage': 'geometry', 'result': 'pass', 'world': str(world.resolve()),
                             'quality': 'LQ', 'installed': False, 'world_manifest_sha256': sha(world / 'earthcraft.json'),
                             'regions': region_hashes(world), 'checks': checks}
@@ -683,8 +719,9 @@ def generate_tile(tile, job, root, ctx):
         try:
             pair = select_pair(tile, frame, ctx['catalog'])
             footprint = ctx['indexes'].footprints() if ctx['footprints'] and pair is not None else None
+            phase.lap('scan_select')
             receipt = scan_tile(tile, frame, root, pair, ctx['point_catalog'], ctx['cache_root'] / 'ept',
-                                ctx['cook_catalog'], ctx['will_catalog'], footprint_index=footprint)
+                                ctx['cook_catalog'], ctx['will_catalog'], footprint_index=footprint, phase=phase)
             receipts['appearance'] = receipt
             if receipt.get('world'):
                 delivered, lq = Path(receipt['world']), world
@@ -787,6 +824,23 @@ class Worker:
             return
         retired = journal.retire_tiles(tiles, LAKE_INDEX, hashlib.sha256(raw).hexdigest(), commit)
         self.log(event='lake_tiles_retired', tiles=retired, lake_plan_tiles=len(tiles), commit=commit)
+
+    def retire_empty_scans(self, journal, indexes):
+        """A tile with no mapped building has nothing for the scan upgrade to add: its LQ is final."""
+        open_scans = [row[0] for row in journal.db.execute(
+            "SELECT tile FROM jobs WHERE stage=2 AND state IN ('pending','failed')")]
+        if not open_scans:
+            return
+        try:
+            local = indexes.footprints()
+            record = json.loads(local.with_suffix('.json').read_text())
+        except Exception as error:  # noqa: BLE001 - every tile is then scanned, which is only slower
+            self.log(event='footprints_unavailable', reason=str(error)[:300])
+            return
+        empty = empty_tiles([self.tiles[tile] for tile in open_scans if tile in self.tiles], local)
+        retired = journal.retire_tiles(empty, f'{INDEX_PREFIX}/{FOOTPRINT_INDEX}.sqlite#no-buildings',
+                                       record['sha256'], None, stages=(2,))
+        self.log(event='empty_scans_retired', tiles=retired, open_scans=len(open_scans))
 
     def sweep(self, journal):
         """Remove scratch left by an earlier, interrupted attempt (never a live lease's)."""
@@ -920,20 +974,23 @@ class Worker:
             self.log(event='tile_start', tile=tile['id'], lane=job['lane'], stages=job['stages'])
             if self.prefetcher is not None and 'appearance' in job['stages']:
                 self.prefetcher.kick(journal, tile['id'])
+            phase = Phases()
             with self.footprint.watch(interval=self.args.watch_seconds, extra={'tile': (root, self.args.tile_cap)}):
-                receipts, failures, delivered, lq = generate_tile(tile, job, root, ctx)
+                receipts, failures, delivered, lq = generate_tile(tile, job, root, ctx, phase)
                 self.footprint._record(0, self.footprint.free(), {'tile': regional_cache.entry_bytes(root)})
                 if self.footprint.breach:
                     raise (TileCapacityError if self.footprint.breach_kind == 'tile' else DiskGuardError)(
                         self.footprint.breach)
                 generator = {'revision': self.revision, 'lane': job['lane'], 'worker': self.worker_id,
                              'generated_utc': utc_now(), 'journal_stages': job['stages'],
-                             'prior_evidence': job.get('prior', {}), 'seconds': round(time.monotonic() - started, 1)}
+                             'prior_evidence': job.get('prior', {}), 'seconds': round(time.monotonic() - started, 1),
+                             'phase_seconds': phase.seconds}
                 notes = [f'appearance failed: {type(e).__name__}: {str(e)[:200]}' for e in failures.values()]
                 package = package_tile(tile, root, receipts=receipts, delivered=delivered, lq=lq,
                                        plan_sha256=self.plan_sha, frame_sha256=digest(self.frame), generator=generator,
                                        prefixes={self.cache_root: 'cache:', self.control: 'control:', ROOT: 'repo:'},
                                        notes=notes)
+                phase.lap('package')
             for path in sorted(root.iterdir()):  # keep only the package while the batch waits
                 if path.name != 'package':
                     shutil.rmtree(path) if path.is_dir() else path.unlink()
@@ -941,7 +998,7 @@ class Worker:
             batch.add(job, package, failures)
             self.log(event='tile_packaged', tile=tile['id'], quality=package.manifest['quality'],
                      files=len(package.items), bytes=package.bytes, seconds=round(time.monotonic() - started, 1),
-                     tile_scratch_peak_bytes=self.tile_peaks[tile['id']])
+                     tile_scratch_peak_bytes=self.tile_peaks[tile['id']], phase_seconds=phase.seconds)
             return 'packaged'
         except CacheCapacityError as error:
             if not self.cache.others_active():  # this tile alone needs more than the cap: fail it, move on
@@ -1008,6 +1065,8 @@ class Worker:
             try:
                 journal.requeue_owner_leases(self.worker_id)
                 self.retire_lake(journal)
+                if a.footprints:
+                    self.retire_empty_scans(journal, indexes)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
                        'footprints': a.footprints, **self.catalogs()}

@@ -343,17 +343,20 @@ class Journal:
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
 
-    def retire_tiles(self,tiles,evidence,sha256,commit,now=None):
-        """Complete the open generation stages of tiles published another way (lake/v1 open water).
+    def retire_tiles(self,tiles,evidence,sha256,commit,now=None,stages=(0,1,2)):
+        """Complete open generation stages that need no work: tiles published another way
+        (lake/v1 open water, all stages) or with nothing to scan (no buildings, appearance only).
 
         Pending, failed and expired stages become complete with the dataset file
-        that publishes the tile as evidence, so no lane leases them again. Live
-        leases and game_verify are left alone. Returns the number of tiles changed.
+        that decides it as evidence, so no lane leases them again. Live leases and
+        game_verify are left alone. Returns the number of tiles changed.
         """
         now=time.time() if now is None else now
         tiles=list(dict.fromkeys(str(tile) for tile in tiles))
-        if not tiles:return 0
-        open_stage="stage IN (0,1,2) AND (state IN ('pending','failed') OR (state='running' AND expires<=?)) AND tile IN (SELECT tile FROM retiring)"
+        stages=tuple(int(stage) for stage in stages)
+        if not tiles or not stages or not set(stages)<={0,1,2}:return 0
+        open_stage=("stage IN ("+','.join(map(str,stages))+") AND (state IN ('pending','failed') OR "
+                    "(state='running' AND expires<=?)) AND tile IN (SELECT tile FROM retiring)")
         self._begin_immediate()
         try:
             self.db.execute('CREATE TEMP TABLE IF NOT EXISTS retiring(tile TEXT PRIMARY KEY)')
