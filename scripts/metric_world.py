@@ -187,6 +187,31 @@ def waterway_width(tags):
     return metres(tags.get('width',''))
 
 
+def supplemental_buildings(shapes, meta, buildings, elevation, offset):
+    """LQ shells for footprints OSM lacks: [(id, metric geometry)] -> building dicts.
+
+    A footprint mostly covered by a mapped building is that building and is dropped;
+    otherwise it keeps only the cells no mapped building owns. Height is the presentation
+    height of an untagged OSM building (3 m under 40 m², else 6 m), never a measurement.
+    """
+    size=meta['size'];owned=np.zeros((size,size),bool);result=[]
+    for b in buildings:owned|=b['mask']
+    def local(x,y,z=None):return np.asarray(x)-meta['west'],meta['north']-np.asarray(y)
+    for identifier,geometry in shapes:
+        geom=make_valid(transform_geometry(local,geometry))
+        mask=rasterize([(geom,1)],out_shape=(size,size),transform=Affine.identity()).astype(bool)
+        if not mask.any() or (mask&owned).sum()*3>mask.sum():continue
+        mask&=~owned;owned|=mask
+        height=3 if geom.area<40 else 6
+        bottom=float(np.median(elevation[mask]))+offset
+        inner=geom.buffer(-1)
+        interior=rasterize([(inner,1)],out_shape=(size,size),transform=Affine.identity()).astype(bool) if not inner.is_empty else np.zeros_like(mask)
+        result.append({'id':identifier,'mask':mask,'wall':mask&~interior,'low':math.floor(bottom),
+            'high':math.ceil(bottom+height)-1,'block':BLOCK['stone_bricks'],'height':height,
+            'ground_assumption':'median sampled terrain over footprint; presentation height'})
+    return result
+
+
 def build(source, destination, surface_source=None, point_source=None, world_frame=None):
     source = Path(source)
     destination = Path(destination)
@@ -319,6 +344,12 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         surface[mask & (surface==BLOCK['water'])]=BLOCK['gray_concrete']
     osm_geometry = meta.get('building_source_kind') in ('osm-explicit', 'osm-presentation')
     if not osm_geometry:buildings=county_buildings
+    supplemental=[]
+    if presentation and meta.get('lq_footprint_receipt') and surface_source is None and point_source is None:
+        from regional_footprints import LQ, load_shapes
+        supplemental=supplemental_buildings(load_shapes(source,meta,LQ),meta,buildings,elevation,offset)
+        buildings.extend(supplemental)
+        for b in supplemental:footprint_union|=b['mask']
     if meta.get('scan_footprint_receipt'):
         if surface_source is None:raise ValueError('Supplemental footprints need a measured paired surface')
         from regional_footprints import load_shapes
@@ -637,6 +668,10 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
             report['building_geometry'] = 'Mapped OSM footprints with observed heights or explicitly estimated presentation heights; not scanned surfaces'
             report['presentation_estimates_sha256'] = meta['presentation_estimates_sha256']
             report['estimated_attribute_ways'] = meta['estimated_attribute_ways']
+            if meta.get('lq_footprint_receipt'):
+                report['building_geometry'] += '; Overture footprints OSM lacks use the presentation height'
+                report['supplemental_footprints'] = dict(meta['lq_footprint_receipt'], admitted=len(supplemental),
+                    height_policy='6 m presentation height (3 m under 40 m²), not measured')
             report['unclassified_ground_policy'] = meta['unclassified_ground_policy']
             report['limitations'] = [line for line in report['limitations']
                                      if not line.startswith('Roads without mapped width')]

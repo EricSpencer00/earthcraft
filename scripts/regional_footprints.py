@@ -83,9 +83,13 @@ def crop(index,grid,destination):
     finally:db.close()
 
 
-def load_shapes(source,grid):
-    source=Path(source);path=source/'scan-footprints.geojson'
-    receipt=grid.get('scan_footprint_receipt')
+SCAN=('scan-footprints.geojson','scan_footprint_receipt')
+LQ=('lq-footprints.geojson','lq_footprint_receipt')  # LQ: presentation heights where OSM has no building
+
+
+def load_shapes(source,grid,kind=SCAN):
+    name,key=kind;source=Path(source);path=source/name
+    receipt=grid.get(key)
     if receipt is None:
         if path.exists():raise ValueError('Supplemental footprints require a source receipt')
         return []

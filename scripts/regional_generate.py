@@ -149,7 +149,7 @@ def select_ways(readers, tile, frame):
     return [unique[key] for key in sorted(unique)]
 
 
-def make_source(tile, frame, root, readers, cache):
+def make_source(tile, frame, root, readers, cache, footprint_index=None):
     source = root/'sources'
     if (root/'sources-receipt.json').exists():
         return validate_sources(root, tile)
@@ -176,6 +176,9 @@ def make_source(tile, frame, root, readers, cache):
         osm_license='ODbL 1.0; OpenStreetMap contributors',
         osm_inputs=[reader.identity for reader in readers],
         missing_layers=['multipolygon relations', 'complete land cover', 'facade photography'])
+    if footprint_index is not None:  # Overture fills buildings OSM has not mapped (most of the suburbs)
+        from regional_footprints import crop as footprint_crop
+        meta['lq_footprint_receipt'] = footprint_crop(footprint_index, meta, source/'lq-footprints.geojson')
     atomic(source/'sources.json', json.dumps(meta).encode())
     receipt = {'tile': tile['id'], 'stage': 'sources', 'result': 'pass',
         'sources_sha256': sha(source/'sources.json'), 'installed': False}
@@ -698,7 +701,8 @@ def generate_tile(tile, job, root, ctx, phase=None):
     receipts, failures = {}, {}
     readers = ctx['indexes'].readers_for(tile)
     phase.lap('indexes')
-    make_source(tile, frame, root, readers, ctx['cache_root'] / 'terrain')
+    make_source(tile, frame, root, readers, ctx['cache_root'] / 'terrain',
+                footprint_index=ctx['indexes'].footprints() if ctx['footprints'] else None)
     validate_sources(root, tile)
     receipts['sources'] = json.loads((root / 'sources-receipt.json').read_text())
     phase.lap('sources')
