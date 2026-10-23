@@ -83,6 +83,14 @@ Kendall then Will ArcGrid tile first, and the ArcGrid prefetcher only runs with 
 * **Published LQ reused.** A scan-only lease downloads the tile's published LQ (region, manifest,
   geometry receipt; hash-verified) as the upgrade baseline instead of rebuilding it: 1.8 s vs ~6 s,
   and the baseline is exactly what saves installed.
+* **One crop per tile.** The tile's survey is selected and cropped once (`ept_surfaces.select`): the newest
+  survey with returns in the tile (a bounding box can cover tiles it never flew), then surfaces, building
+  points (`ept_surfaces.building_points`, no second decode of every node) and trees all read it. Live
+  tiles took 225 s (2022 survey) and 455 s (Cook 2017) with building points at 88-201 s; now 63-156 s
+  with building points at 3-12 s.
+* **Sparse uses the LiDAR too.** A tile is sparse only when its LiDAR building cells are few as well
+  (`SPARSE_ROOF_CELLS` 4,000 m2): a new subdivision with 21 mapped footprints but 207,622 building
+  returns is scanned, not left as empty streets.
 * Next: trees on heavy-canopy tiles (123 s for 1,114 trees on a rural tile) are the slowest step left.
 
 ## Work that is never queued

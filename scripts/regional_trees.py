@@ -93,17 +93,22 @@ def plant(tile, frame, world, work, catalog, *, max_download=600 * 2**20, cache=
     surveys = candidates(tile, frame, catalog) if catalog else []
     if not surveys:
         return {'result': 'no classified survey over the tile', 'trees_admitted': 0}
-    project = surveys[0]['project']
-    guard = WriteGuard(work, TREE_CAP, TREE_FLOOR)
+    projects = {survey['project']: survey for survey in surveys}
     shared = points is not None and (Path(points) / 'manifest.json').exists() and \
-        json.loads((Path(points) / 'manifest.json').read_text()).get('project') == project
-    if shared:
+        json.loads((Path(points) / 'manifest.json').read_text()).get('project') in projects
+    if shared:  # the survey the tile was already selected and cropped for (ept_surfaces.select)
         crop_dir = Path(points)
         points = json.loads((crop_dir / 'manifest.json').read_text())
-    else:
-        crop_dir = work / 'points'
-        points = detail_points.crop(project, frame, tile['west'], tile['north'], tile['size'], 0, guard,
-                                    crop_dir, max_download=max_download, cache=cache)
+        project, surveys = points['project'], [projects[points['project']]]
+    else:  # the newest survey with returns in the tile (a bounding box can cover tiles it never flew)
+        import ept_surfaces
+        work.mkdir(parents=True, exist_ok=True)
+        pair, points = ept_surfaces.select(tile, frame, catalog, work, cache)
+        if pair is None:
+            return {'result': 'no survey with returns in the tile', 'trees_admitted': 0}
+        project, surveys = pair['project'], [s for s in surveys if s['project'] == pair['project']]
+        crop_dir = work / 'ept-points'
+    guard = WriteGuard(work, TREE_CAP, TREE_FLOOR)
     xyz, cls, _, _, intensity = detail_points.load(crop_dir)
     grid = tile_grid(tile, frame)
     surface = tile_surface(world, grid)

@@ -52,6 +52,50 @@ class EptSurfaceTests(unittest.TestCase):
         self.assertEqual(dsm[11, 11], 107.0)
 
 
+def write_crop(folder, xyz, cls, project='IL_X_2022'):
+    """A detail_points crop directory (points.npz + manifest) for the given returns."""
+    folder = Path(folder);folder.mkdir(parents=True, exist_ok=True)
+    origin = np.array([GRID['west'], GRID['north'] - GRID['size'], 0.0])
+    np.savez_compressed(folder / 'points.npz', xyz_cm=np.rint((xyz - origin) * 100).astype(np.int32), origin=origin,
+                        cls=cls, ret=np.ones(len(cls), np.uint8), nret=np.ones(len(cls), np.uint8))
+    (folder / 'manifest.json').write_text(json.dumps({'project': project, 'cropped_points': len(cls), 'points_sha256': 'p',
+                                                      'node_receipts': [{'key': '0-0-0-0', 'sha256': 'n', 'points': len(cls)}]}))
+
+
+class SurveySelectionTests(unittest.TestCase):
+    def test_a_survey_without_returns_in_the_tile_is_skipped(self):
+        import ept_surfaces
+        surveys = [{'project': 'NEW_2022', 'year_from_project_name': 2022}, {'project': 'OLD_2017', 'year_from_project_name': 2017}]
+
+        def crop(project, frame, west, north, size, halo, guard, out, cache=None, **_):
+            Path(out).mkdir(parents=True)
+            return {'project': project, 'cropped_points': 0 if project == 'NEW_2022' else 500_000}
+        with tempfile.TemporaryDirectory() as folder, patch('regional_point_catalog.candidates', return_value=surveys), \
+                patch('detail_points.crop', crop):
+            pair, manifest = ept_surfaces.select({'west': 0, 'north': 0, 'size': 512}, {}, {'surveys': []}, folder, None)
+            self.assertEqual((pair['project'], pair['year']), ('OLD_2017', 2017))
+            self.assertTrue((Path(folder) / 'ept-points').is_dir())
+            self.assertEqual(sorted(p.name for p in Path(folder).iterdir()), ['ept-points'])
+
+    def test_building_cells_and_points_come_from_the_same_crop(self):
+        import ept_surfaces
+        roof = [(r, c) for r in range(10, 14) for c in range(10, 14)]
+        ground = [(r, c) for r in range(32) for c in range(32) if (r, c) not in roof]
+        parts = [points(ground, 100.0, 2), points(roof, 108.0, 6), points(roof[:3], 109.0, 6), points([(2, 2)], 115.0, 5)]
+        xyz = np.concatenate([p[0] for p in parts]);cls = np.concatenate([p[1] for p in parts])
+        with tempfile.TemporaryDirectory() as folder:
+            write_crop(Path(folder) / 'crop', xyz, cls)
+            self.assertEqual(ept_surfaces.building_cells(Path(folder) / 'crop', GRID), 16)
+            dtm = np.full((32, 32), 100.0);valid = np.ones((32, 32), bool)
+            record = ept_surfaces.building_points(Path(folder) / 'crop', GRID, Path(folder) / 'out', dtm, valid)
+            with np.load(Path(folder) / 'out' / 'points.npz') as out:
+                self.assertEqual(len(out['xyz']), 19)            # class 6 only; ground and vegetation left out
+            self.assertEqual((record['schema'], record['building_points'], record['retained_classes']),
+                             ('earthcraft-classified-ept-building-crop-v1', 19, [6]))
+            with self.assertRaisesRegex(ValueError, 'ground reference'):
+                ept_surfaces.building_points(Path(folder) / 'crop', GRID, Path(folder) / 'bad', dtm + 5, valid)
+
+
 class SharedNodeCacheTests(unittest.TestCase):
     def test_cached_getter_uses_the_ept_buildings_layout(self):
         calls = []
