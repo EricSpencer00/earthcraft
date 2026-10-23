@@ -198,5 +198,27 @@ class GeneratorGuardTests(unittest.TestCase):
             self.assertFalse((root / 'control').exists())
 
 
+class AdmitWalkTests(unittest.TestCase):
+    def test_admit_counts_every_file_only_near_the_cap(self):
+        from unittest.mock import patch
+        import regional_cache
+        with tempfile.TemporaryDirectory() as folder:
+            cache = regional_cache.SourceCache(Path(folder) / 'cache', cap=10 * 2**20)
+            walks = []
+            real = regional_cache.entry_bytes
+
+            def counted(path):
+                walks.append(Path(path))
+                return real(path)
+            with patch('regional_cache.entry_bytes', counted):
+                for index in range(20):  # far from the cap: the tracked size, no walk per admit
+                    cache.admit(Path(folder) / 'cache' / 'ept' / f'n{index}.laz', 100 * 2**10)
+                far = sum(1 for p in walks if p == cache.root)
+                cache.admit(Path(folder) / 'cache' / 'ept' / 'big.laz', 15 * 2**19)  # 2 + 7.5 MiB > 0.9 x cap: walk
+                near = sum(1 for p in walks if p == cache.root)
+            self.assertLessEqual(far, 1)
+            self.assertEqual(near, far + 1)
+
+
 if __name__ == '__main__':
     unittest.main()

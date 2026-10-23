@@ -48,6 +48,7 @@ DEFAULT_CACHE_CAP = 12 * GiB
 DEFAULT_FOOTPRINT_CAP = 25 * GiB
 DEFAULT_MIN_FREE = 40 * GiB
 STALE_STAGING_SECONDS = 24 * 3600
+NEAR_CAP = 0.9  # within this share of the cap, admit counts every file before evicting or refusing
 
 
 GRID_NAMESPACE = 'arcgrid'
@@ -204,7 +205,7 @@ class SourceCache:
     """LRU units under one root with a hard cap; see the module docstring."""
 
     def __init__(self, root, cap=DEFAULT_CACHE_CAP, footprint=None, *, clock=time.time, log=None,
-                 used_ttl=15.0):
+                 used_ttl=60.0):
         if cap <= 0:
             raise ValueError('A positive cache cap is required')
         self.root = Path(root).absolute()
@@ -424,9 +425,23 @@ class SourceCache:
         what = what or Path(path).name
         unit = self.unit_of(path)
         with self._exclusive():
-            used = self.used(fresh=True)
+            # Far from the cap the shared tally (every process's admits since the last full walk) is
+            # enough. Walking 100k cached files on every admit (250 LAZ nodes a tile) made the lidar crop
+            # take minutes and serialized the workers on this lock.
+            now, tally = time.time(), self.root / '.lru.tally'  # bytes every process sharing the cache admitted
+            try:
+                row = json.loads(tally.read_text())
+                row = (int(row['bytes']), float(row['walked']))
+            except (OSError, ValueError, KeyError, TypeError):
+                row = None
+            if row is None or now - row[1] > self.used_ttl:
+                used, walked = self.used(fresh=True), now
+            else:
+                used, walked = row
+            if used + incoming > NEAR_CAP * self.cap and walked != now:
+                used, walked = self.used(fresh=True), now
             if used + incoming > self.cap:
-                used = self._evict(used + incoming - self.cap, keep=unit)
+                used, walked = self._evict(used + incoming - self.cap, keep=unit), now  # _evict ends with a walk
             if used + incoming > self.cap:
                 raise CacheCapacityError(
                     f'Cache cap refuses {what}: {human(used)} pinned/in use + {human(incoming)} > cap '
@@ -435,6 +450,9 @@ class SourceCache:
                 self.footprint.check(incoming, f'cache {what}')
             self._stamp(unit)
             self._used = used + incoming  # conservative until the next walk
+            staged = tally.with_name('.lru.tally.partial')
+            staged.write_text(json.dumps({'bytes': self._used, 'walked': walked}))
+            staged.replace(tally)
             self.peak_used = max(self.peak_used, self._used)
 
     def _evict(self, needed, keep=None):
