@@ -832,7 +832,30 @@ def generate_tile(tile, job, root, ctx, phase=None):
     if ctx.get('trees') and delivered is not None:
         plant_trees(tile, frame, delivered, root, ctx, receipts, failures)
         phase.lap('trees')
+    if ctx.get('facades') and delivered is not None:
+        paint_facades(tile, frame, delivered, root, receipts, failures, ctx.get('indexes'))
+        phase.lap('facades')
     return receipts, failures, delivered, lq
+
+
+def paint_facades(tile, frame, delivered, root, receipts, failures, indexes=None):
+    """Keyless facade detail (floors, windows, door, wall material) into the delivered world."""
+    import regional_facades
+    try:
+        assessor = None
+        if indexes is not None:
+            try:  # Cook County only; the index is published under sources/indexes/
+                assessor = indexes.ensure(regional_facades.ASSESSOR_INDEX)
+            except IndexUnavailable:
+                pass
+        report = regional_facades.paint(tile, frame, delivered, root / 'sources', root / 'facades', assessor=assessor)
+    except DiskGuardError:
+        raise
+    except Exception as error:  # noqa: BLE001 - the tile still delivers without facade detail
+        failures['facades'] = error
+        return
+    regional_facades.record(delivered, report)
+    restamp(receipts, delivered, facades=report)
 
 
 def published_lq(reader, tile, world):
@@ -882,10 +905,15 @@ def plant_trees(tile, frame, delivered, root, ctx, receipts, failures):
         failures['trees'] = error
         return
     regional_trees.record(delivered, report)
+    restamp(receipts, delivered, trees=report)
+
+
+def restamp(receipts, delivered, **extra):
+    """After a pass edits the delivered world, its stage receipt names the region and manifest it now has."""
     stage = next(s for s in ('appearance', 'geometry')
                  if receipts.get(s, {}).get('world') and Path(receipts[s]['world']).resolve() == delivered.resolve())
-    receipts[stage].update(regions=region_hashes(delivered), trees=report,
-                           world_manifest_sha256=sha(delivered / 'earthcraft.json'))
+    receipts[stage].update(regions=region_hashes(delivered), world_manifest_sha256=sha(delivered / 'earthcraft.json'),
+                           **extra)
 
 
 class Worker:
@@ -1231,7 +1259,8 @@ class Worker:
                     self.reopen_empty_scans(journal)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
-                       'footprints': a.footprints, 'trees': a.trees, 'scan_surfaces': a.scan_surfaces,
+                       'footprints': a.footprints, 'trees': a.trees, 'facades': a.facades,
+                       'scan_surfaces': a.scan_surfaces,
                        'sparse_buildings': a.sparse_buildings, 'reader': self.reader,
                        **self.catalogs()}
                 if a.prefetch and a.scan_surfaces == 'county':  # ArcGrid strips: nothing to prefetch for EPT
@@ -1501,6 +1530,7 @@ def build_parser():
                              'east-west bands, band mod N); default EARTHCRAFT_SHARD or all tiles')
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
     parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
+    parser.add_argument('--facades', action='store_true', help='keyless facade detail in every delivered tile')
     parser.add_argument('--sparse-buildings', type=int, default=SPARSE_BUILDINGS,
                         help='tiles with at most this many mapped footprints skip the scan (default %(default)s)')
     parser.add_argument('--scan-surfaces', choices=('ept', 'county'), default='ept',

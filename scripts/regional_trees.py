@@ -34,7 +34,7 @@ def tile_grid(tile, frame):
     return Tile(frame, x0, z0, tile['size'])
 
 
-def tile_surface(world, grid, headroom=430):
+def tile_surface(world, grid, headroom=430, volume=False):
     """Ground, occupancy and surface block of a generated tile world.
 
     Regional worlds stand on a thin terrain slab with air beneath, so ground is
@@ -56,8 +56,11 @@ def tile_surface(world, grid, headroom=430):
     top = np.where(solid.any(axis=2), vol.shape[2] - 1 - np.argmax(solid[:, :, ::-1], axis=2) + ylo, ylo)
     zz, xx = np.indices(ground.shape)
     surface = vol[zz, xx, np.clip(ground - ylo, 0, vol.shape[2] - 1)]
-    return {'ground_y': ground, 'top_y': top.astype(np.int32), 'built': top > ground,
-            'surface_key': np.asarray(names, dtype=object)[surface]}
+    result = {'ground_y': ground, 'top_y': top.astype(np.int32), 'built': top > ground,
+              'surface_key': np.asarray(names, dtype=object)[surface]}
+    if volume:  # the block window itself, for passes that edit walls (regional_facades)
+        result.update(vol=vol, names=names, ylo=ylo)
+    return result
 
 
 def layer_for(trees, labels, chm, surface, grid, frame, project):
