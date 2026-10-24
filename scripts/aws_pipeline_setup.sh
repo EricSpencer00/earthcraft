@@ -116,7 +116,7 @@ run() {
   # Footprint = cache + per worker (3 GiB tile + 1 GiB batch + 1 GiB upload scratch) + control.
   local workers=${EARTHCRAFT_WORKERS:-1} cache_gib=${EARTHCRAFT_CACHE_GIB:-20}
   exec "$PY" -u scripts/regional_supervisor.py --control "$CONTROL" --frame "$FRAME" \
-    --scratch "$ROOT/runs/scratch" --hf-python "$PY" --footprints $( [ "${EARTHCRAFT_TREES:-1}" = 0 ] || echo --trees) $( [ "${EARTHCRAFT_FACADES:-1}" = 0 ] || echo --facades) --workers "$workers" --lane "${EARTHCRAFT_LANE:-auto}" \
+    --scratch "$ROOT/runs/scratch" --hf-python "$PY" --footprints $( [ "${EARTHCRAFT_TREES:-1}" = 0 ] || echo --trees) $( [ "${EARTHCRAFT_FACADES:-1}" = 0 ] || echo --facades) $( [ "${EARTHCRAFT_GROUND:-1}" = 0 ] || echo --ground) --workers "$workers" --lane "${EARTHCRAFT_LANE:-auto}" \
     --cache-cap "${cache_gib}GiB" --footprint-cap "${EARTHCRAFT_FOOTPRINT_CAP:-$((cache_gib + 5 * workers + 1))GiB}" \
     --min-free "${EARTHCRAFT_MIN_FREE:-10GiB}" --tile-cap 3GiB --batch-tiles "${EARTHCRAFT_BATCH_TILES:-24}"
 }

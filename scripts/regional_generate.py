@@ -829,7 +829,7 @@ def generate_tile(tile, job, root, ctx, phase=None):
             if job['lane'] == 'scans' or job['stages'] == ['appearance']:  # its LQ is already delivered
                 raise
             failures['appearance'] = error
-    if (ctx.get('trees') or ctx.get('facades')) and delivered is not None:
+    if (ctx.get('trees') or ctx.get('facades') or ctx.get('ground')) and delivered is not None:
         decorate(tile, frame, delivered, root, ctx, receipts, failures, phase)
     return receipts, failures, delivered, lq
 
@@ -851,6 +851,9 @@ def decorate(tile, frame, delivered, root, ctx, receipts, failures, phase):
     if ctx.get('facades'):
         reports['facades'] = paint_facades(tile, frame, delivered, root, failures, ctx.get('indexes'), surface)
         phase.lap('facades')
+    if ctx.get('ground'):
+        reports['ground'] = cover_ground(tile, frame, delivered, root, failures, surface)
+        phase.lap('ground')
     del surface
     reports = {name: report for name, report in reports.items() if report is not None}
     layers = [report.pop('_layer') for report in reports.values() if report.get('_layer')]
@@ -867,7 +870,7 @@ def decorate(tile, frame, delivered, root, ctx, receipts, failures, phase):
         os.replace(work / 'region' / f'{name}.mca', delivered / 'region' / f'{name}.mca')
         kinds = applied.get('by_kind', {})
         for key, report in reports.items():
-            prefix = 'tree_' if key == 'trees' else 'facade_'
+            prefix = {'trees': 'tree_', 'facades': 'facade_', 'ground': 'ground_'}[key]
             report.update(blocks_applied=sum(v for k, v in kinds.items() if k.startswith(prefix)),
                           region_before_sha256=applied.get('input_sha256'), region_after_sha256=applied.get('output_sha256'))
         report_all = {'precondition_failed': applied.get('precondition_failed', 0), 'layers': len(layers)}
@@ -875,12 +878,33 @@ def decorate(tile, frame, delivered, root, ctx, receipts, failures, phase):
             report['apply'] = report_all
         phase.lap('decorate_apply')
     import regional_facades
+    import regional_ground
     if 'trees' in reports:
         regional_trees.record(delivered, reports['trees'])
     if 'facades' in reports:
         regional_facades.record(delivered, reports['facades'])
+    if 'ground' in reports:
+        regional_ground.record(delivered, reports['ground'])
     if reports:
         restamp(receipts, delivered, **reports)
+
+
+def cover_ground(tile, frame, delivered, root, failures, surface):
+    """Keyless ground-cover layer (paving, soil, fields, prairie, wetland); None on failure."""
+    import regional_ground
+    imagery = root / 'naip-imagery'
+    try:
+        if not (imagery / 'imagery.json').exists():  # sparse and LQ tiles: the scan did not fetch it
+            if imagery.exists():
+                shutil.rmtree(imagery)
+            from naip_imagery import acquire as imagery_acquire
+            imagery_acquire(root / 'sources', imagery)
+        return regional_ground.cover(tile, frame, delivered, root / 'sources', imagery, root / 'ground', surface)
+    except DiskGuardError:
+        raise
+    except Exception as error:  # noqa: BLE001 - the tile still delivers with grass ground
+        failures['ground'] = error
+        return None
 
 
 def paint_facades(tile, frame, delivered, root, failures, indexes=None, surface=None):
@@ -1302,7 +1326,7 @@ class Worker:
                     self.reopen_empty_scans(journal)
                 self.sweep(journal)
                 ctx = {'frame': self.frame, 'cache_root': self.cache_root, 'indexes': indexes,
-                       'footprints': a.footprints, 'trees': a.trees, 'facades': a.facades,
+                       'footprints': a.footprints, 'trees': a.trees, 'facades': a.facades, 'ground': a.ground,
                        'scan_surfaces': a.scan_surfaces,
                        'sparse_buildings': a.sparse_buildings, 'reader': self.reader,
                        **self.catalogs()}
@@ -1574,6 +1598,7 @@ def build_parser():
     parser.add_argument('--footprints', action='store_true', help='associate scans with Overture footprints')
     parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
     parser.add_argument('--facades', action='store_true', help='keyless facade detail in every delivered tile')
+    parser.add_argument('--ground', action='store_true', help='keyless ground cover in every delivered tile')
     parser.add_argument('--sparse-buildings', type=int, default=SPARSE_BUILDINGS,
                         help='tiles with at most this many mapped footprints skip the scan (default %(default)s)')
     parser.add_argument('--scan-surfaces', choices=('ept', 'county'), default='ept',
