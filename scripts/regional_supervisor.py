@@ -77,6 +77,8 @@ def worker_command(args, owner):
         command.append('--trees')
     if args.facades:
         command.append('--facades')
+    if args.ground:
+        command.append('--ground')
     if args.shard:
         command += ['--shard', '%d/%d' % args.shard]
     return low_priority(command + ['--nice', '0'], args.qos)
@@ -156,6 +158,8 @@ def ensure(args):
             command.append('--trees')
         if args.facades:
             command.append('--facades')
+        if args.ground:
+            command.append('--ground')
         if args.shard:
             command += ['--shard', '%d/%d' % args.shard]
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.resolve()))
@@ -270,6 +274,7 @@ def build_parser():
     parser.add_argument('--footprints', action='store_true')
     parser.add_argument('--trees', action='store_true', help='plant LiDAR trees into every delivered tile')
     parser.add_argument('--facades', action='store_true', help='keyless facade detail in every delivered tile')
+    parser.add_argument('--ground', action='store_true', help='keyless ground cover in every delivered tile')
     parser.add_argument('--cache-cap', type=parse_size, default=12 * GiB)
     parser.add_argument('--footprint-cap', type=parse_size, default=25 * GiB)
     parser.add_argument('--min-free', type=parse_size, default=40 * GiB)
