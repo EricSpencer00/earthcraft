@@ -60,6 +60,17 @@ class GroundTests(unittest.TestCase):
         self.assertEqual(cls[14, 12], rg.KEEP)
         self.assertEqual(cls[20, 30], rg.KEEP)  # open lawn is not a hole
 
+    def test_shade_keeps_grass_unless_osm_tags_parking(self):
+        bands, valid, ndvi, shadow, cover, none = scene()
+        bands[:, 20:26, 30:36] = np.array([55, 58, 60, 50], np.uint8)[:, None, None]  # tree shadow on lawn
+        bands[:, 5:9, 30:38] = np.array([55, 58, 60, 50], np.uint8)[:, None, None]    # shadow across a lot
+        parking = np.zeros((N, N), bool);parking[5:9, 30:38] = True
+        ndvi = (bands[3].astype(float) - bands[0]) / (bands[3].astype(float) + bands[0])
+        cls = rg.classify(bands, valid, ndvi, shadow, cover, parking, none, np.ones((N, N), bool))
+        self.assertEqual(cls[23, 33], rg.KEEP)
+        self.assertEqual(cls[6, 34], rg.ASPHALT)
+        self.assertEqual(cls[14, 10], rg.ASPHALT)  # lit asphalt is still asphalt
+
     def test_osm_parking_and_wetland(self):
         bands, valid, ndvi, shadow, cover, none = scene()
         parking = np.zeros((N, N), bool);parking[5:9, 30:38] = True   # tagged lot the image shows as lawn-ish grey
