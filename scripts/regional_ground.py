@@ -13,7 +13,8 @@ natural=wetland), and changes only cells whose top block is still the generic gr
 * OSM parking that the image does not show as vegetated: asphalt ('tagged').
 
 Shadowed or invalid imagery keeps the grass. Only the ground block and air above it change, so
-buildings, roads, water and trees are untouched. Small specks are removed before edits are made.
+buildings, roads, water and trees are untouched. Small specks are removed before edits are made, and
+small holes in paving that are much less green than the tile's lawns (paint, cars) become paving.
 """
 import hashlib
 import json
@@ -49,6 +50,7 @@ CLASSES = {
     MUD: ('minecraft:mud', None, 'ground_wetland'),
 }
 MIN_REGION = {CONCRETE: 3, ASPHALT: 12, SOIL: 16, FIELD: 64, PRAIRIE: 64, MARSH: 16, MUD: 16}  # cells
+MAX_HOLE, HOLE_NDVI_GAP = 128, 0.2  # holes in paving smaller than this, this much less green than lawn, are paving
 
 
 def stable(*values):
@@ -129,6 +131,31 @@ def classify(bands, valid, ndvi, shadow, cover, parking, wetland, editable):
         if count:
             sizes = np.bincount(labels.ravel())
             cls[(labels > 0) & (sizes[labels] < minimum)] = KEEP
+    return fill_paving_holes(cls, ndvi, seen, editable)
+
+
+def fill_paving_holes(cls, ndvi, seen, editable):
+    """Small grass holes inside paving that are far less green than the tile's lawns (paint, cars,
+    oil stains) take the surrounding paving; a green island in a parking lot stays grass."""
+    paving = (cls == CONCRETE) | (cls == ASPHALT)
+    lawn = (cls == KEEP) & editable & seen
+    if not paving.any() or not lawn.any():
+        return cls
+    holes = ndimage.binary_fill_holes(paving | ~editable) & (cls == KEEP) & editable
+    labels, count = ndimage.label(holes)
+    if not count:
+        return cls
+    index = np.arange(1, count + 1)
+    sizes = ndimage.sum(holes, labels, index)
+    greenness = ndimage.median(np.where(np.isfinite(ndvi), ndvi, np.nan), labels, index)
+    lawn_ndvi = np.median(ndvi[lawn & ~holes]) if (lawn & ~holes).any() else np.median(ndvi[lawn])
+    fill = np.zeros(count + 1, bool)
+    lit = ndimage.mean(seen, labels, index)  # a shadow beside a house may be lawn: unknown, keep it
+    fill[1:] = (sizes < MAX_HOLE) & (greenness < lawn_ndvi - HOLE_NDVI_GAP) & (lit > 0.5)
+    target = fill[labels]
+    if target.any():
+        _, (rows, cols) = ndimage.distance_transform_edt(~paving, return_indices=True)
+        cls[target] = cls[rows[target], cols[target]]
     return cls
 
 

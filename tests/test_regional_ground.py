@@ -50,6 +50,16 @@ class GroundTests(unittest.TestCase):
         self.assertEqual(cls[20, 20], rg.KEEP)
         self.assertEqual(cls[14, 10], rg.KEEP)
 
+    def test_paint_in_paving_is_paving_but_a_green_island_stays_grass(self):
+        bands, valid, ndvi, shadow, cover, none = scene()
+        bands[:, 12, 8:10] = np.array([200, 180, 60, 150], np.uint8)[:, None]    # yellow paint in the lot
+        bands[:, 14:16, 12:14] = np.array([50, 120, 40, 220], np.uint8)[:, None, None]  # planted island
+        ndvi = (bands[3].astype(float) - bands[0]) / (bands[3].astype(float) + bands[0])
+        cls = rg.classify(bands, valid, ndvi, shadow, cover, none, none, np.ones((N, N), bool))
+        self.assertEqual(cls[12, 8], rg.ASPHALT)
+        self.assertEqual(cls[14, 12], rg.KEEP)
+        self.assertEqual(cls[20, 30], rg.KEEP)  # open lawn is not a hole
+
     def test_osm_parking_and_wetland(self):
         bands, valid, ndvi, shadow, cover, none = scene()
         parking = np.zeros((N, N), bool);parking[5:9, 30:38] = True   # tagged lot the image shows as lawn-ish grey
