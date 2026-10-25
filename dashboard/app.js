@@ -120,7 +120,7 @@ let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',draw
 let geoBuckets=new Map(),geoCellIndex=new Map();
 const BUCKET_DEG=0.01,bucketKey=(lng,lat)=>Math.floor(lng/BUCKET_DEG)+','+Math.floor(lat/BUCKET_DEG);
 // These geographic anchors match configs/cities.json; the Minecraft frame stays unchanged.
-const places={chicago:{name:'Chicago',coordinates:[-87.62443,41.8972]},elmhurst:{name:'Elmhurst',coordinates:[-87.9403418,41.8994745]}};
+const places={chicago:{name:'Chicago',coordinates:[-87.62443,41.8972]},elmhurst:{name:'Elmhurst',coordinates:[-87.9403418,41.8994745]},loyola:{name:'Loyola University Chicago',coordinates:[-87.65798,41.99922]}};
 
 function setPanel(open,section=document.body.dataset.section||'world'){
   const changed=section!==document.body.dataset.section;
@@ -604,7 +604,7 @@ function renderAtlas(){
   $('coverage-note').textContent=!atlas?'Map unavailable':atlas.area.id==='world'?'Built so far · the Chicago area':'Build progress · the Chicago area';
   if(!atlas){
     geoSignature='';geoCells=[];document.body.dataset.map='grid';$('map-attribution').hidden=true;
-    for(const id of ['place-chicago','place-elmhurst','layer-appearance','layer-detail'])$(id).disabled=true;
+    for(const id of ['place-chicago','place-elmhurst','place-loyola','layer-appearance','layer-detail'])$(id).disabled=true;
     $('grid-size').textContent='Unavailable';
     $('grid-count').textContent='This view has no map yet.';
     $('chunk-count').textContent='Unavailable';
@@ -628,7 +628,7 @@ function renderAtlas(){
   }
   const {area,counts}=atlas;
   prepareGeography();
-  for(const id of ['place-chicago','place-elmhurst'])$(id).disabled=!geographic();
+  for(const id of ['place-chicago','place-elmhurst','place-loyola'])$(id).disabled=!geographic();
   $('layer-appearance').disabled=atlas.source!=='published';$('layer-detail').disabled=atlas.source!=='published';
   if(atlas.source!=='published'){
     mapLayer='build';$('layer-build').setAttribute('aria-pressed','true');$('layer-appearance').setAttribute('aria-pressed','false');$('layer-detail').setAttribute('aria-pressed','false');

@@ -12,13 +12,18 @@ export const MAX_RADIUS=8,VIEWS=['orbit','iso','top','street'];
 const ISO_PITCH=35.264,D2R=Math.PI/180,SKY=0xc9d9e3;
 const DEFAULT_PITCH={orbit:40,iso:ISO_PITCH,top:90,street:-10};
 const DEFAULT_YAW={orbit:45,iso:45,top:0,street:0};
+// With no place in the URL the viewer opens on a full-detail tiles/v2 tile (scans, trees, facades,
+// ground cover) instead of the original Water Tower capture.
+export const FEATURED={tile:'-6_-23',block:[-2680,-11380],radius:5,view:'iso',yaw:200};
+export const tileBase=id=>`https://huggingface.co/datasets/${HF_REPO}/resolve/main/tiles/v2/${id}/region/`;
 
 export function parseViewerParams(search,href=globalThis.location?.href||'http://localhost/'){
   const q=new URLSearchParams(search),pair=name=>{const v=q.get(name);if(v===null||v==='')return null;const parts=v.split(',').map(s=>s.trim());if(parts.length!==2||!parts.every(s=>/^-?\d{1,8}$/.test(s)))throw Error(`${name} must be two integers, such as ${name}=2,2.`);return parts.map(Number);};
   const number=(name,lo,hi)=>{const v=q.get(name);if(v===null||v==='')return null;const n=Number(v);if(!Number.isFinite(n))throw Error(name+' must be a number.');return Math.max(lo,Math.min(hi,n));};
-  const revision=q.get('revision')||PINNED_REVISION,custom=q.get('base');
+  const featured=!['base','revision','layout','region','chunk','block'].some(name=>q.get(name));
+  const revision=q.get('revision')||PINNED_REVISION,custom=featured?tileBase(FEATURED.tile):q.get('base');
   const base=custom?new URL(custom,href).href:hfRegionBase(revision);
-  const layout=q.get('layout')||'bucketed';
+  const layout=featured?'flat-auto':q.get('layout')||'bucketed';
   if(!['bucketed','flat','flat-packed','flat-auto','lake'].includes(layout))throw Error('Unknown region layout.');
   const region=pair('region'),chunk=pair('chunk'),block=pair('block');
   let center;
@@ -28,10 +33,11 @@ export function parseViewerParams(search,href=globalThis.location?.href||'http:/
     if(region&&(chunk[0]>>5!==region[0]||chunk[1]>>5!==region[1])&&chunk.every(v=>v>=0&&v<32))center=[region[0]*32+chunk[0],region[1]*32+chunk[1]];
   }else if(block)center=[block[0]>>4,block[1]>>4];
   else if(region)center=[region[0]*32+16,region[1]*32+16];
-  else center=[WATER_TOWER_BLOCK[0]>>4,WATER_TOWER_BLOCK[1]>>4];
-  const qa=q.get('qa')==='1',viewName=q.get('view'),view=VIEWS.includes(viewName)?viewName:qa?'iso':'orbit';
-  const radius=Math.round(number('radius',0,MAX_RADIUS)??(qa?2:3)),floor=number('floor',-64,960);
-  return {base,layout,custom:!!custom,revision,center,block,radius,view,yaw:number('yaw',-3600,3600)??DEFAULT_YAW[view],pitch:number('pitch',-89,90),
+  else center=[FEATURED.block[0]>>4,FEATURED.block[1]>>4];
+  const qa=q.get('qa')==='1',viewName=q.get('view'),view=VIEWS.includes(viewName)?viewName:featured?FEATURED.view:qa?'iso':'orbit';
+  const radius=Math.round(number('radius',0,MAX_RADIUS)??(featured?FEATURED.radius:qa?2:3)),floor=number('floor',-64,960);
+  const yaw=number('yaw',-3600,3600)??(featured&&view===FEATURED.view?FEATURED.yaw:DEFAULT_YAW[view]);
+  return {base,layout,custom:!!custom,revision,center,block,radius,view,yaw,pitch:number('pitch',-89,90),
     width:Math.round(number('w',64,4096)??960),height:Math.round(number('h',64,4096)??640),qa,floor:floor===null?null:Math.round(floor)};
 }
 export function spiral([cx,cz],radius){
@@ -344,7 +350,14 @@ export function installBlocksPage(doc=document){
   }});
   for(const b of doc.querySelectorAll('.view-switch button'))b.onclick=()=>setView(b.dataset.view);
   $('goto').addEventListener('submit',e=>{e.preventDefault();const x=Number($('goto-x').value),z=Number($('goto-z').value);if(!Number.isSafeInteger(x)||!Number.isSafeInteger(z)){setStatus('Enter whole-number chunk coordinates.');return;}load([x,z],Number($('goto-radius').value));});
-  $('goto-tower').onclick=()=>load([WATER_TOWER_BLOCK[0]>>4,WATER_TOWER_BLOCK[1]>>4],Number($('goto-radius').value));
+  // The newest tile the AWS host published (status/pipeline.json), read from main; only when
+  // this page already reads the dataset, so a local or test source never calls out.
+  if(params.base.startsWith('https://huggingface.co/'))fetch(`https://huggingface.co/datasets/${HF_REPO}/resolve/main/status/pipeline.json`,{cache:'no-cache',credentials:'omit',signal:AbortSignal.timeout(10000)})
+    .then(r=>r.ok?r.json():null).then(status=>{
+      const id=status?.last_tile;if(!/^-?\d+_-?\d+$/.test(id||''))return;
+      $('goto-newest').href=`./blocks.html?base=${encodeURIComponent(tileBase(id))}&layout=flat-auto&region=${id.replace('_',',')}&radius=5&view=iso`;
+      $('goto-newest').hidden=false;
+    }).catch(()=>{});
   $('floor-form').addEventListener('submit',async e=>{e.preventDefault();const y=Number($('floor-y').value);if(!Number.isInteger(y)||y<-64||y>960){setStatus('Enter a whole-number Y between -64 and 960.');return;}state.floor=state.floorY=y;const result=await mesh();if(result){stats(result.blocks,result.faces,[...new Map(spiral(state.center,state.radius).map(c=>{const r=chunkRegion(...c);return [r.join(','),r];})).values()]);viewer.frame(viewer.view==='street'?streetEye():null,contentPoints());viewer.requestRender();setStatus(`Cut away below Y ${y} · ${fmt(result.blocks)} blocks drawn.`);}});
   const setPanel=open=>{doc.body.dataset.panel=open?'open':'closed';$('panel-toggle').setAttribute('aria-expanded',String(open));};
   $('panel-toggle').onclick=()=>setPanel(doc.body.dataset.panel!=='open');$('panel-close').onclick=()=>{setPanel(false);$('panel-toggle').focus();};

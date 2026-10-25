@@ -11,6 +11,9 @@ body[data-view='street'] #viewer { cursor: crosshair; }
 .goto input, .floor-form input { width: 72px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--control-line); border-radius: 2px; color: var(--ink); background: var(--paper); font: 13px var(--font-data); }
 .goto select { width: 72px; padding-right: 22px; }
 .goto button { padding: 8px 10px; font-size: 13px; }
+.featured { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.featured a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px; border: 1px solid var(--control-line); border-radius: 2px; color: var(--ink); font-size: 13px; text-decoration: none; }
+.featured a:hover { background: var(--surface); }
 .view-switch { margin-left: auto; }
 .viewer-readout { max-width: min(640px, calc(100% - 40px)); }
 #viewer-status { margin: 0 0 4px; font-size: 12px; overflow-wrap: anywhere; }
@@ -28,7 +31,7 @@ body[data-view='street'] #viewer { cursor: crosshair; }
 #source-note, #unknown-blocks { overflow-wrap: anywhere; }
 @media (max-width: 1023px) { .viewer-tools ~ .details-panel { top: auto; } }
 @media (max-width: 700px) { .view-switch { width: 100%; margin-left: 0; border-top: 1px solid var(--line); } .goto input { width: 64px; } }
-@media (max-width: 540px) { .goto label[for='goto-radius'] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; } .goto #goto-tower { display: none; } .goto input { width: 58px; } }
+@media (max-width: 540px) { .goto label[for='goto-radius'] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; } .goto input { width: 58px; } }
 /* Automated capture: only the canvas, at the requested size. */
 html[data-qa] body { background: var(--sky); }
 html[data-qa] .site-header, html[data-qa] .viewer-tools, html[data-qa] .viewer-readout, html[data-qa] .details-panel, html[data-qa] .skip-link { display: none !important; }
