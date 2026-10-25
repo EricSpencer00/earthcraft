@@ -42,7 +42,7 @@ concurrency:
 jobs:
   browser:
     if: github.event.repository.private == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.58 has no Chromium for ubuntu-latest (26.04)
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
