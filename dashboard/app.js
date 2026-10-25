@@ -36,8 +36,8 @@ function detailLevel(index){
     const key=tile[0]+'_'+tile[1];
     if(liveTiles.detailed.has(key))return 'high';
     if(isLake(index))return null;  // open water: no detail to grade
-    // Built without surface detail: a tiles/v2 base build, or the original LiDAR world.
-    if(liveTiles.published.has(key)||atlas.cells[index]===2)return 'low';
+    if(liveTiles.published.has(key))return 'low';      // a new tiles/v2 base build
+    if(atlas.cells[index]===2)return 'original';         // only the original LiDAR world
     return null;
   }
   if(!detail)return null;
@@ -71,20 +71,22 @@ function blockSource(index){
   freshTiles=tileSet(freshTiles,world.fresh_tiles);
   return freshTiles.set.has(id)?{base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
 }
-function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
+function detailColor(level){return {none:color('gray'),original:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
+// With live status the layer reads as progress: new tiles drawn over the original world.
+const LIVE_LEVELS=[['original','original'],['low','new'],['high','full detail']];
 function renderDetailCount(){
   const box=$('detail-count');
   if(liveTiles){
-    const tiles=new Set();
-    if(atlas)atlas.cell_ids.forEach((id,i)=>{if(atlas.cells[i]===2&&!isLake(i)){const t=regionTile(id);if(t)tiles.add(t[0]+'_'+t[1]);}});
-    const lake=new Set(snapshot?.generated_world?.lake_tiles||[]);
-    for(const id of liveTiles.published)if(!lake.has(id))tiles.add(id);
-    const high=liveTiles.detailed.size,low=[...tiles].filter(id=>!liveTiles.detailed.has(id)).length;
-    const parts=[document.createTextNode('Detail:')];
-    for(const [level,value] of [['low',low],['high',high]]){
+    const old=new Set(),lake=new Set(snapshot?.generated_world?.lake_tiles||[]);
+    if(atlas)atlas.cell_ids.forEach((id,i)=>{if(atlas.cells[i]===2&&!isLake(i)){const t=regionTile(id);if(t)old.add(t[0]+'_'+t[1]);}});
+    const fresh=[...liveTiles.published].filter(id=>!lake.has(id));
+    const value={high:liveTiles.detailed.size,low:fresh.filter(id=>!liveTiles.detailed.has(id)).length,
+      original:[...old].filter(id=>!liveTiles.published.has(id)&&!liveTiles.detailed.has(id)).length};
+    const parts=[document.createTextNode('Tiles:')];
+    for(const [level,label] of LIVE_LEVELS){
       const item=document.createElement('span'),swatch=document.createElement('i');
       swatch.className='lvl-'+level;swatch.setAttribute('aria-hidden','true');
-      item.append(swatch,level+' '+number(value));parts.push(item);
+      item.append(swatch,label+' '+number(value[level]));parts.push(item);
     }
     box.replaceChildren(...parts);box.title='512 m tiles, from the pipeline\'s latest status report.';box.hidden=false;
     return;
@@ -114,7 +116,7 @@ async function loadDetail(){
   }catch{/* detail levels are optional */}
 }
 let snapshot=null,atlas=null,busy=false,refreshQueued=false,mapMetrics=null,zoom=1,selectedIndex=null,hoverIndex=null;
-let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',drawPending=false;
+let geoMap=null,geoCells=[],geoBounds=null,geoSignature='',mapLayer='build',layerChosen=false,drawPending=false;
 // Cells by 0.01-degree bucket (a 256 m cell touches 1-4), so hover and click test a handful
 // of cells instead of all of them.
 let geoBuckets=new Map(),geoCellIndex=new Map();
@@ -308,7 +310,7 @@ function setLayer(layer){
     const complete=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
     setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' in total');
   }else if(layer==='detail'&&atlas?.source==='published'){
-    setMapMessage(hasDetail()?'Detail level of each 512 m tile':'Detail levels are not available yet');
+    setMapMessage(liveTiles?'New tiles over the original world':hasDetail()?'Detail level of each 512 m tile':'Detail levels are not available yet');
   }else if(atlas)renderAtlas();
 }
 
@@ -760,6 +762,7 @@ async function refresh(){
     }
     renderSnapshot();
     renderAtlas();
+    if(liveTiles&&!layerChosen&&mapLayer==='build'&&atlas?.source==='published')setLayer('detail');
   }catch(error){
     document.body.dataset.feed='error';
     $('connection').textContent='Snapshot unavailable';
@@ -826,7 +829,10 @@ function renderSelection(){
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
   if(isLake(selectedIndex)&&!hasPackage(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
-  if(hasDetail()&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
+  if(hasDetail()&&atlas.source==='published'){
+    const level=detailLevel(selectedIndex);
+    rows.push(['Detail',(liveTiles&&Object.fromEntries(LIVE_LEVELS)[level])||level||'not checked yet']);
+  }
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
     dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
@@ -910,7 +916,7 @@ $('panel-toggle').onclick=()=>setPanel(document.body.dataset.panel!=='open');
 $('panel-close').onclick=()=>{setPanel(false);$('panel-toggle').focus();};
 $('about-open').onclick=()=>setPanel(true,'about');
 for(const id of ['world','cell'])$('tab-'+id).onclick=()=>setPanel(true,id);
-for(const id of ['build','appearance','detail'])$('layer-'+id).onclick=()=>setLayer(id);
+for(const id of ['build','appearance','detail'])$('layer-'+id).onclick=()=>{layerChosen=true;setLayer(id);};
 for(const id of Object.keys(places))$('place-'+id).onclick=()=>goToPlace(id);
 $('clear-selection').onclick=()=>{clearSelection();$('map').focus();};
 $('refresh').onclick=refresh;
