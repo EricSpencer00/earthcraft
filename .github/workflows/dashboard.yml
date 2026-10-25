@@ -15,7 +15,6 @@ on:
       - tests/fixtures/anvil/**
       - .github/workflows/dashboard.yml
       - progress/earth.json
-      - docs/photos/watertower-sep-10-26.png
   pull_request:
     paths:
       - dashboard/**

@@ -12,7 +12,6 @@ on:
       - tests/dashboard_browser.mjs
       - tests/pipeline.mjs
       - tests/pipeline_browser.mjs
-      - docs/photos/watertower-sep-10-26.png
       - .github/workflows/progress-pages.yml
   schedule:
     - cron: '17 * * * *'
@@ -53,7 +52,6 @@ jobs:
           cp dashboard/*.html dashboard/*.js dashboard/*.mjs dashboard/*.css dashboard/places.json site/
           cp -R dashboard/assets site/assets
           cp -R dashboard/cache site/cache
-          cp docs/photos/watertower-sep-10-26.png site/assets/water-tower.png
           cp progress/earth.json site/progress/earth.json
           python -c 'from pathlib import Path; p=Path("site"); files=list(p.rglob("*")); assert not any(f.is_symlink() for f in files); size=sum(f.stat().st_size for f in files if f.is_file()); assert size <= 20*2**20, "Pages artifact exceeds the 20 MiB bound"; print("Site bytes:", size)'
           touch site/.nojekyll
