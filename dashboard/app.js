@@ -1,5 +1,5 @@
 import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
-import {parseLocation} from './location-search.mjs?v=simple-1';
+import {parseCoordinates,placeIndex,searchPlaces,fold} from './location-search.mjs?v=places-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 import {frameInverse} from './frame.mjs?v=frame-1';
 import {decodeTileBitmap} from './fresh-tiles.mjs?v=fresh-1';
@@ -26,11 +26,24 @@ function regionTile(id){
   const m=/^(-?\d+)_(-?\d+)$/.exec(id||'');
   return m?[Number(m[1])>>1,Number(m[2])>>1]:null;
 }
+// The AWS host's status file (status/pipeline.json) lists every published tiles/v2 tile and
+// every tile with surface detail (scans, trees, facades, ground); those win over the sample.
+let liveTiles=null;
 function detailLevel(index){
   const id=atlas?.cell_ids?.[index],tile=regionTile(id);
-  if(!detail||!id)return null;
+  if(!id)return null;
+  if(liveTiles&&tile){
+    const key=tile[0]+'_'+tile[1];
+    if(liveTiles.detailed.has(key))return 'high';
+    if(isLake(index))return null;  // open water: no detail to grade
+    // Built without surface detail: a tiles/v2 base build, or the original LiDAR world.
+    if(liveTiles.published.has(key)||atlas.cells[index]===2)return 'low';
+    return null;
+  }
+  if(!detail)return null;
   return detail.cells?.[id]||(tile&&detail.tiles?.[`r.${tile[0]}.${tile[1]}`])||null;
 }
+const hasDetail=()=>Boolean(detail||liveTiles);
 // Cells with a published tiles/v2 package read their blocks from it, at the snapshot's
 // dataset commit; others read the world/region capture the viewer pins.
 const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
@@ -49,6 +62,8 @@ function blockSource(index){
   const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
   if(!tile||!/^[0-9a-f]{40}$/.test(world?.dataset_revision||''))return null;
   const id=tile[0]+'_'+tile[1],root=`${HF_DATASET}/resolve/${world.dataset_revision}`;
+  // Surface detail lands after the base tile: read those from main, which has the latest build.
+  if(liveTiles?.detailed.has(id))return {base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'};
   if(hasPackage(index))return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
   if(isLake(index))return {base:`${root}/lake/v1/`,layout:'lake'};
   if(!Array.isArray(world.v2_tiles))return null;
@@ -59,6 +74,21 @@ function blockSource(index){
 function detailColor(level){return {none:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 function renderDetailCount(){
   const box=$('detail-count');
+  if(liveTiles){
+    const tiles=new Set();
+    if(atlas)atlas.cell_ids.forEach((id,i)=>{if(atlas.cells[i]===2&&!isLake(i)){const t=regionTile(id);if(t)tiles.add(t[0]+'_'+t[1]);}});
+    const lake=new Set(snapshot?.generated_world?.lake_tiles||[]);
+    for(const id of liveTiles.published)if(!lake.has(id))tiles.add(id);
+    const high=liveTiles.detailed.size,low=[...tiles].filter(id=>!liveTiles.detailed.has(id)).length;
+    const parts=[document.createTextNode('Detail:')];
+    for(const [level,value] of [['low',low],['high',high]]){
+      const item=document.createElement('span'),swatch=document.createElement('i');
+      swatch.className='lvl-'+level;swatch.setAttribute('aria-hidden','true');
+      item.append(swatch,level+' '+number(value));parts.push(item);
+    }
+    box.replaceChildren(...parts);box.title='512 m tiles, from the pipeline\'s latest status report.';box.hidden=false;
+    return;
+  }
   if(!detail){box.hidden=true;return;}
   const sampled=Number(detail.sampled)>0&&Number(detail.sampled)<1;
   const parts=[document.createTextNode('Detail:')];
@@ -240,7 +270,7 @@ function cellStyle(cell,colors,water){
 function syncCellLayer(){
   if(!geoMap?.isStyleLoaded())return;
   const colors=palette(),water=color('water');
-  const key=[geoSignature,geoCells.length,mapLayer,detail?detail.computed_utc||1:0,colors.join(),water].join('|');
+  const key=[geoSignature,geoCells.length,mapLayer,detail?detail.computed_utc||1:0,liveTiles?.detailed.size||0,colors.join(),water].join('|');
   const source=geoMap.getSource('cells');
   if(key===cellLayerKey&&source)return;
   const data={type:'FeatureCollection',features:geoCells.map(cell=>({type:'Feature',id:cell.index,
@@ -278,7 +308,7 @@ function setLayer(layer){
     const complete=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
     setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' in total');
   }else if(layer==='detail'&&atlas?.source==='published'){
-    setMapMessage(detail?'Detail level of each 512 m tile':'Detail levels are not available yet');
+    setMapMessage(hasDetail()?'Detail level of each 512 m tile':'Detail levels are not available yet');
   }else if(atlas)renderAtlas();
 }
 
@@ -292,18 +322,44 @@ function goToPlace(id){
   else{clearSelection();setMapMessage(place.name+' is not on this map yet.');}
 }
 
+// Named places (OpenStreetMap, ODbL) load on first use; matching stays in the browser.
+let placeNames=null;
+function loadPlaces(){
+  placeNames??=fetch('./places.json?v=places-1',{signal:AbortSignal.timeout(15000)})
+    .then(response=>{if(!response.ok)throw Error('Place names could not be loaded.');return response.json();})
+    .then(placeIndex).catch(error=>{placeNames=null;throw error;});
+  return placeNames;
+}
+async function findLocation(query){
+  const coordinates=parseCoordinates(query);
+  if(coordinates)return coordinates;
+  const key=fold(query);
+  if(Object.hasOwn(places,key))return places[key];
+  const [best]=searchPlaces(query,await loadPlaces(),1);
+  if(!best)throw new Error(query.trim()?'No place called “'+query.trim()+'” in the Chicago area.':'Enter a place or latitude, longitude.');
+  return best;
+}
+let suggestToken=0;
+$('location-query').addEventListener('focus',()=>{loadPlaces().catch(()=>{});},{once:true});
+$('location-query').addEventListener('input',async()=>{
+  const token=++suggestToken,query=$('location-query').value;
+  let matches=[];
+  try{matches=parseCoordinates(query)?[]:searchPlaces(query,await loadPlaces());}catch{matches=[];}
+  if(token!==suggestToken)return;
+  $('place-suggestions').replaceChildren(...matches.map(place=>Object.assign(document.createElement('option'),{value:place.name})));
+});
 $('location-search').onsubmit=async event=>{
   event.preventDefault();
   const status=$('search-status');
   try{
-    const location=parseLocation($('location-query').value,places);
+    const location=await findLocation($('location-query').value);
     if(!geographic())throw new Error('The map is still loading. Try again in a moment.');
     const [lng,lat]=location.coordinates;
     const cell=cellAtLocation({lng,lat});
     if(!cell){clearSelection();status.textContent=location.name+' is not built yet.';return;}
     geoMap.easeTo({center:location.coordinates,zoom:13,duration:0});
     selectIndex(cell.index);
-    status.textContent='Showing '+location.name+'.';
+    status.textContent='';
   }catch(error){status.textContent=error.message;}
 };
 function setMapMessage(message){$('mapnote').textContent=message;}
@@ -659,8 +715,12 @@ async function publishedSince(world){
   try{
     const response=await fetch(`${HF_DATASET}/resolve/main/status/pipeline.json`,{cache:'no-cache',credentials:'omit',signal:AbortSignal.timeout(10000)});
     if(!response.ok)return [];
-    const known=new Set(world.v2_tiles||[]);
-    return (await decodeTileBitmap((await response.json())?.published_tiles)).filter(id=>!known.has(id));
+    const status=await response.json(),known=new Set(world.v2_tiles||[]);
+    const published=await decodeTileBitmap(status?.published_tiles);
+    if(status?.detailed_tiles){
+      liveTiles={published:new Set([...known,...published]),detailed:new Set(await decodeTileBitmap(status.detailed_tiles))};
+    }
+    return published.filter(id=>!known.has(id));
   }catch{return [];}
 }
 async function readPublished(){
@@ -678,6 +738,7 @@ async function readPublished(){
   const nextAtlas=publishedAtlas(data);
   snapshot=data;
   atlas=nextAtlas;
+  if(liveTiles)renderDetailCount();
 }
 
 async function readSnapshot(){
@@ -748,6 +809,7 @@ let cellPreview=null,cellToken=0;
 function renderSelection(){
   const details=$('selection-details');details.replaceChildren();
   details.hidden=true;$('clear-selection').hidden=selectedIndex===null;$('cell-actions').hidden=true;$('cell-view').hidden=true;
+  document.querySelector('.viewer-link').href='./blocks.html';
   const token=++cellToken;
   if(selectedIndex===null||!atlas){
     $('selection-title').textContent='Choose a cell';
@@ -764,7 +826,7 @@ function renderSelection(){
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
   rows.push(['World X / Z',number(blockX)+' / '+number(blockZ)]);
   if(isLake(selectedIndex)&&!hasPackage(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
-  if(detail&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
+  if(hasDetail()&&atlas.source==='published')rows.push(['Detail',detailLevel(selectedIndex)||'not checked yet']);
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
     dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
@@ -776,6 +838,7 @@ function renderSelection(){
   const source=blockSource(selectedIndex);
   const tile=source?`&base=${encodeURIComponent(source.base)}&layout=${source.layout}`:'';
   $('cell-blocks').href=`./blocks.html?block=${cx},${cz}&radius=${radius}${tile}`;$('cell-actions').hidden=false;
+  document.querySelector('.viewer-link').href=$('cell-blocks').href;
   $('cell-view').hidden=false;$('cell-view').dataset.state='loading';$('cell-view-status').textContent='Loading blocks…';
   cellPreview??=import('./cell-preview.mjs?v=lake-1');
   cellPreview.then(module=>module.showCell($('cell-canvas'),{x:cx,z:cz,radius:2,...(source||{})})).then(result=>{
