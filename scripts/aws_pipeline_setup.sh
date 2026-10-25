@@ -237,20 +237,23 @@ last_commit = ({'oid': commits[-1][1].get('oid'), 'utc': commits[-1][1].get('utc
                if commits else None)
 hour = sum(1 for at, _ in published if at >= now - 3600)
 day = len(published)
-journal, tiles = {}, []
+journal, tiles, detailed = {}, [], []
 try:
     with sqlite3.connect(f'file:{control / "jobs.sqlite"}?mode=ro', uri=True, timeout=20) as db:
         for stage, state, n in db.execute('SELECT stage,state,count(*) FROM jobs GROUP BY 1,2'):
             journal.setdefault(str(stage), {})[state] = n
         tiles = [t for (t,) in db.execute("SELECT tile FROM jobs WHERE stage=1 AND state='complete' "
                                            "AND evidence LIKE 'tiles/v2/%'")]
+        detailed = [t for (t,) in db.execute("SELECT tile FROM jobs WHERE stage=2 AND state='complete' "
+                                              "AND evidence LIKE 'tiles/v2/%'")]
 except sqlite3.Error as error:
     journal = {'error': str(error)}
 
 
 def bitmap(ids):
-    """Published tiles/v2 tiles as a zlib bitmap over their bounding box (a few KB for the
-    whole plan); the site adds tiles newer than its base map snapshot from this."""
+    """tiles/v2 tiles as a zlib bitmap over their bounding box (a few KB for the whole plan).
+    The site adds published tiles newer than its base map snapshot from published_tiles, and
+    colours the detail layer from detailed_tiles (surface detail: scans, trees, facades, ground)."""
     xy = [tuple(map(int, t.split('_'))) for t in ids if re.fullmatch(r'-?\d+_-?\d+', t)]
     if not xy:
         return None
@@ -278,7 +281,7 @@ result = {
     'tiles_published_journal': len(tiles), 'tiles_last_hour': hour, 'tiles_last_24h': day,
     'tiles_per_hour_24h': round(day / 24, 2), 'tiles_complete_journal': journal.get('2', {}).get('complete'),
     'last_commit': last_commit, 'last_tile': published[-1][1] if published else None,
-    'journal': journal, 'published_tiles': bitmap(tiles),
+    'journal': journal, 'published_tiles': bitmap(tiles), 'detailed_tiles': bitmap(detailed),
     'disk': {'total_bytes': usage.total, 'free_bytes': usage.free, 'gen_scratch_bytes': scratch},
 }
 text = json.dumps(result, indent=1, sort_keys=True)

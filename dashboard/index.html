@@ -11,7 +11,7 @@
   <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="./assets/vendor/maplibre/maplibre-gl.css">
   <link rel="stylesheet" href="./style.css?v=detail-1">
-  <script src="./app.js?v=lake-2" type="module"></script>
+  <script src="./app.js?v=places-1" type="module"></script>
 </head>
 <body data-panel="closed" data-section="world">
   <a class="skip-link" href="#map">Skip to the map</a>
@@ -25,7 +25,7 @@
     <div class="map-tools">
       <div class="maphead"><span class="sr-only" id="map-unit">Earthcraft world</span><button id="browse-open" type="button">Browse cells</button></div>
       <div class="toolbar"><label class="view-control" for="area"><span class="sr-only">Map view</span><select id="area"><option value="world">What’s built</option><option value="live">In Minecraft</option><option value="queue">Build queue</option><option value="installed">Original footprint</option><option value="published">Build progress</option></select></label></div>
-      <form id="location-search" class="location-search" role="search"><label class="sr-only" for="location-query">City or latitude, longitude</label><input id="location-query" maxlength="80" placeholder="City or latitude, longitude" autocomplete="off"><button type="submit">Find</button><p id="search-status" role="status"></p></form>
+      <form id="location-search" class="location-search" role="search"><label class="sr-only" for="location-query">Place or latitude, longitude</label><input id="location-query" maxlength="80" placeholder="Place or latitude, longitude" autocomplete="off" list="place-suggestions"><datalist id="place-suggestions"></datalist><button type="submit">Find</button><p id="search-status" role="status"></p></form>
       <details id="places-menu" class="places-menu"><summary>Jump to place</summary><div class="place-switch" aria-label="Places"><button id="place-chicago" type="button">Chicago</button><button id="place-elmhurst" type="button">Elmhurst</button></div></details><div class="layer-switch" aria-label="Map layer"><button id="layer-build" type="button" aria-pressed="true">Build status</button><button id="layer-appearance" type="button" aria-pressed="false">Surface detail</button><button id="layer-detail" type="button" aria-pressed="false">Detail level</button></div>
     </div>
     <div id="warning" class="warning" role="status" hidden></div>
