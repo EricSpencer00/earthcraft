@@ -90,7 +90,8 @@ def prepare(workdir, reader):
 
 
 def pending_in_journal(control):
-    with sqlite3.connect(f'file:{control / "jobs.sqlite"}?mode=ro', uri=True) as db:
+    # The local copy of a WAL journal: a read-only open fails until its -shm file exists.
+    with sqlite3.connect(control / 'jobs.sqlite') as db:
         return {row[0] for row in db.execute("SELECT tile FROM jobs WHERE stage=0 AND state='pending'")}
 
 
