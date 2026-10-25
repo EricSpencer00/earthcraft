@@ -20,10 +20,8 @@ const server=createServer(async(req,res)=>{
     if(pathname==='/progress/earth.json'){
       body=JSON.stringify(snapshot);filename='earth.json';
     }else{
-      filename=pathname==='/assets/water-tower.png'
-        ?(siteRoot?resolve(siteRoot,'assets/water-tower.png'):resolve(root,'docs/photos/watertower-sep-10-26.png'))
-        :resolve(assets,pathname==='/'?'index.html':pathname.slice(1));
-      if(pathname!=='/assets/water-tower.png'&&!filename.startsWith(assets+sep))throw Error('Outside dashboard');
+      filename=resolve(assets,pathname==='/'?'index.html':pathname.slice(1));
+      if(!filename.startsWith(assets+sep))throw Error('Outside dashboard');
       body=await readFile(filename);
     }
     res.writeHead(200,{'Content-Type':mime[extname(filename)]||'application/octet-stream',
