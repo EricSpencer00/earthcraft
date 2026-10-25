@@ -10,9 +10,9 @@
   <link rel="preload" href="./assets/fonts/source-serif-4-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="./style.css?v=simple-3">
-  <link rel="stylesheet" href="./blocks.css?v=blocks-2">
+  <link rel="stylesheet" href="./blocks.css?v=featured-1">
   <script src="./blocks-boot.js?v=blocks-2"></script>
-  <script src="./chunk-viewer.mjs?v=lake-1" type="module"></script>
+  <script src="./chunk-viewer.mjs?v=featured-1" type="module"></script>
 </head>
 <body data-panel="closed" data-view="orbit">
   <a class="skip-link" href="#viewer">Skip to the block view</a>
@@ -24,7 +24,7 @@
   <main id="blocks" class="explorer" aria-labelledby="page-title">
     <div class="viewer-wrap" id="viewer-wrap" aria-busy="true"><canvas id="viewer" tabindex="0" role="img" aria-label="3D view of Minecraft blocks. Drag to turn, scroll to zoom." aria-describedby="viewer-help"></canvas></div>
     <div class="map-tools viewer-tools">
-      <form id="goto" class="goto" aria-label="Choose chunks"><label for="goto-x">Chunk X</label><input id="goto-x" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-z">Chunk Z</label><input id="goto-z" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-radius">Radius</label><select id="goto-radius"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option></select><button type="submit">Load</button><button id="goto-tower" type="button">Water Tower</button></form>
+      <form id="goto" class="goto" aria-label="Choose chunks"><label for="goto-x">Chunk X</label><input id="goto-x" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-z">Chunk Z</label><input id="goto-z" inputmode="numeric" pattern="-?[0-9]+" maxlength="8" required><label for="goto-radius">Radius</label><select id="goto-radius"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option></select><button type="submit">Load</button></form><nav class="featured" aria-label="Featured places"><a href="./blocks.html">Loyola</a><a id="goto-newest" href="./blocks.html" hidden>Newest</a><a href="./blocks.html?chunk=2,2&amp;radius=3&amp;view=orbit">Water Tower</a></nav>
       <div class="layer-switch view-switch" role="group" aria-label="Camera"><button type="button" data-view="orbit" aria-pressed="true">Orbit</button><button type="button" data-view="iso" aria-pressed="false">Iso</button><button type="button" data-view="top" aria-pressed="false">Top</button><button type="button" data-view="street" aria-pressed="false">Street</button></div>
     </div>
     <div class="map-bottom viewer-readout"><p id="viewer-status" role="status">Reading region headers…</p><p class="readout"><span id="readout-camera">—</span><span id="readout-block">Point at a block to name it</span></p></div>
