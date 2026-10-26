@@ -90,7 +90,8 @@ class VolumeExposureTests(unittest.TestCase):
         self.assertEqual(len(cells['y']), 7 * 2 * (10 + 8))           # still only the outer perimeter faces
 
     def test_part_colour_paints_a_black_glass_curtain_wall(self):
-        from material_router import texture_colors
+        glass = {'black_stained_glass': [25, 25, 30], 'black_concrete': [8, 10, 15],
+                 'light_gray_stained_glass': [150, 150, 150], 'light_gray_concrete': [125, 125, 115]}
         vol, lab, ground, top, surface, shapes, ylo = scene()
         vol[4:12, 5:15, 79 - ylo:110 - ylo] = 1                       # make it a 39 m tower
         top = np.where(lab > 0, 110, 70).astype(np.int32)
@@ -99,7 +100,7 @@ class VolumeExposureTests(unittest.TestCase):
         part = [(box(5, 4, 15, 12), {'id': 'osm/9', 'tags': {'building:part': 'yes', 'building:colour': 'black',
                                                               'building:material': 'glass'}})]
         cells['part'] = rf.labels(part, 32)[cells['z'], cells['x']]
-        edits, buildings = rf.plan(cells, shapes, ground, top, surface, 0, 0, texture_colors(), part_shapes=part)
+        edits, buildings = rf.plan(cells, shapes, ground, top, surface, 0, 0, glass, part_shapes=part)
         states = {(role, state) for _, _, _, state, role, _ in edits}
         self.assertIn(('window', 'minecraft:black_stained_glass'), states)
         self.assertIn(('wall', 'minecraft:black_concrete'), states)
