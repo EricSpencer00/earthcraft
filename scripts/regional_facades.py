@@ -91,6 +91,27 @@ def footprints(sources, meta):
     return [(geom, info) for geom, info in shapes if not geom.is_empty]
 
 
+def parts(sources, meta):
+    """[(local geometry, tags)] for closed OSM building:part ways that tag a colour or material (Willis
+    Tower's tubes are black glass; its outline says nothing). Largest first: rasterized in order, the
+    most specific (smallest) part owns a cell when parts nest."""
+    west, north = meta['west'], meta['north']
+    project = Transformer.from_crs(4326, meta['crs'], always_xy=True)
+    out = []
+    for way in json.loads((Path(sources) / 'osm-ways.json').read_text()):
+        tags = way['tags']
+        if not way.get('closed') or len(way['coordinates']) < 4 or not tags.get('building:part'):
+            continue
+        if not any(k in tags for k in ('building:colour', 'building:material', 'building:facade:colour',
+                                       'building:facade:material', 'facade:colour', 'facade:material')):
+            continue
+        x, y = project.transform(*zip(*way['coordinates']))
+        geom = make_valid(Polygon(zip(np.asarray(x) - west, north - np.asarray(y))))
+        if not geom.is_empty:
+            out.append((geom, {'id': f"osm/{way['id']}", 'tags': tags}))
+    return sorted(out, key=lambda item: -item[0].area)
+
+
 def labels(shapes, size):
     if not shapes:
         return np.zeros((size, size), np.int32)
@@ -99,38 +120,72 @@ def labels(shapes, size):
 
 
 def exposed(lab, ground, vol, solid, ylo):
-    """Exposed wall cells: dict of arrays z, x, y, dx, dz, building (label), corner."""
+    """Exposed wall cells: dict of arrays z, x, y, dx, dz, building (label), corner.
+
+    A wall is a solid block of a building column, above ground and below that column's top (the roof
+    edge), whose neighbour at the same height is open to the sky (above everything in that neighbour
+    column): the footprint's outer faces, the faces of setbacks inside one footprint (Willis Tower's
+    tubes), courtyards, and the part of a tall wall that rises above a touching lower neighbour. Party
+    walls below a neighbour's roof, and the inside of a hollow shell under its roof, stay hidden. A face cell is a corner
+    when either neighbour along the face is not also an exposed face in that direction."""
     Z, X, H = vol.shape
-    pad = np.pad(lab, 1)
+    z, x = np.nonzero(lab > 0)
+    if not len(z):
+        return None
+    own = solid[vol[z, x, :]]
+    top = np.where(own.any(axis=1), H - 1 - np.argmax(own[:, ::-1], axis=1), -1)
+    yy = np.arange(H)[None, :]
+    body = own & (yy > (ground[z, x] - ylo)[:, None]) & (yy < top[:, None])
+    keep = body.any(axis=1)  # columns with wall above ground (bounds memory to the buildings)
+    z, x, body = z[keep], x[keep], body[keep]
+    index = np.full((Z, X), -1, np.int64)
+    index[z, x] = np.arange(len(z))
+
+    def face(dx, dz, zs, xs):
+        """Exposed-face mask (len(zs) x H) for footprint columns zs, xs facing (dx, dz)."""
+        nz, nx = zs + dz, xs + dx
+        border = (nz < 0) | (nz >= Z) | (nx < 0) | (nx >= X)  # beyond the tile: treat as open
+        outside = solid[vol[np.clip(nz, 0, Z - 1), np.clip(nx, 0, X - 1), :]]
+        outside[border] = False
+        roof = np.where(outside.any(axis=1), H - 1 - np.argmax(outside[:, ::-1], axis=1), -1)
+        return body[index[zs, xs]] & (np.arange(H)[None, :] > roof[:, None])
+
     out = []
-    edges = {}
     for dx, dz in DIRS:
-        neighbour = pad[1 + dz:1 + dz + Z, 1 + dx:1 + dx + X]
-        edges[(dx, dz)] = (lab > 0) & (neighbour == 0)
-    for dx, dz in DIRS:
-        edge = edges[(dx, dz)]
-        z, x = np.nonzero(edge)
-        if not len(z):
+        wall = face(dx, dz, z, x)
+        if not wall.any():
             continue
-        nz, nx = np.clip(z + dz, 0, Z - 1), np.clip(x + dx, 0, X - 1)
-        own = solid[vol[z, x, :]]
-        outside = solid[vol[nz, nx, :]]
-        border = (z + dz < 0) | (z + dz >= Z) | (x + dx < 0) | (x + dx >= X)
-        outside[border] = False  # beyond the tile: treat as open
-        top = np.where(own.any(axis=1), H - 1 - np.argmax(own[:, ::-1], axis=1), -1)
-        yy = np.arange(H)[None, :]
-        base = (ground[z, x] - ylo)[:, None]
-        wall = own & ~outside & (yy > base) & (yy < top[:, None])  # above ground, below the roof edge
-        az, ax = (abs(dx), abs(dz))  # along the face
-        along = edges[(dx, dz)]
-        padded = np.pad(along, 1)
-        corner = ~(padded[1 + z + az, 1 + x + ax] & padded[1 + z - az, 1 + x - ax])
+        az, ax = abs(dx), abs(dz)  # along the face
+        sides = []
+        for s in (1, -1):
+            sz, sx = z + s * az, x + s * ax
+            inside = (sz >= 0) & (sz < Z) & (sx >= 0) & (sx < X)
+            k = np.where(inside, index[np.clip(sz, 0, Z - 1), np.clip(sx, 0, X - 1)], -1)
+            side = np.zeros_like(wall)
+            ok = k >= 0
+            side[ok] = face(dx, dz, z[k[ok]], x[k[ok]])
+            sides.append(side)
+        corner = ~(sides[0] & sides[1])
         i, j = np.nonzero(wall)
-        out.append((z[i], x[i], j + ylo, np.full(len(i), dx), np.full(len(i), dz), lab[z[i], x[i]], corner[i]))
+        out.append((z[i], x[i], j + ylo, np.full(len(i), dx), np.full(len(i), dz), lab[z[i], x[i]], corner[i, j]))
     if not out:
         return None
     names = ('z', 'x', 'y', 'dx', 'dz', 'building', 'corner')
     return {name: np.concatenate([part[k] for part in out]) for k, name in enumerate(names)}
+
+
+def ledges(lab, top_y, roof_plane):
+    """Ledge tops on a face: top cells of a footprint column that are not on a roof plane and have a
+    taller neighbour in the same footprint, e.g. the notches a lidar surface leaves on a tower face.
+    They are painted as wall so a face reads continuous instead of streaked with roof colour."""
+    Z, X = lab.shape
+    taller = np.zeros((Z, X), bool)
+    for dx, dz in DIRS:
+        nz, nx = slice(max(dz, 0), Z + min(dz, 0)), slice(max(dx, 0), X + min(dx, 0))
+        hz, hx = slice(max(-dz, 0), Z + min(-dz, 0)), slice(max(-dx, 0), X + min(-dx, 0))
+        taller[hz, hx] |= (lab[nz, nx] == lab[hz, hx]) & (top_y[nz, nx] >= top_y[hz, hx] + 2)
+    z, x = np.nonzero((lab > 0) & ~roof_plane & taller)
+    return z, x
 
 
 def style(info, height, area):
@@ -142,8 +197,17 @@ def style(info, height, area):
     return 'mid'
 
 
-def plan(cells, shapes, ground, top, surface_key, grid_x0, grid_z0, palette, recorded=None):
-    """Per-cell edits (x, y, z, state, role, building) and a per-building evidence record."""
+def curtain(block):
+    """(window, spandrel) for a glass wall: the glass itself, and the solid block of its colour between
+    window rows, so a black glass tower reads black instead of banded with blue stock windows."""
+    if 'stained_glass' in block:
+        return block, block.replace('_stained_glass', '_concrete')
+    return block, 'minecraft:light_gray_concrete'
+
+
+def plan(cells, shapes, ground, top, surface_key, grid_x0, grid_z0, palette, recorded=None, part_shapes=()):
+    """Per-cell edits (x, y, z, state, role, building) and a per-building evidence record. A colour or
+    material tagged on the OSM building:part a cell lies in wins over the building's own wall."""
     from material_router import choose_with_evidence
     base = np.vectorize(lambda key: key.split('[', 1)[0])(surface_key)
     road_distance = ndimage.distance_transform_edt(~np.isin(base, list(ROADS)))
@@ -153,6 +217,7 @@ def plan(cells, shapes, ground, top, surface_key, grid_x0, grid_z0, palette, rec
         sel = cells['building'] == label
         z, x, y = cells['z'][sel], cells['x'][sel], cells['y'][sel]
         dx, dz, corner = cells['dx'][sel], cells['dz'][sel], cells['corner'][sel]
+        part = cells['part'][sel] if 'part' in cells else np.zeros(len(z), np.int32)
         g = int(np.median(ground[z, x]))
         height = float(np.median(top[z, x]) - g)
         if height < 2:
@@ -196,13 +261,28 @@ def plan(cells, shapes, ground, top, surface_key, grid_x0, grid_z0, palette, rec
             column = (z == z[nearest]) & (x == x[nearest]) & (dx == dx[nearest]) & (dz == dz[nearest])
             door = column & (offset <= 1)
         window &= ~door
+        walls = np.full(len(z), wall, dtype=object)
+        parts_tagged = 0
+        for pid in np.unique(part[part > 0]):
+            block_p, _ = choose_with_evidence(part_shapes[pid - 1][1]['tags'], 'facade', palette)
+            if block_p:
+                walls[part == pid] = f'minecraft:{block_p}'
+                parts_tagged += 1
+        if parts_tagged:
+            wall_role = 'tagged'
+        windows = np.full(len(z), GLASS[kind], dtype=object)
+        for block_w in set(walls):
+            if 'glass' in block_w:  # curtain wall: windows of its own glass, solid spandrels of its colour
+                pane, spandrel = curtain(block_w)
+                windows[walls == block_w] = pane
+                walls[walls == block_w] = spandrel
         for k in range(len(z)):
-            state = DOOR if door[k] else GLASS[kind] if window[k] else wall
+            state = DOOR if door[k] else windows[k] if window[k] else walls[k]
             role = 'door' if door[k] else 'window' if window[k] else 'wall'
             edits.append((grid_x0 + int(x[k]), int(y[k]), grid_z0 + int(z[k]), state, role, info['id']))
         buildings[info['id']] = {'floors': int(levels), 'floors_role': floors_role, 'floor_height_m': round(floor_h, 2),
                                  'style': kind, 'wall': wall, 'wall_role': wall_role, 'wall_evidence': why,
-                                 'height_m': round(height, 1), 'door': bool(door.any())}
+                                 'parts_tagged': parts_tagged, 'height_m': round(height, 1), 'door': bool(door.any())}
     return edits, buildings
 
 
@@ -241,10 +321,18 @@ def paint(tile, frame, world, sources, work, assessor=None, surface=None, defer=
     cells = exposed(lab, surface['ground_y'], vol, solid, ylo)
     if cells is None:
         return {'result': 'no exposed walls', 'buildings': 0}
+    from roof_color import roof_planes
+    lz, lx = ledges(lab, surface['top_y'], roof_planes(lab, surface['top_y']))
+    if len(lz):  # ledge tops on a face: painted as solid wall (corner: never a window or door)
+        extra = {'z': lz, 'x': lx, 'y': surface['top_y'][lz, lx], 'dx': np.zeros(len(lz), int),
+                 'dz': np.zeros(len(lz), int), 'building': lab[lz, lx], 'corner': np.ones(len(lz), bool)}
+        cells = {k: np.concatenate([cells[k], extra[k].astype(cells[k].dtype)]) for k in cells}
+    part_shapes = parts(sources, meta)
+    cells['part'] = labels(part_shapes, grid.size)[cells['z'], cells['x']]
     current = np.asarray(names, dtype=object)[vol[cells['z'], cells['x'], cells['y'] - ylo]]
     recorded = recorded_walls(assessor, meta, lab) if assessor is not None else {}
     edits, buildings = plan(cells, shapes, surface['ground_y'], surface['top_y'], surface['surface_key'],
-                            grid.x0, grid.z0, texture_colors(), recorded)
+                            grid.x0, grid.z0, texture_colors(), recorded, part_shapes)
     layer = LayerBuilder('facades', frame, 'Keyless facade detail: floors, windows, door, wall material')
     sources_by = {}
 
