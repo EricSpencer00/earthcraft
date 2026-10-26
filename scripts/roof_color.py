@@ -33,6 +33,45 @@ def roof_mask(owner, valid, shadow, vegetation):
     return (owner > 0) & valid & ~shadow & ~vegetation
 
 
+# Roof colours a photo pixel may pick. Downtown photos lean (tall roofs show displaced streets, trees
+# and walls), so saturated picks (lime, yellow, cyan, ...) are noise on a roof, not paint.
+ROOF_COLOURS = ('white', 'light_gray', 'gray', 'black', 'brown', 'red')
+PLANE_NEIGHBOURS = 5  # of 8 neighbours at the same height and owner: a roof plane, not a ledge on a face
+SMOOTH = 2            # majority window radius (5 x 5) within one roof plane
+
+
+def roof_planes(owner, top):
+    """Cells on a roof plane: most 8-neighbours share the owner and the height. A one-cell ledge
+    stepping down a facade is not a roof and keeps its wall block."""
+    owner, top = np.asarray(owner), np.asarray(top)
+    o, t = np.pad(owner, 1), np.pad(top, 1, constant_values=-10**6)
+    same = np.zeros(owner.shape, np.int32)
+    for dz in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dz or dx:
+                sl = (slice(1 + dz, 1 + dz + owner.shape[0]), slice(1 + dx, 1 + dx + owner.shape[1]))
+                same += (o[sl] == owner) & (t[sl] == top)
+    return (owner > 0) & (same >= PLANE_NEIGHBOURS)
+
+
+def smooth_choices(choices, selected, owner, top, radius=SMOOTH):
+    """Majority colour in a (2r+1)^2 window over selected cells of the same owner and height, so
+    single misregistered pixels take the colour of the roof around them."""
+    choices = np.asarray(choices)
+    n = int(choices.max()) + 1 if choices.size else 1
+    rows, cols = choices.shape
+    pad = lambda a, v: np.pad(a, radius, constant_values=v)
+    c, s, o, t = pad(choices, 0), pad(selected, False), pad(owner, 0), pad(top, -10**6)
+    votes = np.zeros((n, rows, cols), np.int32)
+    for dz in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            sl = (slice(radius + dz, radius + dz + rows), slice(radius + dx, radius + dx + cols))
+            ok = s[sl] & (o[sl] == owner) & (t[sl] == top)
+            for k in range(n):
+                votes[k] += ok & (c[sl] == k)
+    return np.where(selected, votes.argmax(axis=0), choices)
+
+
 def matching_grid(image, source):
     expected = {key: source[key] for key in ('crs', 'west', 'north', 'size')}
     if image.get('source_grid') != expected:
@@ -81,12 +120,14 @@ def apply(source_world, imagery, destination, verified=False):
         if bands.shape != (4, source['size'], source['size']) or bands.dtype != np.uint8:
             raise ValueError('Expected four U8 orthophoto bands on the metre tile grid')
         selected = roof_mask(owner, data['valid'], data['shadow_candidate'], data['vegetation_candidate'])
+    selected &= roof_planes(owner, top)
     offset = tuple(report.get('world_offset_xz', [0, 0]))
     selected, protected_anchor_count = protected_roof_cells(source_world, selected, top, offset)
     colours = texture_colors()
-    names = sorted(name for name in colours if name.endswith('_concrete'))
+    names = sorted(name for name in colours if name in {f'{c}_concrete' for c in ROOF_COLOURS})
     choices = nearest_colors(bands[:3].transpose(1, 2, 0),
                              np.asarray([colours[name] for name in names]))
+    choices = smooth_choices(choices, selected, owner, top)
     source_regions = {path.name: sha(path) for path in sorted((source_world/'region').glob('r.*.*.mca'))}
     shutil.copytree(source_world, destination, ignore=shutil.ignore_patterns('._*'))
     changed = retained = 0
@@ -148,7 +189,8 @@ def apply(source_world, imagery, destination, verified=False):
         'independent_accuracy_verified': False,
         'limitations': [
             'Orthophoto pixels are colour observations, not calibrated facade or roof material measurements.',
-            'Only shell-owned horizontal roof-top cells with valid non-shadow/non-vegetation samples are recoloured.',
+            'Only shell-owned roof-plane cells with valid non-shadow/non-vegetation samples are recoloured, '
+            'in neutral roof colours, smoothed within each roof plane.',
             'The source date precision and any cross-epoch disagreement remain explicit; no temporal fusion is implied.',
         ],
     }

@@ -68,6 +68,53 @@ class FacadeTests(unittest.TestCase):
         self.assertEqual((house['wall'], house['wall_role']), ('minecraft:red_concrete', 'tagged'))
 
 
+class VolumeExposureTests(unittest.TestCase):
+    def test_setbacks_and_walls_above_a_lower_neighbour_are_exposed(self):
+        vol, lab, ground, top, surface, shapes, ylo = scene()
+        vol[6:10, 8:12, 79 - ylo:90 - ylo] = 1        # a core rising from the podium roof to y 89
+        vol[4:12, 15:20, 71 - ylo:75 - ylo] = 1       # a lower building touching the east face, to y 74
+        shapes = shapes + [(box(15, 4, 20, 12), {'id': 'osm/2', 'tags': {'building': 'yes'}})]
+        lab = rf.labels(shapes, 32)
+        solid = np.array([n != 'minecraft:air' for n in NAMES])
+        cells = rf.exposed(lab, ground, vol, solid, ylo)
+        core = (cells['building'] == 1) & (cells['y'] >= 79)
+        self.assertEqual(set(cells['y'][core]), set(range(79, 89)))   # setback faces up to the core's roof edge
+        east = (cells['building'] == 1) & (cells['x'] == 14) & (cells['dx'] == 1)
+        self.assertEqual(set(cells['y'][east]), {75, 76, 77})         # only above the neighbour's roof
+
+    def test_the_inside_of_a_hollow_shell_is_not_a_wall(self):
+        vol, lab, ground, top, surface, shapes, ylo = scene()
+        vol[5:11, 6:14, 71 - ylo:78 - ylo] = 0                         # hollow under the y 78 roof slab
+        solid = np.array([n != 'minecraft:air' for n in NAMES])
+        cells = rf.exposed(lab, ground, vol, solid, ylo)
+        self.assertEqual(len(cells['y']), 7 * 2 * (10 + 8))           # still only the outer perimeter faces
+
+    def test_part_colour_paints_a_black_glass_curtain_wall(self):
+        glass = {'black_stained_glass': [25, 25, 30], 'black_concrete': [8, 10, 15],
+                 'light_gray_stained_glass': [150, 150, 150], 'light_gray_concrete': [125, 125, 115]}
+        vol, lab, ground, top, surface, shapes, ylo = scene()
+        vol[4:12, 5:15, 79 - ylo:110 - ylo] = 1                       # make it a 39 m tower
+        top = np.where(lab > 0, 110, 70).astype(np.int32)
+        solid = np.array([n != 'minecraft:air' for n in NAMES])
+        cells = rf.exposed(lab, ground, vol, solid, ylo)
+        part = [(box(5, 4, 15, 12), {'id': 'osm/9', 'tags': {'building:part': 'yes', 'building:colour': 'black',
+                                                              'building:material': 'glass'}})]
+        cells['part'] = rf.labels(part, 32)[cells['z'], cells['x']]
+        edits, buildings = rf.plan(cells, shapes, ground, top, surface, 0, 0, glass, part_shapes=part)
+        states = {(role, state) for _, _, _, state, role, _ in edits}
+        self.assertIn(('window', 'minecraft:black_stained_glass'), states)
+        self.assertIn(('wall', 'minecraft:black_concrete'), states)
+        self.assertNotIn(('window', rf.GLASS['tall']), states)
+        self.assertEqual(buildings['osm/1']['parts_tagged'], 1)
+
+    def test_a_notch_on_a_face_is_a_ledge_and_a_roof_is_not(self):
+        from roof_color import roof_planes
+        lab = np.zeros((12, 12), np.int32);lab[2:10, 2:10] = 1
+        top = np.where(lab > 0, 80, 60).astype(np.int32);top[2, 5] = 77   # a notch in the north edge
+        z, x = rf.ledges(lab, top, roof_planes(lab, top))
+        self.assertEqual(list(zip(z.tolist(), x.tolist())), [(2, 5)])
+
+
 class RecordedWallTests(unittest.TestCase):
     def test_assessor_wall_and_storeys_rank_between_tags_and_estimates(self):
         vol, lab, ground, top, surface, shapes, ylo = scene()

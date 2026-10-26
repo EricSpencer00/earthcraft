@@ -27,6 +27,17 @@ class RoofColorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'share'):
             roof_mask(np.ones((2, 2)), np.ones((2, 3)), np.ones((2, 3)), np.ones((2, 3)))
 
+class RoofPlaneTests(unittest.TestCase):
+    def test_ledges_are_not_roof_planes_and_odd_pixels_take_the_roof_colour(self):
+        from roof_color import roof_planes, smooth_choices
+        owner = np.zeros((9, 9), np.int32);owner[1:8, 1:8] = 1
+        top = np.where(owner > 0, 50, 0);top[1, 4] = 47                   # a ledge on the north face
+        planes = roof_planes(owner, top)
+        self.assertFalse(planes[1, 4]);self.assertTrue(planes[4, 4])
+        choices = np.zeros((9, 9), int);choices[4, 4] = 3                  # one lime-ish pixel on a grey roof
+        smoothed = smooth_choices(choices, planes, owner, top)
+        self.assertEqual(smoothed[4, 4], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
