@@ -182,6 +182,10 @@ class Journal:
         # SHA-256 and the verified Hub commit) instead of a local receipt path.
         if 'evidence_commit' not in columns:
             self.db.execute('ALTER TABLE jobs ADD COLUMN evidence_commit TEXT')
+        # A stage reopened to rebuild a published tile with newer code: its Hub package is the one being
+        # replaced, so a worker must not adopt it. The next completion clears the mark.
+        if 'rebuild' not in columns:
+            self.db.execute('ALTER TABLE jobs ADD COLUMN rebuild INTEGER NOT NULL DEFAULT 0')
         fingerprint=digest(plan)
         self._begin_immediate()
         try:
@@ -353,20 +357,29 @@ class Journal:
                 for index in stages:
                     self.db.execute("UPDATE jobs SET state='running',token=?,owner=?,expires=?,not_before=0,attempts=attempts+1 WHERE tile=? AND stage=?",
                         (token,owner,now+lease_seconds,row['tile'],index))
-                result={'tile':row['tile'],'lane':lane,'token':token,'stages':[STAGES[i] for i in stages],'prior':prior}
+                rebuild=self.db.execute('SELECT MAX(rebuild) FROM jobs WHERE tile=? AND stage IN ('+','.join('?'*len(stages))+')',
+                                        (row['tile'],*stages)).fetchone()[0]
+                result={'tile':row['tile'],'lane':lane,'token':token,'stages':[STAGES[i] for i in stages],'prior':prior,
+                        'rebuild':bool(rebuild)}
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
 
-    def reopen_stage(self,stage,evidence_suffix):
-        """Return completed stages whose evidence ends with evidence_suffix to pending (e.g. scans retired as
-        'no buildings' once trees are wanted there). Running or failed stages are untouched. Returns the count."""
-        if not evidence_suffix or stage not in (0,1,2):raise ValueError('A completion reason and generation stage required')
+    def reopen_stage(self,stage,evidence_suffix=None,tiles=None):
+        """Return completed stages whose evidence ends with evidence_suffix (e.g. scans retired as 'no buildings'
+        once trees are wanted there), or of the named tiles (rebuilt with newer code), to pending. Running or
+        failed stages are untouched. Returns the count."""
+        if not (evidence_suffix or tiles) or stage not in (0,1,2):
+            raise ValueError('A completion reason or tiles, and a generation stage, required')
+        clause,params=' AND evidence LIKE ?',['%'+(evidence_suffix or '')]
+        if tiles:
+            tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
+            clause+=' AND tile IN ('+','.join('?'*len(tiles))+')';params+=tiles
         self._begin_immediate()
         try:
             # A route rank kept from before the stage completed would jump it ahead of plan priority.
             changed=self.db.execute("UPDATE jobs SET state='pending',evidence=NULL,evidence_sha256=NULL,evidence_commit=NULL,"
-                                    "not_before=0,route_rank=NULL,route_label=NULL WHERE stage=? AND state='complete' AND evidence LIKE ?",
-                                    (stage,'%'+evidence_suffix)).rowcount
+                                    "not_before=0,route_rank=NULL,route_label=NULL,rebuild=? WHERE stage=? AND state='complete'"+clause,
+                                    (int(bool(tiles)),stage,*params)).rowcount
             self.db.execute('COMMIT');return changed
         except Exception:self.db.execute('ROLLBACK');raise
 
@@ -410,7 +423,7 @@ class Journal:
         if evidence.get('tile')!=job['tile'] or evidence.get('stage')!=stage or evidence.get('result')!='pass':
             raise ValueError('Matching successful stage receipt required')
         changed=self.db.execute("""UPDATE jobs SET state='complete',evidence=?,evidence_sha256=?,evidence_commit=?,
-            token=NULL,expires=NULL WHERE tile=? AND stage=? AND token=? AND state='running' AND expires>?""",
+            token=NULL,expires=NULL,rebuild=0 WHERE tile=? AND stage=? AND token=? AND state='running' AND expires>?""",
             (path_in_repo,hashlib.sha256(raw).hexdigest(),commit,job['tile'],STAGES.index(stage),job['token'],now)).rowcount
         if changed!=1:raise ValueError('Stale or expired worker cannot publish completion')
 
