@@ -1207,7 +1207,7 @@ class Worker:
         started = time.monotonic()
         try:
             try:
-                if not self.args.no_adopt and self.adopt(journal, keeper, job):
+                if not self.args.no_adopt and not job.get('rebuild') and self.adopt(journal, keeper, job):
                     return 'adopted'
             except Exception as error:  # noqa: BLE001 - adoption is an optimisation; generate instead
                 self.log(event='adopt_check_failed', tile=tile['id'], reason=str(error)[:200])

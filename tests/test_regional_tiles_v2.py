@@ -178,6 +178,20 @@ class LifecycleTests(unittest.TestCase):
             states = db.execute("SELECT state,evidence_commit FROM jobs WHERE tile='0_0' AND stage<3").fetchall()
         self.assertTrue(all(state == 'complete' and commit.startswith('adopted@') for state, commit in states))
 
+    def test_a_tile_reopened_to_rebuild_is_regenerated_not_adopted(self):
+        with patch('regional_generate.generate_tile', self.fake_generate):
+            rg.Worker(self.args('--tiles', '0_0'), reader=reader_for(self.hub), store=self.store).run()
+        journal = Journal(self.control / 'jobs.sqlite', self.plan)
+        self.assertEqual(journal.reopen_stage(2, tiles=['0_0']), 1)
+        journal.close()
+        calls = []
+        with patch('regional_generate.generate_tile', lambda tile, *a, **k: calls.append(tile['id']) or self.fake_generate(tile, *a, **k)):
+            rg.Worker(self.args('--tiles', '0_0', '--lane', 'quality'), reader=reader_for(self.hub), store=self.store).run()
+        self.assertEqual(calls, ['0_0'])
+        with sqlite3.connect(self.control / 'jobs.sqlite') as db:
+            row = db.execute("SELECT state,evidence_commit,rebuild FROM jobs WHERE tile='0_0' AND stage=2").fetchone()
+        self.assertEqual((row[0], row[1].startswith('adopted@'), row[2]), ('complete', False, 0))
+
     def test_disk_guard_pauses_a_tile_instead_of_failing_it(self):
         def floor(*_args):
             raise DiskGuardError('Free-space floor refuses cache x: 1 B free')

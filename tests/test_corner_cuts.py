@@ -60,7 +60,12 @@ class QualityLaneTests(unittest.TestCase):
         geometry = dict(self.journal.db.execute('SELECT tile,state FROM jobs WHERE stage=1').fetchall())
         self.assertEqual(geometry['0_0'], 'complete')
         job = self.journal.claim_tile('w', 'quality', now=1, tiles=['0_0'])
-        self.assertEqual((job['tile'], job['stages']), ('0_0', ['appearance']))
+        self.assertEqual((job['tile'], job['stages'], job['rebuild']), ('0_0', ['appearance'], True))  # never adopted
+        receipt = json.dumps({'tile': '0_0', 'stage': 'appearance', 'result': 'pass'}).encode()
+        self.journal.finish_remote(job, 'appearance', 'tiles/v2/0_0/receipts/appearance.json', receipt, 'c', now=2)
+        self.assertEqual(self.journal.db.execute("SELECT rebuild FROM jobs WHERE tile='0_0' AND stage=2").fetchone()[0], 0)
+        self.journal.reopen_stage(2, 'appearance.json')                        # a reopen by reason is not a rebuild
+        self.assertFalse(self.journal.claim_tile('w', 'quality', now=3, tiles=['0_0'])['rebuild'])
         with self.assertRaises(ValueError):
             self.journal.reopen_stage(2)
 
