@@ -357,16 +357,22 @@ class Journal:
             self.db.execute('COMMIT');return result
         except Exception:self.db.execute('ROLLBACK');raise
 
-    def reopen_stage(self,stage,evidence_suffix):
-        """Return completed stages whose evidence ends with evidence_suffix to pending (e.g. scans retired as
-        'no buildings' once trees are wanted there). Running or failed stages are untouched. Returns the count."""
-        if not evidence_suffix or stage not in (0,1,2):raise ValueError('A completion reason and generation stage required')
+    def reopen_stage(self,stage,evidence_suffix=None,tiles=None):
+        """Return completed stages whose evidence ends with evidence_suffix (e.g. scans retired as 'no buildings'
+        once trees are wanted there), or of the named tiles (rebuilt with newer code), to pending. Running or
+        failed stages are untouched. Returns the count."""
+        if not (evidence_suffix or tiles) or stage not in (0,1,2):
+            raise ValueError('A completion reason or tiles, and a generation stage, required')
+        clause,params=' AND evidence LIKE ?',['%'+(evidence_suffix or '')]
+        if tiles:
+            tiles=tuple(dict.fromkeys(str(tile) for tile in tiles))
+            clause+=' AND tile IN ('+','.join('?'*len(tiles))+')';params+=tiles
         self._begin_immediate()
         try:
             # A route rank kept from before the stage completed would jump it ahead of plan priority.
             changed=self.db.execute("UPDATE jobs SET state='pending',evidence=NULL,evidence_sha256=NULL,evidence_commit=NULL,"
-                                    "not_before=0,route_rank=NULL,route_label=NULL WHERE stage=? AND state='complete' AND evidence LIKE ?",
-                                    (stage,'%'+evidence_suffix)).rowcount
+                                    "not_before=0,route_rank=NULL,route_label=NULL WHERE stage=? AND state='complete'"+clause,
+                                    (stage,*params)).rowcount
             self.db.execute('COMMIT');return changed
         except Exception:self.db.execute('ROLLBACK');raise
 

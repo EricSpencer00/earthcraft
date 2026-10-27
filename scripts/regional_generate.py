@@ -1619,6 +1619,8 @@ def build_parser():
     mode.add_argument('--seed-control', action='store_true', help='copy the archived plan/journal/catalogs once')
     mode.add_argument('--requeue-failed', action='store_true',
                       help='return failed sources/geometry/appearance stages (of --tiles, or all) to the queue')
+    mode.add_argument('--reopen-appearance', action='store_true',
+                      help='return the completed appearance stage of --tiles to the queue, to rebuild them')
     parser.add_argument('--index-dir', type=Path, default=None,
                         help='--index-coverage: read local index copies instead of the cache')
     return parser
@@ -1652,6 +1654,17 @@ def main(argv=None):
         finally:
             journal.close()
         print(json.dumps({'event': 'requeued', 'stages': changed}))
+        return 0
+    if args.reopen_appearance:
+        if not args.tiles:
+            raise SystemExit('--reopen-appearance needs --tiles')
+        control = args.control.resolve()
+        journal = Journal(control / 'jobs.sqlite', json.loads((control / 'plan.json').read_text()))
+        try:
+            changed = journal.reopen_stage(2, tiles=args.tiles)
+        finally:
+            journal.close()
+        print(json.dumps({'event': 'reopened', 'stage': 'appearance', 'tiles': changed}))
         return 0
     if args.clear_cache:
         cache = SourceCache(args.scratch.resolve() / 'cache', args.cache_cap)

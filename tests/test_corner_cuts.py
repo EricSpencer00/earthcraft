@@ -52,6 +52,18 @@ class QualityLaneTests(unittest.TestCase):
         self.assertEqual((state['0_0'], state['1_0']), ('pending', 'complete'))
         self.assertEqual(self.journal.reopen_stage(2, '#no-buildings'), 0)
 
+    def test_reopen_named_tiles_only_their_completed_appearance(self):
+        complete(self.journal, '0_0', (0, 1, 2));complete(self.journal, '1_0', (0, 1, 2));complete(self.journal, '2_0', (0, 1))
+        self.assertEqual(self.journal.reopen_stage(2, tiles=['0_0', '2_0']), 1)
+        state = dict(self.journal.db.execute('SELECT tile,state FROM jobs WHERE stage=2').fetchall())
+        self.assertEqual((state['0_0'], state['1_0'], state['2_0']), ('pending', 'complete', 'pending'))
+        geometry = dict(self.journal.db.execute('SELECT tile,state FROM jobs WHERE stage=1').fetchall())
+        self.assertEqual(geometry['0_0'], 'complete')
+        job = self.journal.claim_tile('w', 'quality', now=1, tiles=['0_0'])
+        self.assertEqual((job['tile'], job['stages']), ('0_0', ['appearance']))
+        with self.assertRaises(ValueError):
+            self.journal.reopen_stage(2)
+
     def test_reopened_stage_drops_an_old_route_rank(self):
         self.journal.prioritize_tiles(['3_0'], 'locality-v1', stages=('sources', 'geometry', 'appearance'))
         complete(self.journal, '3_0', (0, 1));complete(self.journal, '3_0', (2,), 'f.sqlite#no-buildings')
