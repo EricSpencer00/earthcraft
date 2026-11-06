@@ -1,0 +1,14 @@
+#cloud-config
+# User data for an Oracle Cloud Always Free Ampere A1 instance (4 OCPU, 24 GB, Ubuntu 24.04 aarch64).
+# Public bootstrap only: no token, no private files. `aws_pipeline_setup.sh push <host>` copies the
+# client JAR, templates, frame and HF token afterwards; the service waits for them.
+write_files:
+  - path: /etc/earthcraft/pipeline.env
+    permissions: '0644'
+    content: |
+      EARTHCRAFT_BRANCH=main
+      EARTHCRAFT_PROVIDER=oci
+      EARTHCRAFT_WORKERS=4
+      EARTHCRAFT_MEMORY_MAX=20G
+runcmd:
+  - [bash, -c, "curl -fsSL https://raw.githubusercontent.com/EricSpencer00/earthcraft/main/scripts/aws_pipeline_setup.sh -o /root/earthcraft-setup.sh && bash /root/earthcraft-setup.sh bootstrap > /var/log/earthcraft-bootstrap.log 2>&1"]
