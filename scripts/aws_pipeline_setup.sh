@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Earthcraft always-on pipeline host (AWS EC2, Ubuntu 24.04). See docs/AWS_PIPELINE.md.
+# Earthcraft always-on pipeline host (AWS EC2 or Oracle Cloud Always Free, Ubuntu 24.04).
+# See docs/AWS_PIPELINE.md and docs/ORACLE_PIPELINE.md.
 #
 # On the coordinator (MacBook, has the AWS CLI, the ssh alias and the private files):
 #   scripts/aws_pipeline_setup.sh launch [--count N] [--dry-run]
 #                                                   N more identical spot boxes (default 1); every box is
 #                                                   re-tagged EarthcraftShard=i/T and picks up its share itself
-#   scripts/aws_pipeline_setup.sh push [HOST]       copy private inputs (client JAR, templates, frame), start
+#   scripts/aws_pipeline_setup.sh push [HOST]       copy private inputs (client JAR, templates, frame), start;
+#                                                   on an Oracle host also the HF token (no SSM or S3 there)
 # On the instance (cloud-init runs `bootstrap` as root; the units call the rest):
 #   aws_pipeline_setup.sh bootstrap                 packages, checkout, venv, units, control seed
 #   aws_pipeline_setup.sh run                       service entry: token from SSM, exec the supervisor
@@ -28,6 +30,8 @@ SVC_USER=ubuntu
 
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 BRANCH=${EARTHCRAFT_BRANCH:-main}
+PROVIDER=${EARTHCRAFT_PROVIDER:-aws}   # aws: token from SSM, inputs from S3. oci: both copied by push
+TOKEN_FILE=/etc/earthcraft/hf_token
 
 as_user() { if [ "$(id -un)" = "$SVC_USER" ]; then "$@"; else runuser -u "$SVC_USER" -- "$@"; fi; }
 
@@ -42,6 +46,8 @@ bootstrap() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq python3-venv python3-dev git build-essential sqlite3 curl >/dev/null
+  # rasterio 1.4.3 has no aarch64 wheel (Oracle Ampere): pip builds it against the system GDAL.
+  [ "$(uname -m)" = aarch64 ] && apt-get install -y -qq libgdal-dev gdal-bin >/dev/null
   mkdir -p "$ROOT" /etc/earthcraft && chown "$SVC_USER:$SVC_USER" "$ROOT"
   [ -f "$ENV_FILE" ] || printf 'EARTHCRAFT_BRANCH=main\nEARTHCRAFT_WORKERS=4\n' > "$ENV_FILE"
   if [ ! -d "$ROOT/.git" ]; then as_user git clone -q -b "$BRANCH" "$REPO_URL" "$ROOT"; fi
@@ -56,6 +62,7 @@ bootstrap() {
               earthcraft-validate.service earthcraft-validate.timer; do
     install -m 0644 "$ROOT/configs/aws/$unit" /etc/systemd/system/
   done
+  memory_dropin
   systemctl daemon-reload
   systemctl enable earthcraft-update.timer earthcraft-status.timer earthcraft-validate.timer earthcraft-pipeline.service
   systemctl start earthcraft-update.timer earthcraft-status.timer earthcraft-validate.timer
@@ -66,7 +73,20 @@ bootstrap() {
   systemctl start earthcraft-pipeline.service || true   # waits on ConditionPathExists for private inputs
 }
 
+memory_dropin() {   # the unit's MemoryMax=7G fits an m5a.large; a bigger box raises it in pipeline.env
+  local d=/etc/systemd/system/earthcraft-pipeline.service.d
+  if [ -n "${EARTHCRAFT_MEMORY_MAX:-}" ]; then
+    mkdir -p "$d"; printf '[Service]\nMemoryMax=%s\n' "$EARTHCRAFT_MEMORY_MAX" > "$d/memory.conf"
+  else
+    rm -f "$d/memory.conf"
+  fi
+}
+
 hf_token() {
+  if [ "$PROVIDER" != aws ]; then
+    [ -r "$TOKEN_FILE" ] || { echo "no $TOKEN_FILE: run 'aws_pipeline_setup.sh push <host>' from the coordinator" >&2; return 1; }
+    tr -d '[:space:]' < "$TOKEN_FILE"; return
+  fi
   "$PY" - "$REGION" <<'PY'
 import sys, boto3
 value = boto3.client('ssm', region_name=sys.argv[1]).get_parameter(
@@ -77,6 +97,7 @@ PY
 
 fetch_private() {   # client JAR, world templates and frame from the private S3 bucket, via the instance role
   [ -f "$JAR" ] && [ -f "$FRAME" ] && [ -d "$CONTROL/templates" ] && return 0
+  [ "$PROVIDER" = aws ] || { echo "private inputs missing: run 'aws_pipeline_setup.sh push <host>' from the coordinator" >&2; return 1; }
   BUCKET=${EARTHCRAFT_PRIVATE_BUCKET:-earthcraft-pipeline-private-971966099666} \
   JAR="$JAR" FRAME="$FRAME" TEMPLATES="$CONTROL/templates" "$PY" - <<'PYEOF'
 import os, boto3
@@ -160,6 +181,7 @@ update() {
   if changed configs/aws scripts/aws_pipeline_setup.sh || ! cmp -s scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline; then
     install -m 0755 scripts/aws_pipeline_setup.sh /usr/local/sbin/earthcraft-pipeline
     install -m 0644 configs/aws/*.service configs/aws/*.timer /etc/systemd/system/
+    memory_dropin
     systemctl daemon-reload
     for timer in configs/aws/*.timer; do systemctl enable --now "$(basename "$timer")" 2>/dev/null || true; done
   fi
@@ -181,7 +203,13 @@ validate() {   # timer: comment PASS/FAIL on open contribution pull requests; th
     --spot-cache-dir "$ROOT/runs/scratch/cache" --spot-cache-cap "${EARTHCRAFT_CACHE_GIB:-20}GiB" "$@"
 }
 
+oci_md() {   # Oracle instance metadata (v2); empty off Oracle
+  [ "$PROVIDER" = oci ] || return 0
+  curl -sf -m 2 -H 'Authorization: Bearer Oracle' "http://169.254.169.254/opc/v2/$1" || true
+}
+
 imds() {
+  [ "$PROVIDER" = aws ] || return 0
   local t; t=$(curl -sf -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || return 0
   curl -sf -m 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$1" || true
 }
@@ -189,7 +217,7 @@ imds() {
 status() {
   local out=${2:-}
   [ "${1:-}" = "--json" ] || out=""
-  CONTROL=$CONTROL ROOT=$ROOT LIFECYCLE=$(imds instance-life-cycle) ACTION=$(imds spot/instance-action) \
+  CONTROL=$CONTROL ROOT=$ROOT PROVIDER=$PROVIDER OCI=$(oci_md instance/) LIFECYCLE=$(imds instance-life-cycle) ACTION=$(imds spot/instance-action) \
   INSTANCE=$(imds instance-id) AZ=$(imds placement/availability-zone) OUT=$out SHARD=$(shard) \
   WORKERS=${EARTHCRAFT_WORKERS:-1} \
   SERVICE=$(systemctl is-active earthcraft-pipeline 2>/dev/null || true) python3 - <<'PY'
@@ -268,14 +296,25 @@ def bitmap(ids):
             'bitmap': base64.b64encode(zlib.compress(bytes(bits), 9)).decode()}
 
 
+def host_info():
+    if os.environ['PROVIDER'] == 'oci':
+        try:
+            md = json.loads(os.environ['OCI'] or '{}')
+        except ValueError:
+            md = {}
+        return {'provider': 'oci', 'instance': md.get('displayName') or md.get('id', ''),
+                'az': md.get('availabilityDomain', ''), 'lifecycle': md.get('shape', ''), 'spot_interruption': None}
+    return {'provider': 'aws-ec2', 'instance': os.environ['INSTANCE'], 'az': os.environ['AZ'],
+            'lifecycle': os.environ['LIFECYCLE'], 'spot_interruption': os.environ['ACTION'] or None}
+
+
 usage = shutil.disk_usage(root)
 scratch = sum(f.stat().st_size for f in (root / 'runs/scratch/gen').rglob('*') if f.is_file()) \
     if (root / 'runs/scratch/gen').exists() else 0
 sha = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
 result = {
     'schema': 'earthcraft.pipeline-status.v1', 'time_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
-    'host': {'provider': 'aws-ec2', 'instance': os.environ['INSTANCE'], 'az': os.environ['AZ'],
-             'lifecycle': os.environ['LIFECYCLE'], 'spot_interruption': os.environ['ACTION'] or None},
+    'host': host_info(),
     'service': os.environ['SERVICE'], 'git_sha': sha,
     'shard': os.environ['SHARD'] or None, 'workers': int(os.environ['WORKERS']),
     'tiles_published_journal': len(tiles), 'tiles_last_hour': hour, 'tiles_last_24h': day,
@@ -308,6 +347,12 @@ push() {   # on the coordinator: private inputs never go to the public repo or u
   scp -q "$mc" "$host:$JAR"
   scp -q "$src/runs/chicago-adaptation-city-001/frame.json" "$host:$FRAME"
   COPYFILE_DISABLE=1 tar -C "$src/runs/regional/control" -cf - templates | ssh "$host" "tar -C $CONTROL -xf - 2>/dev/null"
+  if ssh "$host" "grep -q '^EARTHCRAFT_PROVIDER=oci' /etc/earthcraft/pipeline.env"; then
+    # No SSM there: the HF write token goes to a root-owned 0640 file the service user can read.
+    local token=${HF_TOKEN_FILE:-$HOME/.cache/huggingface/token}
+    [ -r "$token" ] || { echo "push: no HF token at $token (set HF_TOKEN_FILE)" >&2; return 1; }
+    ssh "$host" "sudo install -m 0640 -o root -g $SVC_USER /dev/stdin $TOKEN_FILE" < "$token"
+  fi
   ssh "$host" "sudo systemctl start earthcraft-pipeline && earthcraft-status"
 }
 
