@@ -91,30 +91,26 @@ shows the live numbers.
 
 ## Contribute your compute
 
-Your computer can build tiles and offer them to the dataset. You need Python
-3.11+, git, about 30 GB of free disk, Minecraft 1.21.10 (started once, for its
-block colours) and a free Hugging Face account.
+Lend your computer to the map. One command builds tiles on your spare cores and adds each
+finished tile to the dataset as you go. You need Python 3.11+, git, about 30 GB of free disk,
+Minecraft 1.21.10 (started once, for its block colours) and a free Hugging Face account.
 
 ```sh
 git clone https://github.com/EricSpencer00/earthcraft && cd earthcraft
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-contribute.txt
-.venv/bin/hf auth login                                    # a token with write access
-.venv/bin/python scripts/contribute.py --tiles 20 --dry-run   # see which tiles you would build
-.venv/bin/python scripts/contribute.py --tiles 20             # build them and open one pull request
+python3 -m venv .venv && .venv/bin/pip install -r requirements-contribute.txt
+.venv/bin/hf auth login                      # a token with write access
+.venv/bin/python scripts/contribute.py       # build until you press Ctrl-C
 ```
 
-1. The tool picks tiles nobody has built or claimed, starting at the far edge
-   of the plan, away from the main server.
-2. It builds them with the same generator the server runs, a few minutes each.
-3. It opens one pull request on the dataset with only those tiles.
-4. A validator checks every file (valid regions, no player data, hashes that
-   match, tiles in the plan), rebuilds one tile now and then to compare, and
-   comments **PASS** or **FAIL** within about half an hour. The owner merges passing requests, and the server stops
-   building those tiles.
+- It uses half your CPUs (`--cores N` to choose) and builds the tiles next to the finished
+  area first, so the map grows as one piece.
+- Every tile is uploaded the moment it is built, as a commit on **your one pull request** on the
+  dataset. Stop any time; the next run adds to the same pull request until it holds 200 tiles.
+- A validator checks every file (valid regions, no player data, matching hashes, tiles in the
+  plan) and rebuilds one tile now and then to compare. The owner audits the renders and merges.
 
-Several computers can split the work with `--shard 0/3`, `--shard 1/3` and
-`--shard 2/3`. The full guide is in [CONTRIBUTING.md](CONTRIBUTING.md#contribute-compute).
+`--tiles 20` builds twenty and stops; `--dry-run` shows which tiles you would build. The full
+guide is in [CONTRIBUTING.md](CONTRIBUTING.md#contribute-compute).
 
 ## How it works
 

@@ -33,22 +33,28 @@ Your computer does the work; the owner checks it and adds it.
 3. **Log in to Hugging Face.** Make a free account, create an access token with
    write access at huggingface.co/settings/tokens, and run
    `.venv/bin/hf auth login` (or set `HF_TOKEN`).
-4. **Run it.** `.venv/bin/python scripts/contribute.py --tiles 20`. It picks 20
-   tiles that nobody has made or claimed yet, builds them (a few minutes each),
-   and opens one pull request on the dataset. Add `--dry-run` to only see which
-   tiles it would pick. Several computers can split the work with
-   `--shard 0/3`, `--shard 1/3`, `--shard 2/3`.
+4. **Run it.** `.venv/bin/python scripts/contribute.py`. It starts one worker
+   per spare core (half your CPUs, at most 8, fewer if disk is short; `--cores N`
+   to choose) and builds the unclaimed tiles nearest the finished area first.
+   Each tile is uploaded as soon as it is built, as a commit on your one pull
+   request; the pull request's manifest is updated with it. Press Ctrl-C to
+   stop: workers finish the tile in hand. The next run adds to the same pull
+   request until it holds 200 tiles, then opens a new one. `--tiles 20` stops
+   after twenty, `--dry-run` only shows the picks, and `--shard i/N` splits the
+   work between several computers.
 5. **Wait for the check.** Within about half an hour a validator comments
    **PASS** or **FAIL** on your pull request, with the reason for any failure.
-   The owner reviews passing requests and merges them.
+   The owner audits the renders (`scripts/audit.py`) and merges passing requests.
 
 Everything the tool downloads is public: the plan and templates come from the
 dataset (the templates hold no player data), map sources from public servers.
 
 ### Merging a passing pull request (owner)
 
-Open the pull request on the dataset's Community tab, read the validator's
-comment, and look at the files: only `tiles/v2/<tile>/...` and one
+Run `scripts/audit.py` (or `/earthcraft-audit` in Claude Code): it validates every
+open pull request, renders four of its tiles and has the local Claude Code CLI judge
+them, and writes a report. Then open the pull request on the dataset's Community tab,
+read the validator's comment, and look at the files: only `tiles/v2/<tile>/...` and one
 `contributions/<name>.json`. If it says PASS, press **Merge**. The bot never
 merges. After the merge the AWS hosts adopt those tiles instead of making them
 again. Close failing or stale requests with a short note.

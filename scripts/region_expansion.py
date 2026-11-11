@@ -190,7 +190,8 @@ changes a known generated chunk or any chunk with non-air blocks or entities.
 
 
 def atomic(path, raw):
-    temporary = Path(str(path)+'.partial')
+    # Per-process temporary name: workers sharing a cache may write the same file at once.
+    temporary = Path(f'{path}.{os.getpid()}.partial')
     with temporary.open('wb') as stream:
         stream.write(raw)
         stream.flush()

@@ -1416,7 +1416,7 @@ def push_files(ctx, src, dest, include=(), exclude=()):
 BATCH_SCHEMA = 'earthcraft.hf-store-batch.v1'
 
 
-def push_batch(ctx, items, label, create_pr=False):
+def push_batch(ctx, items, label, create_pr=False, revision=None):
     """Commit files another guarded tool wrote, in bounded verified commits.
 
     `items` is a list of {path, local, sha256, bytes}. Each local file is
@@ -1433,14 +1433,16 @@ def push_batch(ctx, items, label, create_pr=False):
         if entry['path'] in seen:
             raise ValueError(f'Duplicate path in batch: {entry["path"]}')
         seen.add(entry['path'])
-    if create_pr:  # a contributor proposes files to someone else's dataset; the owner reviews and merges
+    if create_pr or revision:  # a contributor proposes files to someone else's dataset; the owner reviews and merges
         ctx.retry.call(lambda: ctx.hub.info(ctx.repo), what='repo_info')
     else:
         ctx.check_destination()
     key = hashlib.sha256(canonical_json(sorted((e['path'], e['sha256']) for e in items))).hexdigest()[:16]
     ledger = Ledger(ctx.guard, 'batch-' + key, ctx.repo)
     committer = ctx.committer(ledger, label)
-    committer.create_pr = bool(create_pr)
+    committer.create_pr = bool(create_pr) and not revision
+    if revision:  # extend an open pull request (refs/pr/N) instead of opening another
+        committer.revision = revision
     for entry in items:
         local = Path(entry['local'])
         if local.is_symlink() or not local.is_file():

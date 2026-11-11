@@ -9,6 +9,7 @@ through ``detail_guard.WriteGuard``.
 import argparse
 import hashlib
 import io
+import os
 import json
 import time
 import urllib.request
@@ -78,7 +79,13 @@ def hierarchy_nodes(base, metadata, query, budget=4096, get=None):
     return nodes, sorted(seen)
 
 
-def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_download=600 * 2**20, cache=None):
+# EPT nodes are fetched from USGS's public bucket: the crop waits on the network, not the CPU
+# (profiled 2026-11-11: 15.7 s of a 32 s tile with 4 fetches in flight). 12 keeps peak memory
+# near 12 decoded nodes per worker. EARTHCRAFT_EPT_FETCHES overrides.
+EPT_FETCHES = int(os.environ.get('EARTHCRAFT_EPT_FETCHES', '12'))
+
+
+def crop(project, frame, west, north, size, halo, guard, out, workers=None, max_download=600 * 2**20, cache=None):
     """Crop ``[west-halo, west+size+halo) x (north-size-halo, north+halo]`` in frame metres."""
     base = EPT_ROOT + project
     get = getter(base, cache)
@@ -115,7 +122,7 @@ def crop(project, frame, west, north, size, halo, guard, out, workers=4, max_dow
         intensity = np.asarray(las.intensity)[keep][inside].astype(np.uint16)
         return rec, part, (extra, intensity), len(raw)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers or EPT_FETCHES) as pool:
         for rec, part, extra, nbytes in pool.map(one, sorted(nodes.items())):
             downloaded += nbytes
             if downloaded > max_download:

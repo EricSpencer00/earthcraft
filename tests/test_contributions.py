@@ -100,6 +100,14 @@ class ContributionTests(unittest.TestCase):
         chosen = contribute.pick(plan, 10, on_hub=set(), in_prs={}, pending=pending, shard=(0, 2), order='plan')
         self.assertEqual({int(t.split('_')[1]) // 4 for t in chosen}, {0})
 
+    def test_pick_frontier_builds_nearest_the_centre_first(self):
+        plan = {'tiles': [{'id': f'{x}_{z}'} for z in range(-5, 6) for x in range(-5, 6)]}
+        pending = {t['id'] for t in plan['tiles']} - {'0_0'}
+        chosen = contribute.pick(plan, 5, on_hub={'1_0'}, in_prs={}, pending=pending, center=(0, 0))
+        self.assertTrue(all(abs(int(a)) + abs(int(b)) <= 2 for a, b in (t.split('_') for t in chosen)))
+        self.assertNotIn('1_0', chosen)
+        self.assertEqual(set(chosen[:3]), {'-1_0', '0_1', '0_-1'})
+
     def test_clean_template_has_no_player_and_only_the_sample_chunk(self):
         with tempfile.TemporaryDirectory() as directory:
             src, out = Path(directory) / 'private', Path(directory) / 'clean'
