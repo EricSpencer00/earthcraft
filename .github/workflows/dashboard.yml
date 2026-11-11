@@ -42,7 +42,7 @@ jobs:
   browser:
     if: github.event.repository.private == false
     runs-on: ubuntu-24.04  # Playwright 1.58 has no Chromium for ubuntu-latest (26.04)
-    timeout-minutes: 10
+    timeout-minutes: 20  # Chromium --with-deps alone has taken 10 min
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

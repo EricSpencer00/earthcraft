@@ -1,19 +1,20 @@
 // Browse only the already public atlas record. No dataset or user-file uploads.
 export function cellRecord(atlas,index,snapshot){
  const size=atlas.area.cell_size_blocks,x=atlas.area.left_block+(index%atlas.area.width_cells)*size,z=atlas.area.top_block+Math.floor(index/atlas.area.width_cells)*size;
- const source=atlas.records?.[index]||{},fields={};
+ const source=atlas.record?.(index)||{},fields={};
  for(const key of ['latitude','longitude','source_state','geometry_state','appearance_state','game_verify_state','scan_upgrade_recorded_in_parent_tile'])if(['number','string','boolean'].includes(typeof source[key]))fields[key]=source[key];
- return {schema:'earthcraft.public-cell-record.v1',cell_id:atlas.cell_ids?.[index]||Math.floor(x/size)+'_'+Math.floor(z/size),view:atlas.area.id,world_bounds_xz:[x,z,x+size,z+size],size_m:size,record:fields,provenance:{basis:atlas.area.id==='world'?snapshot?.generated_world?.basis:'published_progress_snapshot',snapshot_updated_utc:snapshot?.updated_utc||null,public_snapshot:'./progress/earth.json',...(atlas.area.id==='world'?{manifest_sha256:snapshot?.generated_world?.manifest_sha256||null,frame_sha256:snapshot?.generated_world?.frame_sha256||null}:{})},limits:'Build record only. Not a block payload, current block-fill verification, or current generator progress.'};
+ return {schema:'earthcraft.public-cell-record.v1',cell_id:atlas.id?.(index)||Math.floor(x/size)+'_'+Math.floor(z/size),view:atlas.area.id,world_bounds_xz:[x,z,x+size,z+size],size_m:size,record:fields,provenance:{basis:atlas.area.id==='world'?snapshot?.generated_world?.basis:'published_progress_snapshot',snapshot_updated_utc:snapshot?.updated_utc||null,public_snapshot:'./progress/earth.json',...(atlas.area.id==='world'?{manifest_sha256:snapshot?.generated_world?.manifest_sha256||null,frame_sha256:snapshot?.generated_world?.frame_sha256||null}:{})},limits:'Build record only. Not a block payload, current block-fill verification, or current generator progress.'};
 }
 export function queryCells(atlas,snapshot,{query='',filter='all',bounds=null,offset=0,limit=30}={}){
  if(!atlas)return {total:0,rows:[]};const needle=query.trim().toLowerCase().slice(0,80),rows=[];let total=0;
  for(let i=0;i<atlas.cells.length;i++){
-  if(atlas.cells[i]<0||!atlas.records?.[i])continue;
-  const record=atlas.records[i];
+  if(atlas.cells[i]<0)continue;
+  const record=atlas.record?.(i);
+  if(!record)continue;
   if(filter==='scan'&&!record.scan_upgrade_recorded_in_parent_tile)continue;
   if(filter==='unverified'&&['verified','complete'].includes(record.game_verify_state))continue;
   if(bounds&&(!Number.isFinite(record.latitude)||!Number.isFinite(record.longitude)||record.longitude<bounds.west||record.longitude>bounds.east||record.latitude<bounds.south||record.latitude>bounds.north))continue;
-  if(needle){const size=atlas.area.cell_size_blocks,x=atlas.area.left_block+(i%atlas.area.width_cells)*size,z=atlas.area.top_block+Math.floor(i/atlas.area.width_cells)*size,id=atlas.cell_ids?.[i]||Math.floor(x/size)+'_'+Math.floor(z/size);if(!`${id} ${x}, ${z} ${record.latitude} ${record.longitude}`.toLowerCase().includes(needle))continue;}
+  if(needle){const size=atlas.area.cell_size_blocks,x=atlas.area.left_block+(i%atlas.area.width_cells)*size,z=atlas.area.top_block+Math.floor(i/atlas.area.width_cells)*size,id=atlas.id?.(i)||Math.floor(x/size)+'_'+Math.floor(z/size);if(!`${id} ${x}, ${z} ${record.latitude} ${record.longitude}`.toLowerCase().includes(needle))continue;}
   if(total>=offset&&rows.length<Math.min(limit,40))rows.push({index:i,value:cellRecord(atlas,i,snapshot)});total++;
  }
  return {total,rows};
@@ -31,5 +32,6 @@ export function installCellBrowser(root,{select,visibleBounds}){
  };
  for(const id of ['browse-query','browse-filter','browse-visible'])find(id).addEventListener(id==='browse-query'?'input':'change',()=>{offset=0;render();});
  find('browse-prev').onclick=()=>{offset=Math.max(0,offset-30);render();};find('browse-next').onclick=()=>{offset+=30;render();};
- return {setData(a,s){atlas=a;snapshot=s;offset=0;render();},refresh(){offset=0;render();}};
+ // Rendered only while the panel is open: listing builds a record per cell.
+ return {setData(a,s){atlas=a;snapshot=s;offset=0;if(!root.hidden)render();},refresh(){offset=0;if(!root.hidden)render();}};
 }
