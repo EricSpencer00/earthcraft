@@ -1084,6 +1084,9 @@ class Worker:
         """A tile with no mapped building has nothing for the scan upgrade to add: its LQ is final."""
         open_scans = [row[0] for row in journal.db.execute(
             "SELECT tile FROM jobs WHERE stage=2 AND state IN ('pending','failed')")]
+        if self.args.tiles:  # a worker given its tiles checks only those (4.7 s of R-tree queries otherwise)
+            wanted = set(self.args.tiles)
+            open_scans = [tile for tile in open_scans if tile in wanted]
         if not open_scans:
             return
         try:

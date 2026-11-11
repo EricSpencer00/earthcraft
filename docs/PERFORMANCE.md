@@ -120,3 +120,21 @@ Left: scan build ~15 s, shared apply ~10 s, building points ~10 s, LQ build ~7 s
 Every packaged tile logs `phase_seconds` (indexes, sources, lq_build, scan_select, scan_surfaces,
 point_crops, scan_build, roof_colour, package) and records it in the manifest's `generator`, so
 the next slowest step shows up in the logs rather than in a one-off profile.
+
+## Contributor tiles, profiled (2026-11-11)
+
+`scripts/contribute.py --check-tile` under cProfile on an M-series MacBook, base lane with EPT
+scans, footprints and roof colour. Tile `-58_4`: 32.3 s, of which `detail_points.crop` was 15.7 s
+waiting on EPT node downloads (4 in flight), and each worker start spent 4.7 s on 51,602 R-tree
+queries in `empty_tiles` for every open scan in the plan.
+
+* EPT fetches in flight 4 → 12 (`EARTHCRAFT_EPT_FETCHES`): survey phase 16.6 s → 7.1 s on the
+  neighbouring tile `-57_4`, tile 32.3 s → 20.9 s.
+* A worker given `--tiles` checks only those for empty scans (all contributor workers do).
+* `atomic()` writes a per-process temporary file: workers sharing a cache raced on the index
+  hash memo, and the loser built without footprints.
+* Contributors run one worker per spare core and upload each tile as it finishes, so upload
+  overlaps generation and an interrupted run loses only the tiles in hand.
+
+Roof colour is dominated by the first NAIP download in an area (17–25 s); neighbours reuse it
+(0.1–2 s). Remaining CPU: `scan_build` (metric world build + verify) ~6 s.
