@@ -185,3 +185,4 @@ figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 .cell-view[data-state="loading"] canvas { opacity:.6; }
 .cell-view[data-state="empty"] canvas { display:none; }
 @media(min-width:701px) and (max-width:1023px) { .map-tools { flex-wrap:wrap; row-gap:0; } }
+@media(max-width:540px) { .source-link { display:none; } }  /* Help build links to the same repository */
