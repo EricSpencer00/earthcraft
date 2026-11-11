@@ -32,5 +32,6 @@ export function installCellBrowser(root,{select,visibleBounds}){
  };
  for(const id of ['browse-query','browse-filter','browse-visible'])find(id).addEventListener(id==='browse-query'?'input':'change',()=>{offset=0;render();});
  find('browse-prev').onclick=()=>{offset=Math.max(0,offset-30);render();};find('browse-next').onclick=()=>{offset+=30;render();};
- return {setData(a,s){atlas=a;snapshot=s;offset=0;render();},refresh(){offset=0;render();}};
+ // Rendered only while the panel is open: listing builds a record per cell.
+ return {setData(a,s){atlas=a;snapshot=s;offset=0;if(!root.hidden)render();},refresh(){offset=0;if(!root.hidden)render();}};
 }

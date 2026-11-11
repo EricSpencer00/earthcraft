@@ -1,6 +1,5 @@
-import {installCellBrowser} from './cell-browser.mjs?v=simple-2';
+import {installCellBrowser} from './cell-browser.mjs?v=simple-3';
 import {parseCoordinates,placeIndex,searchPlaces,fold} from './location-search.mjs?v=places-1';
-import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
 import {frameInverse,frameForward} from './frame.mjs?v=frame-2';
 import {decodeBits} from './fresh-tiles.mjs?v=fresh-2';
 
@@ -13,7 +12,10 @@ const stateLabel=value=>({
   complete:'Done',generated:'Terrain & buildings built',styled:'Surface detail added',
   verified:'Checked in Minecraft',failed:'Needs review',unknown:'Not recorded'
 }[value]||String(value||'Not recorded').replaceAll('_',' ').replaceAll('-',' '));
-const color=name=>getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();
+// Theme colours, read once (getComputedStyle per cell was 1.9 s of a mobile-class load).
+const colorCache=new Map();
+const color=name=>{if(!colorCache.has(name))colorCache.set(name,getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim());return colorCache.get(name);};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{colorCache.clear();cellLayerKey='';if(atlas)scheduleDraw();});
 const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
 let cellBrowser=null;
@@ -33,8 +35,7 @@ function regionTile(id){
 const T_V2=1,T_LAKE=2,T_PUB=4,T_DET=8,T_CELL=16,T_PLAN=32;
 const live=()=>Boolean(atlas?.live);
 function detailLevel(index){
-  const id=atlas?.id(index),tile=regionTile(id);
-  if(!id)return null;
+  if(!atlas)return null;
   if(live()){
     const flags=atlas.tileFlag(index);
     if(flags&T_DET)return 'high';
@@ -44,7 +45,8 @@ function detailLevel(index){
     if(atlas.cells[index]===0)return 'queued';       // planned, not built yet
     return null;
   }
-  if(!detail)return null;
+  const id=atlas.id(index),tile=regionTile(id);
+  if(!id||!detail)return null;
   return detail.cells?.[id]||(tile&&detail.tiles?.[`r.${tile[0]}.${tile[1]}`])||null;
 }
 const hasDetail=()=>Boolean(detail||live());
@@ -105,7 +107,7 @@ function renderDetailCount(){
 }
 async function loadDetail(){
   try{
-    const response=await fetch(DETAIL_URL,{cache:'no-cache',signal:AbortSignal.timeout(10000)});
+    const response=await fetch(DETAIL_URL,{signal:AbortSignal.timeout(10000)});
     if(!response.ok)return;
     const data=await response.json();
     if(data?.schema!=='earthcraft.detail-levels.v1')return;
@@ -195,10 +197,14 @@ function fitGeography(){
 
 async function initializeBasemap(){
   try{
+    // Loaded after the map data has been requested (index.html modulepreloads it), not before.
+    const styleRequest=fetch('https://tiles.openfreemap.org/styles/positron',{signal:AbortSignal.timeout(10000),credentials:'omit'});
+    const maplibre=await import('./assets/vendor/maplibre/maplibre-gl.mjs');
     maplibre.setWorkerUrl(new URL('./assets/vendor/maplibre/maplibre-gl-worker.mjs',import.meta.url).href);
     maplibre.setWorkerCount(1);
     geoMap=new maplibre.Map({container:'basemap',style:{version:8,sources:{},layers:[{id:'background',type:'background',paint:{'background-color':'#ecebe3'}}]},center:places.chicago.coordinates,zoom:10.5,minZoom:7,maxZoom:18,attributionControl:false,dragRotate:false,pitchWithRotate:false,touchPitch:false,renderWorldCopies:false});
     geoMap.keyboard.disable();geoMap.touchZoomRotate.disableRotation();
+    if(atlas)renderAtlas();  // the data usually arrives first now: place it on the map
     geoMap.getCanvas().tabIndex=-1;geoMap.getCanvas().setAttribute('aria-hidden','true');
     geoMap.on('move',()=>{scheduleDraw();updateZoomButtons();});
     geoMap.on('style.load',()=>{cellLayerKey='';scheduleDraw();});
@@ -227,7 +233,7 @@ async function initializeBasemap(){
       $('basemap-state').hidden=false;
       $('basemap-state').textContent='Street map unavailable. Build cells are still shown.';
     });
-    const response=await fetch('https://tiles.openfreemap.org/styles/positron',{signal:AbortSignal.timeout(10000)});
+    const response=await styleRequest;
     if(!response.ok)throw Error('Basemap unavailable');
     const style=await response.json();
     // MapLibre's style API takes RGB colors; keep geography quiet under build cells.
@@ -245,6 +251,7 @@ async function initializeBasemap(){
     });
   }catch{
     document.body.dataset.basemap='unavailable';
+    if(atlas&&!geoMap)renderAtlas();  // no map library: fall back to the flat grid
     $('basemap-state').hidden=false;
     $('basemap-state').textContent=geoMap?'Street map unavailable. Build cells are still shown.':'Street map unavailable. Showing the generation grid.';
   }
@@ -303,8 +310,20 @@ function syncImageLayer(){
   if(key===cellLayerKey&&imageIds.every(id=>geoMap.getSource(id)))return;
   for(const id of imageIds){if(geoMap.getLayer(id))geoMap.removeLayer(id);if(geoMap.getSource(id))geoMap.removeSource(id);}
   imageIds=[];
-  const {left_block:left,top_block:top,width_cells:width,height_cells:height,cell_size_blocks:size}=atlas.area;
   const labels=geoMap.getStyle().layers.find(layer=>layer.type==='symbol')?.id;
+  // A style swap (background -> street map) drops sources; re-add the canvases already drawn.
+  if(imageCache?.key!==key)imageCache={key,items:buildCellCanvases(colors,water)};
+  for(const {id,canvas,coordinates} of imageCache.items){
+    geoMap.addSource(id,{type:'canvas',canvas,animate:false,coordinates});
+    geoMap.addLayer({id,type:'raster',source:id,paint:{'raster-resampling':'nearest','raster-fade-duration':0}},labels);
+    imageIds.push(id);
+  }
+  cellLayerKey=key;
+}
+let imageCache=null;
+function buildCellCanvases(colors,water){
+  const items=[];
+  const {left_block:left,top_block:top,width_cells:width,height_cells:height,cell_size_blocks:size}=atlas.area;
   for(let row0=0;row0<height;row0+=IMAGE_CELLS)for(let column0=0;column0<width;column0+=IMAGE_CELLS){
     const w=Math.min(IMAGE_CELLS,width-column0),h=Math.min(IMAGE_CELLS,height-row0),image=new ImageData(w,h);
     let any=false;
@@ -319,11 +338,9 @@ function syncImageLayer(){
     // A canvas source: MapLibre reads the pixels directly (no URL to fetch, nothing for a CSP to block).
     const canvas=Object.assign(document.createElement('canvas'),{width:w,height:h});canvas.getContext('2d').putImageData(image,0,0);
     const x0=left+column0*size,z0=top+row0*size,x1=x0+w*size,z1=z0+h*size,id=`cells-${row0}-${column0}`;
-    geoMap.addSource(id,{type:'canvas',canvas,animate:false,coordinates:[atlas.place(x0,z0),atlas.place(x1,z0),atlas.place(x1,z1),atlas.place(x0,z1)]});
-    geoMap.addLayer({id,type:'raster',source:id,paint:{'raster-resampling':'nearest','raster-fade-duration':0}},labels);
-    imageIds.push(id);
+    items.push({id,canvas,coordinates:[atlas.place(x0,z0),atlas.place(x1,z0),atlas.place(x1,z1),atlas.place(x0,z1)]});
   }
-  cellLayerKey=key;
+  return items;
 }
 // Cell outlines once a cell is wider than ~10 px, for the cells on screen only.
 function drawOutlines(ctx,cssWidth,cssHeight){
@@ -626,6 +643,8 @@ function drawAtlas(){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,cssWidth,cssHeight);
   if(geographic()){drawGeography(ctx,cssWidth,cssHeight);return;}
+  // The map library is still loading: wait for it rather than flash the flat grid.
+  if(atlas.image&&!geoMap&&document.body.dataset.basemap!=='unavailable')return;
   const margin=56,cell=Math.max(.05,Math.min((cssWidth-margin*2)/width,(cssHeight-margin*2)/height))*zoom;
   const mapWidth=cell*width,mapHeight=cell*height;
   const centerColumn=zoom>1&&selectedIndex!==null?selectedIndex%width+.5:width/2;
@@ -853,16 +872,16 @@ async function readLocal(){
 // 30 KB. The legacy Published view still reads progress/earth.json.
 async function readPublished(){
   const worldView=$('area').value==='world';
-  let response=worldView?await fetch('./progress/world.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)}).catch(()=>null):null;
+  // Same request as index.html's preloads, so the first visit reuses them; both start at once.
+  const statusRequest=worldView?fetch('./progress/status.json',{signal:AbortSignal.timeout(10000)}).then(r=>r.ok?r.json():null).catch(()=>null):null;
+  let response=worldView?await fetch('./progress/world.json',{signal:AbortSignal.timeout(10000)}).catch(()=>null):null;
   const compact=Boolean(response?.ok);
   if(!compact)response=await fetch('./progress/earth.json',{cache:'no-cache',signal:AbortSignal.timeout(20000)});
   if(!response.ok)throw Error('published snapshot unavailable');
   const data={...await response.json(),source:'public'};
   let nextAtlas=null;
   if(compact&&data.generated_world?.cells_bitmap){
-    const status=await fetch('./progress/status.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)})
-      .then(r=>r.ok?r.json():null).catch(()=>null);
-    nextAtlas=await worldAtlas(data,status);
+    nextAtlas=await worldAtlas(data,await statusRequest);
   }
   nextAtlas??=publishedAtlas(data);
   snapshot=data;
