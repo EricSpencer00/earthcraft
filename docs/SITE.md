@@ -7,8 +7,9 @@ fonts are vendored under `dashboard/assets/`.
 
 ## Pages
 
-- `index.html` — the map. It shows which 256 m cells are built, from
-  `progress/earth.json`. Pick a cell and choose **View blocks in 3D**.
+- `index.html` — the map. It shows which 256 m cells are built, queued or
+  detailed, from `progress/world.json` and `progress/status.json`. Pick a cell
+  and choose **View blocks in 3D**.
 - `blocks.html` — the 3D block viewer. It reads region files straight from the
   dataset with HTTP Range requests and decodes the chunks in the browser.
   Block colours come from `block-colors.mjs`; no Minecraft textures are used.
@@ -55,12 +56,36 @@ node scripts/build_view_cache.mjs --revision <40-hex dataset commit>
 Then set `PINNED_REVISION` in `dashboard/anvil.mjs` to the same commit.
 `tests/view_cache.mjs` checks that they match.
 
+## Map data: GitHub daily, Hugging Face for blocks only
+
+A visit reads about 35 KB of map data, all from GitHub Pages:
+
+| File | What | Made by |
+| --- | --- | --- |
+| `progress/world.json` | The snapshot with cells, tiles/v2, lake and planned tiles as bitmaps | `scripts/site_cache.py` from `progress/earth.json` and the dataset's plan |
+| `progress/status.json` | The pipeline's `status/pipeline.json` (published and detailed tiles) | `scripts/site_cache.py`, copied from the dataset |
+| `progress/detail.json` | `world/index/detail-levels.json` | `scripts/site_cache.py`, copied from the dataset |
+
+The Pages workflow refreshes them once a day (and on every site push). The map
+reads Hugging Face only for block data, when someone opens a tile.
+`progress/earth.json` (16 MB) stays for the legacy Published view and the cell
+browser's provenance link.
+
+Cells are drawn as canvases, one pixel per cell and 64 × 64 cells each, placed by
+their exact corners; the pointer finds its cell with `frameForward`. There are no
+per-cell objects until a cell is selected. Compared with the 315k-polygon GeoJSON
+this replaced: time to a usable map 7.0 s → 2.8 s on an M-series laptop
+(17.6 s → 6.6 s at 4× CPU throttle), JS heap 594 MB → 16 MB.
+
+Planned tiles that nobody has built show as **queued**, so the build front reads
+as work in progress rather than a hole.
+
 ## Deploy
 
 `.github/workflows/progress-pages.yml` deploys on every push to `main` that
-touches the site. It rebuilds `progress/earth.json`
-(`scripts/progress_snapshot.py`), copies `dashboard/` into `site/`, runs the
-browser tests, and publishes. The site must stay under 20 MiB.
+touches the site, and daily. It rebuilds `progress/earth.json`
+(`scripts/progress_snapshot.py`) and the compact map data (`scripts/site_cache.py`),
+copies `dashboard/` into `site/`, runs the browser tests, and publishes. The site must stay under 20 MiB.
 
 ## Test locally
 

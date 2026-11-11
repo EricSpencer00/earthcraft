@@ -1,8 +1,8 @@
-import {installCellBrowser} from './cell-browser.mjs?v=simple-1';
+import {installCellBrowser} from './cell-browser.mjs?v=simple-2';
 import {parseCoordinates,placeIndex,searchPlaces,fold} from './location-search.mjs?v=places-1';
 import * as maplibre from './assets/vendor/maplibre/maplibre-gl.mjs';
-import {frameInverse} from './frame.mjs?v=frame-1';
-import {decodeTileBitmap} from './fresh-tiles.mjs?v=fresh-1';
+import {frameInverse,frameForward} from './frame.mjs?v=frame-2';
+import {decodeBits} from './fresh-tiles.mjs?v=fresh-2';
 
 const $=id=>document.getElementById(id);
 new ResizeObserver(entries=>{document.documentElement.style.setProperty('--tools-height',entries[0].target.getBoundingClientRect().height+'px');}).observe(document.querySelector('.map-tools'));
@@ -18,7 +18,8 @@ const palette=()=>['surface','gray','green','amber','rust'].map(color);
 const countLabel=value=>typeof value==='number'&&Number.isFinite(value)?number(value):'Not recorded';
 let cellBrowser=null;
 // Per-cell detail level (256 m cells = 16x16 chunks).
-const DETAIL_URL='https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/world/index/detail-levels.json';
+// Copied from the dataset once a day by the Pages workflow (scripts/site_cache.py).
+const DETAIL_URL='./progress/detail.json';
 const DETAIL_LEVELS=['none','low','high','hand'];
 let detail=null;
 // Levels are published per 512 m tile ("r.X.Z"); a 256 m cell X_Z lies in tile r.(X>>1).(Z>>1).
@@ -26,62 +27,59 @@ function regionTile(id){
   const m=/^(-?\d+)_(-?\d+)$/.exec(id||'');
   return m?[Number(m[1])>>1,Number(m[2])>>1]:null;
 }
-// The AWS host's status file (status/pipeline.json) lists every published tiles/v2 tile and
-// every tile with surface detail (scans, trees, facades, ground); those win over the sample.
-let liveTiles=null;
+// The AWS host's status file (status/pipeline.json, copied daily to progress/status.json) lists
+// every published tiles/v2 tile and every tile with surface detail; those win over the sample.
+// Per-tile flags live in atlas.tiles (see worldAtlas).
+const T_V2=1,T_LAKE=2,T_PUB=4,T_DET=8,T_CELL=16,T_PLAN=32;
+const live=()=>Boolean(atlas?.live);
 function detailLevel(index){
-  const id=atlas?.cell_ids?.[index],tile=regionTile(id);
+  const id=atlas?.id(index),tile=regionTile(id);
   if(!id)return null;
-  if(liveTiles&&tile){
-    const key=tile[0]+'_'+tile[1];
-    if(liveTiles.detailed.has(key))return 'high';
-    if(isLake(index))return null;  // open water: no detail to grade
-    if(liveTiles.published.has(key))return 'low';      // a new tiles/v2 base build
-    if(atlas.cells[index]===2)return 'original';         // only the original LiDAR world
+  if(live()){
+    const flags=atlas.tileFlag(index);
+    if(flags&T_DET)return 'high';
+    if(flags&T_LAKE)return null;                     // open water: no detail to grade
+    if(flags&(T_V2|T_PUB))return 'low';              // a new tiles/v2 base build
+    if(atlas.cells[index]===2)return 'original';     // only the original LiDAR world
+    if(atlas.cells[index]===0)return 'queued';       // planned, not built yet
     return null;
   }
   if(!detail)return null;
   return detail.cells?.[id]||(tile&&detail.tiles?.[`r.${tile[0]}.${tile[1]}`])||null;
 }
-const hasDetail=()=>Boolean(detail||liveTiles);
+const hasDetail=()=>Boolean(detail||live());
 // Cells with a published tiles/v2 package read their blocks from it, at the snapshot's
 // dataset commit; others read the world/region capture the viewer pins.
 const HF_DATASET='https://huggingface.co/datasets/EricSpencer00/earthcraft';
-let publishedTiles=null,freshTiles=null;
-function tileSet(cache,list){return cache?.list===list?cache:{list,set:new Set(list||[])};}
-// Lake Michigan open water (marked in publishedAtlas) is drawn as water; a lake cell without
-// a tiles/v2 package is built in the browser from the lake/v1 bathymetry by dashboard/lake.mjs.
-function isLake(index){return atlas?.records?.[index]?.lake===true;}
-function hasPackage(index){
-  const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
-  if(!tile||!Array.isArray(world?.v2_tiles))return false;
-  publishedTiles=tileSet(publishedTiles,world.v2_tiles);
-  return publishedTiles.set.has(tile[0]+'_'+tile[1]);
-}
+// Lake Michigan open water is drawn as water; a lake cell without a tiles/v2 package is built
+// in the browser from the lake/v1 bathymetry by dashboard/lake.mjs.
+function isLake(index){return Boolean(atlas?.isLake(index));}
+function hasPackage(index){return Boolean(atlas&&atlas.tileFlag(index)&T_V2);}
 function blockSource(index){
-  const world=snapshot?.generated_world,tile=regionTile(atlas?.cell_ids?.[index]);
+  const world=snapshot?.generated_world,tile=regionTile(atlas?.id(index));
   if(!tile||!/^[0-9a-f]{40}$/.test(world?.dataset_revision||''))return null;
-  const id=tile[0]+'_'+tile[1],root=`${HF_DATASET}/resolve/${world.dataset_revision}`;
+  const id=tile[0]+'_'+tile[1],root=`${HF_DATASET}/resolve/${world.dataset_revision}`,flags=atlas.tileFlag(index);
   // Surface detail lands after the base tile: read those from main, which has the latest build.
-  if(liveTiles?.detailed.has(id))return {base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'};
-  if(hasPackage(index))return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
-  if(isLake(index))return {base:`${root}/lake/v1/`,layout:'lake'};
-  if(!Array.isArray(world.v2_tiles))return null;
+  if(flags&T_DET)return {base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'};
+  if(flags&T_V2)return {base:`${root}/tiles/v2/${id}/region/`,layout:'flat-auto'};
+  if(flags&T_LAKE)return {base:`${root}/lake/v1/`,layout:'lake'};
   // Newer than the snapshot's commit: read it from main, which always has it.
-  freshTiles=tileSet(freshTiles,world.fresh_tiles);
-  return freshTiles.set.has(id)?{base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
+  return flags&T_PUB?{base:`${HF_DATASET}/resolve/main/tiles/v2/${id}/region/`,layout:'flat-auto'}:null;
 }
-function detailColor(level){return {none:color('gray'),original:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
+function detailColor(level){return {queued:color('amber'),none:color('gray'),original:color('gray'),low:color('amber'),high:color('green'),hand:color('rust')}[level]||color('surface');}
 // With live status the layer reads as progress: new tiles drawn over the original world.
-const LIVE_LEVELS=[['original','original'],['low','new'],['high','full detail']];
+const LIVE_LEVELS=[['queued','queued'],['original','original'],['low','new'],['high','full detail']];
 function renderDetailCount(){
   const box=$('detail-count');
-  if(liveTiles){
-    const old=new Set(),lake=new Set(snapshot?.generated_world?.lake_tiles||[]);
-    if(atlas)atlas.cell_ids.forEach((id,i)=>{if(atlas.cells[i]===2&&!isLake(i)){const t=regionTile(id);if(t)old.add(t[0]+'_'+t[1]);}});
-    const fresh=[...liveTiles.published].filter(id=>!lake.has(id));
-    const value={high:liveTiles.detailed.size,low:fresh.filter(id=>!liveTiles.detailed.has(id)).length,
-      original:[...old].filter(id=>!liveTiles.published.has(id)&&!liveTiles.detailed.has(id)).length};
+  if(live()){
+    const value={high:0,low:0,original:0,queued:0};
+    for(const flags of atlas.tiles){
+      if(flags&T_DET)value.high++;
+      else if(flags&T_LAKE)continue;
+      else if(flags&(T_V2|T_PUB))value.low++;
+      else if(flags&T_CELL)value.original++;
+      else if(flags&T_PLAN)value.queued++;
+    }
     const parts=[document.createTextNode('Tiles:')];
     for(const [level,label] of LIVE_LEVELS){
       const item=document.createElement('span'),swatch=document.createElement('i');
@@ -140,7 +138,7 @@ function scheduleDraw(){
   drawPending=true;
   requestAnimationFrame(()=>{drawPending=false;if(atlas)drawAtlas();});
 }
-function geographic(){return document.body.dataset.map==='geographic'&&geoMap&&geoCells.length>0;}
+function geographic(){return document.body.dataset.map==='geographic'&&geoMap&&(geoCells.length>0||Boolean(atlas?.image));}
 
 function prepareGeography(){
   const signature=atlasSignature();
@@ -150,7 +148,16 @@ function prepareGeography(){
   if(atlas?.source!=='published'){
     document.body.dataset.map='grid';$('map-attribution').hidden=true;return;
   }
-  for(const [index,record] of atlas.records.entries()){
+  if(atlas.image){  // the frame's projection places every cell; no per-cell objects needed
+    const {left_block:x0,top_block:z0,width_cells:w,height_cells:h,cell_size_blocks:size}=atlas.area,x1=x0+w*size,z1=z0+h*size;
+    const edge=[[x0,z0],[x1,z0],[x1,z1],[x0,z1],[(x0+x1)/2,z0],[(x0+x1)/2,z1],[x0,(z0+z1)/2],[x1,(z0+z1)/2]].map(([x,z])=>atlas.place(x,z));
+    geoBounds=[Math.min(...edge.map(p=>p[0])),Math.min(...edge.map(p=>p[1])),Math.max(...edge.map(p=>p[0])),Math.max(...edge.map(p=>p[1]))];
+    if(geoMap){document.body.dataset.map='geographic';$('map-attribution').hidden=document.body.dataset.basemap!=='ready';geoMap.resize();if(changed)fitGeography();}
+    else document.body.dataset.map='grid';
+    return;
+  }
+  for(let index=0;index<atlas.cells.length;index++){
+    const record=atlas.record(index);
     if(!record||!Number.isFinite(record.latitude)||!Number.isFinite(record.longitude))continue;
     const lat=record.latitude,lon=record.longitude;
     const height=Number(record.height_deg)||atlas.area.cell_size_blocks/111320;
@@ -199,7 +206,7 @@ async function initializeBasemap(){
     // Idle means the cells are drawn too: the cell source is added a frame after the style
     // and tiled in a worker, and MapLibre fires another idle once it has loaded.
     geoMap.on('idle',()=>{
-      if(geographic()&&!(geoMap.getSource('cells')&&geoMap.isSourceLoaded('cells'))){scheduleDraw();return;}
+      if(geographic()&&!(atlas?.image?cellLayerKey:geoMap.getSource('cells')&&geoMap.isSourceLoaded('cells'))){scheduleDraw();return;}
       document.body.dataset.camera='idle';
     });
     geoMap.on('click',event=>{
@@ -244,6 +251,13 @@ async function initializeBasemap(){
 }
 
 function cellAtLocation({lng,lat}){
+  if(atlas?.image){
+    const [x,z]=atlas.forward(lng,lat),a=atlas.area,size=a.cell_size_blocks;
+    const column=Math.floor((x-a.left_block)/size),row=Math.floor((z-a.top_block)/size);
+    if(column<0||row<0||column>=a.width_cells||row>=a.height_cells)return null;
+    const index=row*a.width_cells+column;
+    return atlas.cells[index]>=0?{index}:null;
+  }
   return (geoBuckets.get(bucketKey(lng,lat))||[]).find(({bounds:[west,south,east,north],corners})=>{
     if(lng<west||lng>east||lat<south||lat>north)return false;
     let inside=false;
@@ -260,23 +274,91 @@ function cellAtLocation({lng,lat}){
 // share exact corners, so translucent fills meet without seams. The canvas above the map
 // only outlines the hovered and selected cells.
 let cellLayerKey='';
-function cellStyle(cell,colors,water){
-  const record=atlas.records[cell.index];
-  const complete=record.appearance_state==='complete'||record.appearance_state==='verified';
-  const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[cell.index];
-  const level=mapLayer==='detail'?detailLevel(cell.index):null;
-  const fill=mapLayer==='detail'?detailColor(level):mapLayer==='build'&&code===2&&isLake(cell.index)?water:colors[code]||colors[0];
-  const alpha=mapLayer==='detail'?(level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
+function cellStyle(index,colors,water){
+  const state=atlas.image?snapshot?.generated_world?.cell_defaults?.appearance_state:atlas.record(index)?.appearance_state;
+  const complete=state==='complete'||state==='verified';
+  const code=mapLayer==='appearance'?(complete?2:1):atlas.cells[index];
+  const level=mapLayer==='detail'?detailLevel(index):null;
+  const fill=mapLayer==='detail'?detailColor(level):mapLayer==='build'&&code===2&&isLake(index)?water:colors[code]||colors[0];
+  const alpha=mapLayer==='detail'?(level==='queued'?.2:level?.6:.12):mapLayer==='appearance'?(complete?.8:.16):.28;
   return {f:fill,a:alpha,s:mapLayer==='detail'?fill:colors[code]||colors[0]};
+}
+// The default map draws cells as canvases, one pixel per cell, 64 x 64 cells per image placed
+// by its exact corners (under 5 m off anywhere inside). That replaces 300k+ polygons: no
+// GeoJSON to build or tile, and the map is ready in a fraction of the time.
+const IMAGE_CELLS=64;
+let imageIds=[];
+const rgbCache=new Map();
+function rgb(value){
+  if(!rgbCache.has(value)){
+    const ctx=document.createElement('canvas').getContext('2d');ctx.fillStyle=value;
+    const hex=ctx.fillStyle,match=/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    rgbCache.set(value,match?match.slice(1).map(v=>parseInt(v,16)):[128,128,128]);
+  }
+  return rgbCache.get(value);
+}
+function syncImageLayer(){
+  const colors=palette(),water=color('water');
+  const key=['image',geoSignature,mapLayer,detail?detail.computed_utc||1:0,live()?1:0,colors.join(),water].join('|');
+  if(key===cellLayerKey&&imageIds.every(id=>geoMap.getSource(id)))return;
+  for(const id of imageIds){if(geoMap.getLayer(id))geoMap.removeLayer(id);if(geoMap.getSource(id))geoMap.removeSource(id);}
+  imageIds=[];
+  const {left_block:left,top_block:top,width_cells:width,height_cells:height,cell_size_blocks:size}=atlas.area;
+  const labels=geoMap.getStyle().layers.find(layer=>layer.type==='symbol')?.id;
+  for(let row0=0;row0<height;row0+=IMAGE_CELLS)for(let column0=0;column0<width;column0+=IMAGE_CELLS){
+    const w=Math.min(IMAGE_CELLS,width-column0),h=Math.min(IMAGE_CELLS,height-row0),image=new ImageData(w,h);
+    let any=false;
+    for(let r=0;r<h;r++)for(let c=0;c<w;c++){
+      const index=(row0+r)*width+column0+c;
+      if(atlas.cells[index]<0)continue;
+      any=true;
+      const style=cellStyle(index,colors,water),[R,G,B]=rgb(style.f),o=(r*w+c)*4;
+      image.data[o]=R;image.data[o+1]=G;image.data[o+2]=B;image.data[o+3]=Math.round(style.a*255);
+    }
+    if(!any)continue;
+    // A canvas source: MapLibre reads the pixels directly (no URL to fetch, nothing for a CSP to block).
+    const canvas=Object.assign(document.createElement('canvas'),{width:w,height:h});canvas.getContext('2d').putImageData(image,0,0);
+    const x0=left+column0*size,z0=top+row0*size,x1=x0+w*size,z1=z0+h*size,id=`cells-${row0}-${column0}`;
+    geoMap.addSource(id,{type:'canvas',canvas,animate:false,coordinates:[atlas.place(x0,z0),atlas.place(x1,z0),atlas.place(x1,z1),atlas.place(x0,z1)]});
+    geoMap.addLayer({id,type:'raster',source:id,paint:{'raster-resampling':'nearest','raster-fade-duration':0}},labels);
+    imageIds.push(id);
+  }
+  cellLayerKey=key;
+}
+// Cell outlines once a cell is wider than ~10 px, for the cells on screen only.
+function drawOutlines(ctx,cssWidth,cssHeight){
+  if(geoMap.getZoom()<12.3)return;
+  const a=atlas.area,size=a.cell_size_blocks,colors=palette(),water=color('water');
+  const view=[[0,0],[cssWidth,0],[cssWidth,cssHeight],[0,cssHeight]].map(p=>{const ll=geoMap.unproject(p);return atlas.forward(ll.lng,ll.lat);});
+  const c0=Math.max(0,Math.floor((Math.min(...view.map(p=>p[0]))-a.left_block)/size)),c1=Math.min(a.width_cells-1,Math.floor((Math.max(...view.map(p=>p[0]))-a.left_block)/size));
+  const r0=Math.max(0,Math.floor((Math.min(...view.map(p=>p[1]))-a.top_block)/size)),r1=Math.min(a.height_cells-1,Math.floor((Math.max(...view.map(p=>p[1]))-a.top_block)/size));
+  if(c1<c0||r1<r0||(c1-c0+1)*(r1-r0+1)>12000)return;
+  const nx=c1-c0+2,points=new Float32Array(nx*(r1-r0+2)*2);
+  for(let r=r0;r<=r1+1;r++)for(let c=c0;c<=c1+1;c++){
+    const p=geoMap.project(atlas.place(a.left_block+c*size,a.top_block+r*size)),o=((r-r0)*nx+c-c0)*2;points[o]=p.x;points[o+1]=p.y;
+  }
+  const paths=new Map();
+  for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){
+    const index=r*a.width_cells+c;
+    if(atlas.cells[index]<0)continue;
+    const stroke=cellStyle(index,colors,water).s;
+    if(!paths.has(stroke))paths.set(stroke,new Path2D());
+    const path=paths.get(stroke),v=k=>[points[k*2],points[k*2+1]],i=(r-r0)*nx+c-c0;
+    path.moveTo(...v(i));path.lineTo(...v(i+1));path.lineTo(...v(i+1+nx));path.lineTo(...v(i+nx));path.closePath();
+  }
+  ctx.save();ctx.globalAlpha=mapLayer==='appearance'?.25:.42;ctx.lineWidth=.6;
+  for(const [stroke,path] of paths){ctx.strokeStyle=stroke;ctx.stroke(path);}
+  ctx.restore();
 }
 function syncCellLayer(){
   if(!geoMap?.isStyleLoaded())return;
+  if(atlas.image){syncImageLayer();return;}
   const colors=palette(),water=color('water');
-  const key=[geoSignature,geoCells.length,mapLayer,detail?detail.computed_utc||1:0,liveTiles?.detailed.size||0,colors.join(),water].join('|');
+  const key=[geoSignature,geoCells.length,mapLayer,detail?detail.computed_utc||1:0,live()?1:0,colors.join(),water].join('|');
   const source=geoMap.getSource('cells');
   if(key===cellLayerKey&&source)return;
   const data={type:'FeatureCollection',features:geoCells.map(cell=>({type:'Feature',id:cell.index,
-    properties:cellStyle(cell,colors,water),geometry:{type:'Polygon',coordinates:[[...cell.corners,cell.corners[0]]]}}))};
+    properties:cellStyle(cell.index,colors,water),geometry:{type:'Polygon',coordinates:[[...cell.corners,cell.corners[0]]]}}))};
   if(source)source.setData(data);
   else{
     geoMap.addSource('cells',{type:'geojson',data,tolerance:0,buffer:0});
@@ -291,10 +373,11 @@ function syncCellLayer(){
 
 function drawGeography(ctx,cssWidth,cssHeight){
   syncCellLayer();
+  if(atlas.image)drawOutlines(ctx,cssWidth,cssHeight);
   for(const [index,strong] of [[hoverIndex,false],[selectedIndex,true]]){
-    const cell=index===null?null:geoCellIndex.get(index);
-    if(!cell)continue;
-    const points=cell.corners.map(p=>geoMap.project(p));
+    const corners=index===null?null:atlas.image?atlas.record(index)?.corners_lonlat:geoCellIndex.get(index)?.corners;
+    if(!corners)continue;
+    const points=corners.map(p=>geoMap.project(p));
     ctx.strokeStyle=color(strong?'ink':'green');ctx.lineWidth=strong?2.5:1.5;
     ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
   }
@@ -307,10 +390,10 @@ function setLayer(layer){
   for(const name of ['build','appearance','detail'])$('layer-'+name).setAttribute('aria-pressed',String(layer===name));
   if(atlas){renderLegend(atlas.source==='published',atlas.counts,atlas.area.id==='live');drawAtlas();}
   if(layer==='appearance'&&atlas?.source==='published'){
-    const complete=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
+    const complete=atlas.appearance_done;
     setMapMessage(number(complete)+' cells with surface detail · '+number(atlas.area.tiles)+' in total');
   }else if(layer==='detail'&&atlas?.source==='published'){
-    setMapMessage(liveTiles?'New tiles over the original world':hasDetail()?'Detail level of each 512 m tile':'Detail levels are not available yet');
+    setMapMessage(live()?'New tiles over the original world':hasDetail()?'Detail level of each 512 m tile':'Detail levels are not available yet');
   }else if(atlas)renderAtlas();
 }
 
@@ -320,7 +403,7 @@ function goToPlace(id){
   for(const name of Object.keys(places))$('place-'+name).setAttribute('aria-pressed',String(name===id));
   geoMap.easeTo({center:place.coordinates,zoom:13,duration:0});
   const cell=cellAtLocation({lng:place.coordinates[0],lat:place.coordinates[1]});
-  if(cell){selectIndex(cell.index);setMapMessage(place.name+' · cell '+atlas.cell_ids[cell.index]);}
+  if(cell){selectIndex(cell.index);setMapMessage(place.name+' · cell '+atlas.id(cell.index));}
   else{clearSelection();setMapMessage(place.name+' is not on this map yet.');}
 }
 
@@ -375,6 +458,59 @@ function stageCode(cell){
   return 0;
 }
 
+// The default map: cells and tiles from the bitmaps in progress/world.json, in typed arrays.
+// A cell's record (centre, corners) is made only when something asks for it.
+async function worldAtlas(data,status){
+  const world=data.generated_world,size=Number(world.cell_size_m)||256,defaults=world.cell_defaults||{};
+  const [cellBits,v2,lake,published,detailed,plan]=await Promise.all(
+    [world.cells_bitmap,world.v2_bitmap,world.lake_bitmap,status?.published_tiles,status?.detailed_tiles,world.plan_bitmap].map(decodeBits));
+  if(!cellBits||world.projection?.method!=='transverse_mercator_wgs84')return null;
+  let left=cellBits.x0,top=cellBits.z0,right=left+cellBits.width,bottom=top+cellBits.height;
+  for(const m of [plan])if(m){left=Math.min(left,2*m.x0);top=Math.min(top,2*m.z0);right=Math.max(right,2*(m.x0+m.width));bottom=Math.max(bottom,2*(m.z0+m.height));}
+  if(published){left=Math.min(left,2*published.x0);top=Math.min(top,2*published.z0);right=Math.max(right,2*(published.x0+published.width));bottom=Math.max(bottom,2*(published.z0+published.height));}
+  const width=right-left,height=bottom-top;
+  if(width*height>16e6)throw Error('Published grid is too large for this atlas');
+  const tl=left>>1,tt=top>>1,tw=((right+1)>>1)-tl,th=((bottom+1)>>1)-tt,tiles=new Uint8Array(tw*th);
+  const tileAt=(x,z)=>(z-tt)*tw+x-tl;
+  v2?.each((x,z)=>{tiles[tileAt(x,z)]|=T_V2;});
+  lake?.each((x,z)=>{tiles[tileAt(x,z)]|=T_LAKE;});
+  detailed?.each((x,z)=>{if(x>=tl&&z>=tt&&x<tl+tw&&z<tt+th)tiles[tileAt(x,z)]|=T_DET;});
+  const cells=new Int8Array(width*height).fill(-1),code=stageCode(defaults);
+  cellBits.each((x,z)=>{cells[(z-top)*width+x-left]=code;tiles[tileAt(x>>1,z>>1)]|=T_CELL;});
+  // Planned tiles nobody has built yet are queued (code 0), so the build front reads as a queue.
+  plan?.each((x,z)=>{
+    const t=tileAt(x,z);tiles[t]|=T_PLAN;
+    if(tiles[t]&(T_CELL|T_PUB|T_LAKE))return;
+    for(const [dx,dz] of [[0,0],[1,0],[0,1],[1,1]]){const i=(2*z+dz-top)*width+2*x+dx-left;if(cells[i]<0)cells[i]=0;}
+  });
+  // Tiles published after the snapshot add their four cells.
+  published?.each((x,z)=>{
+    const t=tileAt(x,z);tiles[t]|=T_PUB|T_CELL;
+    for(const [dx,dz] of [[0,0],[1,0],[0,1],[1,1]]){const i=(2*z+dz-top)*width+2*x+dx-left;if(cells[i]<=0)cells[i]=2;}
+  });
+  const counts={white:0,gray:0,green:0,active:0,failed:0};let total=0;
+  for(const c of cells){if(c<=0){if(c===0)counts.white++;continue;}total++;if(c===0)counts.white++;else if(c===1)counts.gray++;else if(c===2)counts.green++;else if(c===3)counts.active++;else if(c===4)counts.failed++;}
+  const place=frameInverse(world.projection),forward=frameForward(world.projection);
+  const tileFlag=index=>{const x=left+index%width,z=top+Math.floor(index/width);return tiles[tileAt(x>>1,z>>1)]|0;};
+  const appearanceDone=['complete','verified'].includes(defaults.appearance_state)?total:0;
+  return {
+    source:'published',image:true,live:Boolean(detailed),place,forward,tiles,tileFlag,
+    isLake:index=>Boolean(tileFlag(index)&T_LAKE),
+    id:index=>index>=0&&index<cells.length?`${left+index%width}_${top+Math.floor(index/width)}`:null,
+    record(index){
+      if(!(index>=0&&index<cells.length)||cells[index]<0)return null;
+      const x=left+index%width,z=top+Math.floor(index/width),x0=x*size,z0=z*size;
+      const [longitude,latitude]=place(x0+size/2,z0+size/2).map(v=>Math.round(v*1e6)/1e6);
+      return {...defaults,id:`${x}_${z}`,x,z,lake:Boolean(tileFlag(index)&T_LAKE),longitude,latitude,
+        corners_lonlat:[place(x0,z0),place(x0+size,z0),place(x0+size,z0+size),place(x0,z0+size)]};
+    },
+    area:{id:'world',label:'Chicago area',left_block:left*size,top_block:top*size,width_cells:width,height_cells:height,
+      width_chunks:width*size/16,height_chunks:height*size/16,cell_size_blocks:size,cell_label:'generation cell',tiles:total},
+    palette:['Queued','Data ready','Terrain & buildings built','Building','Needs review'],
+    cells,counts,failed_tiles:counts.failed,appearance_done:appearanceDone,updated_utc:data.updated_utc,overlays:{}
+  };
+}
+
 function publishedAtlas(data){
   const world=$('area').value==='world'?data.generated_world:null;
   const defaults=world?.cell_defaults||{};
@@ -418,8 +554,10 @@ function publishedAtlas(data){
     if(code===4)counts.failed+=1;
   }
   const cellSize=Number(world?.cell_size_m||data.cell_grid?.cell_size_m)||256;
+  const appearanceDone=records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
   return {
-    source:'published',
+    source:'published',id:index=>cellIds[index]??null,record:index=>records[index]??null,
+    isLake:index=>records[index]?.lake===true,tileFlag:index=>records[index]?.lake?T_LAKE:0,appearance_done:appearanceDone,
     area:{
       id:world?'world':'published',label:'Chicago area',left_block:left*cellSize,top_block:top*cellSize,
       width_cells:width,height_cells:height,width_chunks:width*cellSize/16,height_chunks:height*cellSize/16,
@@ -501,7 +639,7 @@ function drawAtlas(){
     for(let column=0;column<width;column++){
       let code=atlas.cells[row*width+column];
       if(code<0)continue;
-      if(atlas.source==='published'&&mapLayer==='appearance')code=['complete','verified'].includes(atlas.records[row*width+column]?.appearance_state)?2:1;
+      if(atlas.source==='published'&&mapLayer==='appearance')code=['complete','verified'].includes(atlas.record(row*width+column)?.appearance_state)?2:1;
       if(left+(column+1)*cell<0||left+column*cell>cssWidth||top+(row+1)*cell<0||top+row*cell>cssHeight)continue;
       ctx.fillStyle=atlas.source==='published'&&mapLayer==='detail'?detailColor(detailLevel(row*width+column)):colors[code]||colors[0];
       const gap=cell>=2?.5:0;
@@ -597,7 +735,7 @@ function renderLegend(isPublished,counts,live){
   $('legend-installed').hidden=live||isPublished;
   $('legend-running').hidden=live||!counts.active;
   $('legend-failed').hidden=live||!counts.failed;
-  $('legend-water').hidden=live||!isPublished||!snapshot?.generated_world?.lake_tiles?.length;
+  $('legend-water').hidden=live||!isPublished||!(snapshot?.generated_world?.lake_bitmap?.count||snapshot?.generated_world?.lake_tiles?.length);
 }
 
 function renderAtlas(){
@@ -653,7 +791,7 @@ function renderAtlas(){
       $('border').textContent='Existing world frame';
       $('chunk-count').textContent=number(world.native_tiles)+' tiles';
     }
-    const detailed=atlas.records.filter(record=>['complete','verified'].includes(record?.appearance_state)).length;
+    const detailed=atlas.appearance_done;
     setMapMessage(mapLayer==='appearance'?number(detailed)+' cells with surface detail · '+number(area.tiles)+' in total':world?number(area.tiles)+' cells built':built===area.tiles?number(built)+' cells built':number(area.tiles)+' cells · '+number(built)+' built');
   }else{
     $('grid-size').textContent=distanceLabel(widthBlocks)+' × '+distanceLabel(heightBlocks);
@@ -710,37 +848,26 @@ async function readLocal(){
   atlas=chunkData;
 }
 
-// Tiles the pipeline published after the base snapshot, from the few-KB bitmap the AWS host
-// commits in status/pipeline.json every 15 minutes. The data only grows, so the 10 MB base
-// snapshot stays as it is and only newer tiles are added; a failure leaves the base map.
-async function publishedSince(world){
-  try{
-    const response=await fetch(`${HF_DATASET}/resolve/main/status/pipeline.json`,{cache:'no-cache',credentials:'omit',signal:AbortSignal.timeout(10000)});
-    if(!response.ok)return [];
-    const status=await response.json(),known=new Set(world.v2_tiles||[]);
-    const published=await decodeTileBitmap(status?.published_tiles);
-    if(status?.detailed_tiles){
-      liveTiles={published:new Set([...known,...published]),detailed:new Set(await decodeTileBitmap(status.detailed_tiles))};
-    }
-    return published.filter(id=>!known.has(id));
-  }catch{return [];}
-}
+// progress/world.json (the snapshot with its id lists as bitmaps) and progress/status.json (the
+// pipeline's status, as of the last daily deploy) both come from GitHub Pages; together about
+// 30 KB. The legacy Published view still reads progress/earth.json.
 async function readPublished(){
-  const response=await fetch('./progress/earth.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)});
+  const worldView=$('area').value==='world';
+  let response=worldView?await fetch('./progress/world.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)}).catch(()=>null):null;
+  const compact=Boolean(response?.ok);
+  if(!compact)response=await fetch('./progress/earth.json',{cache:'no-cache',signal:AbortSignal.timeout(20000)});
   if(!response.ok)throw Error('published snapshot unavailable');
-  const data={...await response.json(),source:'public'},world=data.generated_world;
-  if(world&&Array.isArray(world.v2_tiles)){
-    const fresh=await publishedSince(world),cells=new Set(world.cells.map(c=>c.tile_id));
-    for(const id of fresh){
-      const [x,z]=id.split('_').map(Number);
-      for(const [dx,dz] of [[0,0],[1,0],[0,1],[1,1]]){const cell=`${2*x+dx}_${2*z+dz}`;if(!cells.has(cell)){cells.add(cell);world.cells.push({tile_id:cell});}}
-    }
-    world.fresh_tiles=fresh;world.unique_cells=world.cells.length;
+  const data={...await response.json(),source:'public'};
+  let nextAtlas=null;
+  if(compact&&data.generated_world?.cells_bitmap){
+    const status=await fetch('./progress/status.json',{cache:'no-cache',signal:AbortSignal.timeout(10000)})
+      .then(r=>r.ok?r.json():null).catch(()=>null);
+    nextAtlas=await worldAtlas(data,status);
   }
-  const nextAtlas=publishedAtlas(data);
+  nextAtlas??=publishedAtlas(data);
   snapshot=data;
   atlas=nextAtlas;
-  if(liveTiles)renderDetailCount();
+  if(live())renderDetailCount();
 }
 
 async function readSnapshot(){
@@ -762,7 +889,7 @@ async function refresh(){
     }
     renderSnapshot();
     renderAtlas();
-    if(liveTiles&&!layerChosen&&mapLayer==='build'&&atlas?.source==='published')setLayer('detail');
+    if(live()&&!layerChosen&&mapLayer==='build'&&atlas?.source==='published')setLayer('detail');
   }catch(error){
     document.body.dataset.feed='error';
     $('connection').textContent='Snapshot unavailable';
@@ -820,10 +947,10 @@ function renderSelection(){
     return;
   }
   const width=atlas.area.width_cells,column=selectedIndex%width,row=Math.floor(selectedIndex/width);
-  const code=atlas.cells[selectedIndex],record=atlas.records?.[selectedIndex],size=atlas.area.cell_size_blocks;
+  const code=atlas.cells[selectedIndex],record=atlas.record?.(selectedIndex),size=atlas.area.cell_size_blocks;
   const blockX=atlas.area.left_block+column*size,blockZ=atlas.area.top_block+row*size;
   const unit=size===16?'Chunk':'Cell';
-  const id=atlas.cell_ids?.[selectedIndex]||Math.floor(blockX/size)+'_'+Math.floor(blockZ/size);
+  const id=atlas.id?.(selectedIndex)||Math.floor(blockX/size)+'_'+Math.floor(blockZ/size);
   $('selection-title').textContent=unit+' '+id.replace('_',', ');
   const rows=[['Size',number(size)+' × '+number(size)+' m']];
   if(record&&Number.isFinite(record.latitude)&&Number.isFinite(record.longitude))rows.push(['Location',record.latitude.toFixed(4)+'°, '+record.longitude.toFixed(4)+'°']);
@@ -831,14 +958,14 @@ function renderSelection(){
   if(isLake(selectedIndex)&&!hasPackage(selectedIndex))rows.push(['Built from','Lake Michigan bathymetry (NOAA)']);
   if(hasDetail()&&atlas.source==='published'){
     const level=detailLevel(selectedIndex);
-    rows.push(['Detail',(liveTiles&&Object.fromEntries(LIVE_LEVELS)[level])||level||'not checked yet']);
+    rows.push(['Detail',(live()&&Object.fromEntries(LIVE_LEVELS)[level])||level||'not checked yet']);
   }
   for(const [label,value] of rows){
     const item=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');
     dt.textContent=label;dd.textContent=value;item.append(dt,dd);details.append(item);
   }
   details.hidden=false;
-  if(code<0){$('cell').hidden=false;$('cell').textContent='Not built yet.';return;}
+  if(code<0||code===0&&atlas.image){$('cell').hidden=false;$('cell').textContent='Not built yet.';return;}
   $('cell').hidden=true;
   const cx=Math.floor(blockX+size/2),cz=Math.floor(blockZ+size/2),radius=Math.max(1,Math.min(8,Math.ceil(size/32)));
   const source=blockSource(selectedIndex);
@@ -866,7 +993,7 @@ function selectIndex(index){
   selectedIndex=index;renderSelection();setPanel(true,'cell');
   document.querySelector('.panel-content').scrollTop=0;
   if(geographic()){
-    const record=atlas.records?.[index];
+    const record=atlas.record?.(index);
     if(record){
       const point=geoMap.project([record.longitude,record.latitude]);
       if(innerWidth<1024){

@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import {readFile, mkdir} from 'node:fs/promises';
 import {createServer} from 'node:http';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {resolve, extname, sep} from 'node:path';
 import {chromium, expect} from '@playwright/test';
@@ -12,6 +14,17 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const siteRoot=process.argv[2]?resolve(process.argv[2]):null;
 const assets=siteRoot||resolve(root,'dashboard');
 const snapshot=JSON.parse(await readFile(resolve(siteRoot||root,'progress/earth.json'),'utf8'));
+// Detail levels: a small sampled fixture keyed by 512 m region (two 256 m map cells per side).
+const detailTiles={};
+for(const cell of snapshot.generated_world?.cells||[]){
+  const [x,z]=String(cell.tile_id).split('_').map(Number);
+  if((x+z)%3===0)detailTiles[`r.${Math.floor(x/2)}.${Math.floor(z/2)}`]='low';
+}
+const detailFixture={schema:'earthcraft.detail-levels.v1',sampled:0.1,counts:{none:0,low:Object.keys(detailTiles).length,high:0,hand:0},
+  estimated_totals:{none:{estimate:40},low:{estimate:10043},high:{estimate:0},hand:{estimate:0}},tiles:detailTiles};
+// The compact map data the Pages workflow writes (scripts/site_cache.py), built here when testing dashboard/.
+let worldJson=siteRoot?null:resolve(tmpdir(),'earthcraft-site-cache-'+process.pid);
+if(worldJson){execFileSync(process.env.PYTHON||'python3',[resolve(root,'scripts/site_cache.py'),'--offline','--snapshot',resolve(root,'progress/earth.json'),'--out',worldJson]);worldJson=await readFile(resolve(worldJson,'world.json'));}
 const mime={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2','.json':'application/json'};
 const server=createServer(async(req,res)=>{
   const pathname=new URL(req.url,'http://localhost').pathname;
@@ -19,6 +32,12 @@ const server=createServer(async(req,res)=>{
     let body,filename;
     if(pathname==='/progress/earth.json'){
       body=JSON.stringify(snapshot);filename='earth.json';
+    }else if(pathname==='/progress/world.json'&&worldJson){
+      body=worldJson;filename='world.json';
+    }else if(pathname==='/progress/status.json'){  // isolated: no live pipeline status
+      body='{}';filename='status.json';
+    }else if(pathname==='/progress/detail.json'){  // the daily copy of the dataset's detail levels
+      body=JSON.stringify(detailFixture);filename='detail.json';
     }else{
       filename=resolve(assets,pathname==='/'?'index.html':pathname.slice(1));
       if(!filename.startsWith(assets+sep))throw Error('Outside dashboard');
@@ -37,14 +56,6 @@ const problems=[];
 const context=await browser.newContext({viewport:{width:1440,height:1000},hasTouch:true});
 // Region files are not fetched in isolated checks: every HF region answers with an empty header (no chunks stored).
 await context.route('https://huggingface.co/**',route=>route.fulfill({status:206,body:Buffer.alloc(8192),headers:{'Access-Control-Allow-Origin':'*','Content-Range':'bytes 0-8191/8192','Content-Type':'application/octet-stream'}}));
-// Detail levels: a small sampled fixture keyed by 512 m region (two 256 m map cells per side).
-const detailTiles={};
-for(const cell of snapshot.generated_world?.cells||[]){
-  const [x,z]=String(cell.tile_id).split('_').map(Number);
-  if((x+z)%3===0)detailTiles[`r.${Math.floor(x/2)}.${Math.floor(z/2)}`]='low';
-}
-const detailFixture={schema:'earthcraft.detail-levels.v1',sampled:0.1,counts:{none:0,low:Object.keys(detailTiles).length,high:0,hand:0},
-  estimated_totals:{none:{estimate:40},low:{estimate:10043},high:{estimate:0},hand:{estimate:0}},tiles:detailTiles};
 await context.route('https://huggingface.co/**/world/index/detail-levels.json',route=>route.fulfill({status:200,body:JSON.stringify(detailFixture),headers:{'Access-Control-Allow-Origin':'*','Content-Type':'application/json'}}));
 const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));

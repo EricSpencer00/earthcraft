@@ -27,3 +27,19 @@ export function frameInverse(projection){
     return [lon/rad,lat/rad];
   };
 }
+
+// WGS84 -> block, by Newton steps on the inverse (its Jacobian taken numerically). Three steps
+// land within a millimetre anywhere on the plan; used to find the cell under the pointer.
+export function frameForward(projection){
+  const inverse=frameInverse(projection);
+  return (lon,lat)=>{
+    const scale=111320,coslat=Math.cos(lat*Math.PI/180);
+    let x=(lon-projection.lon_0)*scale*coslat-projection.west,z=projection.north-(lat-projection.lat_0)*scale;
+    for(let step=0;step<4;step++){
+      const [lo,la]=inverse(x,z),[lx,ax]=inverse(x+1,z),[lz,az]=inverse(x,z+1);
+      const a=lx-lo,b=lz-lo,c=ax-la,d=az-la,det=a*d-b*c,dl=lon-lo,dt=lat-la;
+      x+=(d*dl-b*dt)/det;z+=(a*dt-c*dl)/det;
+    }
+    return [x,z];
+  };
+}
