@@ -694,7 +694,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         if point_cells is not None and len(point_cells):
             np.maximum.at(mapped_top, (point_cells[:,2], point_cells[:,0]), point_cells[:,1])
             mapped_mask[point_cells[:,2],point_cells[:,0]] = True
-        np.savez_compressed(destination/'mapped-building-tops.npz',top_y=mapped_top,mask=mapped_mask)
+        np.savez(destination/'mapped-building-tops.npz',top_y=mapped_top,mask=mapped_mask)
         (destination/'earthcraft.json').write_text(json.dumps(report,indent=2))
     if terrain_only:
         report['building_geometry']='unavailable; terrain-only source proof'
@@ -718,7 +718,7 @@ def build(source, destination, surface_source=None, point_source=None, world_fra
         roof_expected = roof_top.copy()
         if point_cells is not None and len(point_cells):
             np.maximum.at(roof_expected, (point_cells[:,2],point_cells[:,0]), point_cells[:,1])
-        np.savez_compressed(destination/'roof-observations.npz', top_y=roof_expected, mask=roof_mask,
+        np.savez(destination/'roof-observations.npz', top_y=roof_expected, mask=roof_mask,
             observed_top_y=roof_top, floor_y=roof_floor,
             combined_classified_points=np.array(classified_scan is not None))
         (destination/'earthcraft.json').write_text(json.dumps(report,indent=2))

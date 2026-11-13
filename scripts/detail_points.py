@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import laspy
+import keepalive
 import numpy as np
 from pyproj import Transformer
 
@@ -30,8 +31,7 @@ KEEP_CLASSES = (1, 2, 3, 4, 5, 6, 9, 17)
 def fetch(url, limit=96 * 2**20, attempts=3):
     for attempt in range(attempts):
         try:
-            with urllib.request.urlopen(url, timeout=60) as response:
-                raw = response.read(limit + 1)
+            raw = keepalive.get(url, limit, timeout=60)  # one connection per host per thread
             if len(raw) > limit:
                 raise ValueError(f'{url} exceeds the {limit}-byte bound')
             return raw

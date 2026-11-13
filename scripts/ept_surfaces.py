@@ -93,7 +93,7 @@ def building_points(points, grid, destination, dtm, valid, surface_context=None,
     if len(residual) < 20 or np.median(np.abs(residual)) > 2:
         raise ValueError('EPT Z does not agree with the selected metre ground reference: ' + ground_reference)
     building, classified, associated = admit(xyz, cls, grid, surface_context)
-    np.savez_compressed(destination / 'points.npz', xyz=xyz[building])
+    np.savez(destination / 'points.npz', xyz=xyz[building])
     record = {'schema': 'earthcraft-classified-ept-building-crop-v1', 'project': manifest['project'],
               'output_horizontal_crs': grid['crs'], 'grid': {k: grid[k] for k in ('crs', 'west', 'north', 'size')},
               'points_sha256': sha(destination / 'points.npz'),
@@ -178,7 +178,7 @@ def acquire(pair, grid, destination, fallback, cache, frame):
         with rasterio.open(destination / name, 'w', driver='GTiff', width=grid['size'], height=grid['size'], count=1,
                            dtype='float32', crs=grid['crs'], transform=transform, nodata=np.nan, compress='deflate') as raster:
             raster.write(array.astype(np.float32), 1)
-    np.savez_compressed(destination / 'metric-surfaces.npz', dtm=elevation, dsm=roof, valid=valid)
+    np.savez(destination / 'metric-surfaces.npz', dtm=elevation, dsm=roof, valid=valid)
     record = {'schema': 'earthcraft-regional-scan-surface-crop-v1', 'county': pair['county'],
               'capture_year': pair['year'], 'grid': {key: grid[key] for key in ('crs', 'west', 'north', 'size')},
               'source': pair, 'valid_cells': int(valid.sum()), 'missing_cells': int((~valid).sum()),

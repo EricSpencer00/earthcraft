@@ -19,6 +19,7 @@ import rasterio
 from pyproj import CRS
 
 from region_expansion import atomic, sha
+import keepalive
 import regional_cache
 
 ROOT = 'https://data.isgs.illinois.edu/arcgis/rest/services/Elevation'
@@ -57,11 +58,7 @@ def _frozen_file(url, path, limit):
         return record
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(url, timeout=45) as response:
-                raw = response.read(limit+1)
-                length=getattr(response,'headers',{}).get('Content-Length')
-                if length is not None and len(raw)<min(int(length),limit+1):
-                    raise http.client.IncompleteRead(raw)
+            raw = keepalive.get(url, limit, timeout=45)  # checks Content-Length; one connection per host per thread
             break
         except (OSError,http.client.IncompleteRead) as error:
             # Retry a transient source connection, rather than throwing away a

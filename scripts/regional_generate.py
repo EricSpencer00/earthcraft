@@ -412,7 +412,7 @@ def measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_cata
                 elevation, record = acquire(pair, grid, surfaces, rasters['elevation'])
             cover = rasters['cover'].copy()
         shutil.copytree(source, scan_source, ignore=shutil.ignore_patterns('._*'))
-        np.savez_compressed(scan_source/'rasters.npz', elevation=elevation, cover=cover)
+        np.savez(scan_source/'rasters.npz', elevation=elevation, cover=cover)
         update_elevation(scan_source/'elevation.tif', elevation)
         meta = json.loads((scan_source/'sources.json').read_text())
         meta.update(elevation_source=f"{pair['county']} {pair['year']} LiDAR DTM; explicit LQ coverage gaps",
@@ -482,7 +482,7 @@ def measured_scan(tile, frame, root, pair, point_catalog, point_cache, cook_cata
             xyz,rejected_temporal_or_surface_conflicts=supported_points(pieces,grid,arrays)
             if len(xyz):
                 points=root/'points.combined';points.mkdir(exist_ok=True)
-                np.savez_compressed(points/'points.npz',xyz=xyz)
+                np.savez(points/'points.npz',xyz=xyz)
                 record=dict(accepted[0],project='explicit union of all usable intersecting surveys',
                     points_sha256=sha(points/'points.npz'),building_points=len(xyz),source_crops=accepted,
                     retained_classes=sorted({value for crop in accepted for value in crop.get('retained_classes',[6])}),
