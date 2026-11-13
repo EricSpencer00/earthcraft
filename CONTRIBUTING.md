@@ -46,8 +46,8 @@ any options on: `... | sh -s -- --tiles 20`. The steps by hand:
 4. **Run it.** `.venv/bin/python scripts/contribute.py`. It starts one worker
    per spare core (half your CPUs, at most 8, fewer if disk is short; `--cores N`
    to choose) and builds the unclaimed tiles nearest the finished area first.
-   Each tile is uploaded as soon as it is built, as a commit on your one pull
-   request; the pull request's manifest is updated with it. Press Ctrl-C to
+   Finished tiles are uploaded in batches of six per worker, as commits on your
+   one pull request; the pull request's manifest is updated with it. Press Ctrl-C to
    stop: workers finish the tile in hand. The next run adds to the same pull
    request until it holds 200 tiles, then opens a new one. `--tiles 20` stops
    after twenty, `--dry-run` only shows the picks, and `--shard i/N` splits the

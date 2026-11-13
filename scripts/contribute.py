@@ -19,9 +19,9 @@ Inputs, all obtainable by anyone:
   python scripts/contribute.py --tiles 20 [--cores N] [--shard i/N] [--client-jar PATH] [--dry-run]
   python scripts/contribute.py --check-tile TILE        (no upload; prints chunk digests)
 
-Each finished tile is uploaded at once as a commit on your one open pull
-request (refs/pr/N), so nothing waits for the batch and an interrupted run
-loses at most the tiles still being built. The next run extends the same
+Finished tiles are uploaded in small batches (6 per worker, or every 10
+minutes) as commits on your one open pull request (refs/pr/N); Hugging Face
+allows about 128 commits an hour per repository, shared with the runners. The next run extends the same
 pull request until it holds MAX_TILES tiles, then opens a new one.
 """
 import argparse
@@ -250,12 +250,16 @@ class PullRequestStore:
                                              'repo': self.repo, 'user': self.user})
             else:
                 state = state or {}
-                result = hf_store.push_batch(self.ctx, items, label, revision=f'refs/pr/{self.pr}')
-                state['tiles'] = {**state.get('tiles', {}), **added}
-                manifest = self.manifest(state['tiles'], name=state.get('manifest'), created=state.get('created'))
-                hf_store.push_batch(self.ctx, [manifest], f'Manifest: {len(state["tiles"])} tile(s)',
-                                    revision=f'refs/pr/{self.pr}')
-                Path(manifest['local']).unlink(missing_ok=True)
+                tiles_after = {**state.get('tiles', {}), **added}
+                manifest = self.manifest(tiles_after, name=state.get('manifest'), created=state.get('created'))
+                # One commit: the tiles and the manifest that lists them. Hugging Face limits commits per
+                # repository (~128/h, shared with the runners); a commit per tile plus one per manifest
+                # hit it in 40 minutes and stalled every writer for an hour (2026-11-13).
+                try:
+                    result = hf_store.push_batch(self.ctx, items + [manifest], label, revision=f'refs/pr/{self.pr}')
+                finally:
+                    Path(manifest['local']).unlink(missing_ok=True)
+                state['tiles'] = tiles_after
                 state['manifest'] = manifest['path']
                 save_pr_state(self.workdir, state)
         self.results.append({**result, 'pr': {'num': self.pr}})
@@ -288,8 +292,8 @@ def open_pull_request(api, repo, workdir, user, plan_sha256, revision):
             return state, contributions.MAX_TILES - len(state.get('tiles', {}))
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     pr = api.create_pull_request(repo_id=repo, repo_type='dataset', title=f'Contribute tiles from {user} ({stamp})',
-                                 description='Tiles built by `scripts/contribute.py`. Each tile is added as its own '
-                                             'commit as soon as it is built; the validator comments PASS or FAIL.')
+                                 description='Tiles built by `scripts/contribute.py`. Tiles are added in small batches, each '
+                                             'commit with the tiles of its batch; the validator comments PASS or FAIL.')
     safe = re.sub(r'[^A-Za-z0-9-]', '-', user)[:40]
     state = {'num': pr.num, 'url': getattr(pr, 'url', None), 'open': True, 'repo': repo, 'user': user,
              'manifest': f'{contributions.MANIFEST_DIR}/{stamp}-{safe}-pr{pr.num}.json', 'created': stamp,
@@ -331,7 +335,8 @@ def worker_args(control, frame, workdir, tiles, args, worker=1, workers=1):
     footprint = max(args.footprint_cap, args.cache_cap + workers * (args.tile_cap + 2 * GiB) + 2 * GiB)
     argv = ['--control', str(control), '--frame', str(frame), '--scratch', str(workdir),
             '--worker-id', f'contrib-{worker}', '--tiles=' + ','.join(tiles), '--limit', str(len(tiles)),
-            '--batch-tiles', '1', '--batch-seconds', '0', '--batch-cap', '1GiB', '--workers', str(workers),
+            # Batches, not single tiles: each batch is one commit (see PullRequestStore.push).
+            '--batch-tiles', str(args.batch_tiles), '--batch-seconds', '600', '--batch-cap', '1GiB', '--workers', str(workers),
             '--cache-cap', str(args.cache_cap), '--footprint-cap', str(footprint),
             '--min-free', str(args.min_free), '--tile-cap', str(args.tile_cap), '--hf-cap', '1GiB',
             '--templates', str(control / 'templates'), '--nice', '0']
@@ -371,7 +376,7 @@ def run_round(args, workdir, chosen, cores):
     me = [sys.executable, str(Path(__file__).resolve())]
     common = ['--workdir', str(workdir), '--repo', args.repo, '--cores', str(cores), '--tile-ids=' + ','.join(chosen),
               '--cache-cap', str(args.cache_cap), '--footprint-cap', str(args.footprint_cap),
-              '--min-free', str(args.min_free), '--tile-cap', str(args.tile_cap)]
+              '--min-free', str(args.min_free), '--tile-cap', str(args.tile_cap), '--batch-tiles', str(args.batch_tiles)]
     if args.client_jar:
         common += ['--client-jar', str(args.client_jar)]
     if args.cache_dir:
@@ -394,6 +399,8 @@ def main(argv=None):
     parser.add_argument('--tiles', type=int, default=None,
                         help='how many tiles to build, then stop (default: keep going until Ctrl-C)')
     parser.add_argument('--cores', type=int, default=None, help='worker processes (default: half the CPUs, max 8)')
+    parser.add_argument('--batch-tiles', type=int, default=6,
+                        help='tiles per commit per worker (6; Hugging Face allows ~128 commits/h per repository)')
     parser.add_argument('--tile-ids', type=lambda v: [t for t in v.split(',') if t], default=None,
                         help='only consider these plan tile ids')
     parser.add_argument('--shard', default=None, help='i/N: only tiles of this share (4-tile east-west bands)')
@@ -455,7 +462,7 @@ def main(argv=None):
             room = contributions.MAX_TILES
             if not args.dry_run:
                 state, room = open_pull_request(api, args.repo, workdir, user, digest(plan), revision)
-            want = min(room, left if left is not None else room, cores * 4)
+            want = min(room, left if left is not None else room, cores * args.batch_tiles)  # one batch per worker
             # Built means a tiles/v2 folder on the Hub. The seeded journal is the September Mac mini's:
             # it marks ~24k tiles complete whose output never reached the dataset (the unbuilt ring
             # on the map), so its stage-0 state is not trusted; those tiles are requeued here.
