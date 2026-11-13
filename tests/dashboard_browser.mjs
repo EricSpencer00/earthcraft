@@ -56,6 +56,9 @@ const problems=[];
 const context=await browser.newContext({viewport:{width:1440,height:1000},hasTouch:true});
 // Region files are not fetched in isolated checks: every HF region answers with an empty header (no chunks stored).
 await context.route('https://huggingface.co/**',route=>route.fulfill({status:206,body:Buffer.alloc(8192),headers:{'Access-Control-Allow-Origin':'*','Content-Range':'bytes 0-8191/8192','Content-Type':'application/octet-stream'}}));
+// Packed tiles (.mcp, e.g. the Elmhurst recovery tiles) answer with an empty packed header: no chunks stored.
+const emptyPacked=Buffer.alloc(16400);emptyPacked.write('ECRPACK1',0,'ascii');
+await context.route('https://huggingface.co/**/*.mcp',route=>route.fulfill({status:206,body:emptyPacked,headers:{'Access-Control-Allow-Origin':'*','Content-Range':'bytes 0-16399/16400','Content-Type':'application/octet-stream'}}));
 await context.route('https://huggingface.co/**/world/index/detail-levels.json',route=>route.fulfill({status:200,body:JSON.stringify(detailFixture),headers:{'Access-Control-Allow-Origin':'*','Content-Type':'application/json'}}));
 const page=await context.newPage();
 page.on('pageerror',error=>problems.push(error.message));
@@ -108,7 +111,8 @@ try{
       await expect(page.locator('#cell-view')).toHaveAttribute('data-state','empty',{timeout:20000});
       await expect(page.locator('#cell-view-status')).toHaveText('Not built yet.');
       await expect(page.locator('#selection-details')).toContainText('-26,368 / -512');
-      await expect(page.locator('#cell-blocks')).toHaveAttribute('href','./blocks.html?block=-26240,-384&radius=8');
+      // Elmhurst may read the saved world or, once republished, its tiles/v2 package (2026-11-11 recovery).
+      await expect(page.locator('#cell-blocks')).toHaveAttribute('href',/^\.\/blocks\.html\?block=-26240,-384&radius=8(&base=https%3A%2F%2Fhuggingface\.co%2Fdatasets%2FEricSpencer00%2Fearthcraft%2Fresolve%2F[0-9a-f]{40}%2Ftiles%2Fv2%2F-52_-1%2Fregion%2F&layout=flat-auto)?$/);
       await expect(page.locator('#mapnote')).toContainText('Elmhurst · cell');
       await expect(page.locator('body')).toHaveAttribute('data-camera','idle',{timeout:15000});
       const accessibility=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
@@ -235,8 +239,10 @@ try{
   await page.locator('#places-menu').evaluate(el=>el.open=true);
 
   await page.locator('#place-elmhurst').click();
-  await expect(page.locator('#mapnote')).toContainText('Elmhurst is not on this map yet');
-  await expect(page.locator('#clear-selection')).toBeHidden();
+  // Elmhurst entered the published record with the 2026-11-11 recovery; before that it was absent.
+  await expect(page.locator('#mapnote')).toContainText(/Elmhurst (is not on this map yet|· cell -?\d+_-?\d+)/);
+  if((await page.locator('#mapnote').textContent()).includes('not on this map'))await expect(page.locator('#clear-selection')).toBeHidden();
+  else await expect(page.locator('#clear-selection')).toBeVisible();
   await page.locator('#places-menu').evaluate(el=>el.open=true);
   await page.locator('#place-chicago').click();
   await expect(page.locator('#selection-details')).toContainText('41.');
