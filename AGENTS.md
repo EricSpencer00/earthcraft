@@ -5,7 +5,8 @@ These apply to every agent (Codex, Claude, scripts) working on Earthcraft.
 ## Runner and budget (2026-11-13)
 
 Earthcraft is Eric's separate personal project, not HorneSci. Tiles are built on **mb16**, Eric's
-16-inch Intel MacBook Pro (`ssh mb16`, 12 threads, 16 GB), at no cost. Use free, keyless open data only.
+16-inch Intel MacBook Pro (`ssh mb16`, 12 threads, 16 GB), at no cost ([docs/MAC_RUNNER.md](docs/MAC_RUNNER.md)).
+Use free, keyless open data only.
 
 - **No paid compute.** Both AWS instances (`i-0f3b8770dfbc726a4` m5a.large spot,
   `i-01ebb8cc2839b2d5d` t3a.micro, us-west-2) stay stopped. Start one only on Eric's explicit word;
