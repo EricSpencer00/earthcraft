@@ -197,7 +197,7 @@ def verify(world):
         roof_checks = int(roof['mask'].sum())
     Image.fromarray(colors).save(world/'block-overview.png')
     np.save(world/'top-heights.npy',tops)
-    np.savez_compressed(world/'water-observations.npz',mask=water_mask,top_y=tops)
+    np.savez(world/'water-observations.npz',mask=water_mask,top_y=tops)
     result={'native_chunks':len(seen),'ground_support_cells':ground_checks,
         'heightmap_cells':heightmap_checks,'safe_spawn':declared_preview_spawn_safe and spawn_checks,
         'sampled_roof_cells':roof_checks,

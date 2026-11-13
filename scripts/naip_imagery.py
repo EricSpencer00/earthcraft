@@ -269,7 +269,7 @@ def replay(imagery, output):
         if set(original.files)!=set(arrays):raise ValueError('Normalized imagery schema changed')
         for key,array in arrays.items():np.testing.assert_array_equal(array,original[key])
     output.mkdir(parents=True)
-    np.savez_compressed(output/'metric-imagery.npz',**arrays)
+    np.savez(output/'metric-imagery.npz',**arrays)
     result={'status':'offline_normalization_replay_equal','arrays_compared':sorted(arrays),
             'source':str(imagery),'network_requests':0,'world_modified':False,
             'geographic_accuracy_verified':False,'llm_used':False}
@@ -294,58 +294,79 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
     output.mkdir(parents=True)
     assets = []
     usgs_error = None
+    # Planetary Computer's catalog chooses the capture, always: the choice must not depend on
+    # which service happens to answer (a USGS outage gave a tile 2017 imagery, a healthy USGS
+    # gave the same tile 2019, 2026-11-13). USGS serves only when Planetary Computer cannot.
     try:
-        if time.time() < _USGS['down_until']:
-            raise urllib.error.URLError(f"USGS NAIP skipped after a failure: {_USGS['reason']}")
-        raw, asset = request_static(RIGHTS, output/'rights.json', 2**20); assets.append(asset)
-        rights = json.loads(raw)
-        if 'public domain' not in (rights.get('description','')+rights.get('summary','')).lower():
-            raise ValueError('USGS public-domain source declaration unavailable')
-        # No service-description request: it returned 504 for hours (2026-11-13) and only restated
-        # what the crop check below verifies (four U8 bands).
-        raw, asset = request(SERVICE+'/query?'+urllib.parse.urlencode(params), output/'catalog.json', 2**20)
-        assets.append(asset); catalog = json.loads(raw)
-        if 'error' in catalog or catalog.get('exceededTransferLimit'):
-            raise ValueError('NAIP catalog query failed or truncated')
-        selected = choose_source(catalog['features'], meta, preferred_year, target_capture)
-        attrs = selected['attributes']
-        pixel = float(attrs['resolution_value']); crs = source_crs(attrs)
-        transformer = Transformer.from_crs(meta['crs'], crs, always_xy=True)
-        x, y = transformer.transform([west,west+size,west,west+size],[north,north,north-size,north-size])
-        left = (math.floor(min(x)/pixel)-2)*pixel; top = (math.ceil(max(y)/pixel)+2)*pixel
-        width = math.ceil((max(x)-left)/pixel)+2; height = math.ceil((top-min(y))/pixel)+2
-        if width*height > 2_000_000: raise ValueError('NAIP served crop exceeds two million pixels')
-        bounds = [left,top-height*pixel,left+width*pixel,top]
-        params = {'f':'image','bbox':','.join(map(str,bounds)), 'bboxSR':crs, 'imageSR':crs,
-                  'size':f'{width},{height}', 'format':'tiff', 'pixelType':'U8', 'bandIds':'0,1,2,3',
-                  'renderingRule':json.dumps({'rasterFunction':'None'}), 'interpolation':'RSP_NearestNeighbor',
-                  'mosaicRule':json.dumps({'mosaicMethod':'esriMosaicLockRaster','lockRasterIds':[attrs['OBJECTID']]})}
-        try:
-            asset = cog_crop(attrs, crs, [min(xx), min(yy), max(xx), max(yy)], left, top, width, height, pixel,
-                             output/'served-crop.tif')
-            via = 'Planetary Computer COG of the selected capture, same pixel grid'
-        except Exception as error:  # noqa: BLE001 - the ImageServer serves every capture; it is only slower
-            (output/'served-crop.tif').unlink(missing_ok=True)
-            raw, asset = request(SERVICE+'/exportImage?'+urllib.parse.urlencode(params), output/'served-crop.tif', 10*2**20)
-            asset['cog_unavailable'] = f'{type(error).__name__}: {error}'[:300]
-            via = 'USGS locked-raster served crop, rendering None'
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as error:  # USGS down (502/504 seen for hours)
-        usgs_error = f'{type(error).__name__}: {error}'[:300]
-        if not str(error).startswith('<urlopen error USGS NAIP skipped'):
-            _USGS.update(down_until=time.time() + USGS_BACKOFF, reason=usgs_error[:120])
-        for name in ('rights.json', 'service.json', 'catalog.json', 'served-crop.tif'):
-            (output/name).unlink(missing_ok=True)
-        assets = [{'url': RIGHTS, 'unavailable': usgs_error, 'bytes': 0}]
-        rights = {'accessInformation': 'USDA Farm Service Agency, National Agriculture Imagery Program (NAIP)',
-                  'description': 'NAIP imagery is in the public domain (USDA FSA).'}
         attrs, href = stac_choose(meta, [min(xx), min(yy), max(xx), max(yy)], preferred_year, target_capture)
-        selected = {'attributes': attrs}
         crs = int(attrs['epsg'])
         transformer = Transformer.from_crs(meta['crs'], crs, always_xy=True)
         x, y = transformer.transform([west,west+size,west,west+size],[north,north,north-size,north-size])
         left, top, pixel, width, height, asset = cog_grid_crop(href, crs, x, y, output/'served-crop.tif')
         asset['stac_item'] = attrs['stac_item']
-        via = 'Planetary Computer COG (USGS service unavailable), capture chosen from its catalog'
+        selected = {'attributes': attrs}
+        rights = {'accessInformation': 'USDA Farm Service Agency, National Agriculture Imagery Program (NAIP)',
+                  'description': 'NAIP imagery is in the public domain (USDA FSA).'}
+        via = 'Planetary Computer COG, capture chosen from its catalog'
+        planetary = True
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError, KeyError) as error:
+        (output/'served-crop.tif').unlink(missing_ok=True)
+        usgs_error = None
+        assets.append({'url': PC_STAC, 'unavailable': f'{type(error).__name__}: {error}'[:300], 'bytes': 0})
+        planetary = False
+    if not planetary:
+        try:
+            if time.time() < _USGS['down_until']:
+                raise urllib.error.URLError(f"USGS NAIP skipped after a failure: {_USGS['reason']}")
+            raw, asset = request_static(RIGHTS, output/'rights.json', 2**20); assets.append(asset)
+            rights = json.loads(raw)
+            if 'public domain' not in (rights.get('description','')+rights.get('summary','')).lower():
+                raise ValueError('USGS public-domain source declaration unavailable')
+            # No service-description request: it returned 504 for hours (2026-11-13) and only restated
+            # what the crop check below verifies (four U8 bands).
+            raw, asset = request(SERVICE+'/query?'+urllib.parse.urlencode(params), output/'catalog.json', 2**20)
+            assets.append(asset); catalog = json.loads(raw)
+            if 'error' in catalog or catalog.get('exceededTransferLimit'):
+                raise ValueError('NAIP catalog query failed or truncated')
+            selected = choose_source(catalog['features'], meta, preferred_year, target_capture)
+            attrs = selected['attributes']
+            pixel = float(attrs['resolution_value']); crs = source_crs(attrs)
+            transformer = Transformer.from_crs(meta['crs'], crs, always_xy=True)
+            x, y = transformer.transform([west,west+size,west,west+size],[north,north,north-size,north-size])
+            left = (math.floor(min(x)/pixel)-2)*pixel; top = (math.ceil(max(y)/pixel)+2)*pixel
+            width = math.ceil((max(x)-left)/pixel)+2; height = math.ceil((top-min(y))/pixel)+2
+            if width*height > 2_000_000: raise ValueError('NAIP served crop exceeds two million pixels')
+            bounds = [left,top-height*pixel,left+width*pixel,top]
+            params = {'f':'image','bbox':','.join(map(str,bounds)), 'bboxSR':crs, 'imageSR':crs,
+                      'size':f'{width},{height}', 'format':'tiff', 'pixelType':'U8', 'bandIds':'0,1,2,3',
+                      'renderingRule':json.dumps({'rasterFunction':'None'}), 'interpolation':'RSP_NearestNeighbor',
+                      'mosaicRule':json.dumps({'mosaicMethod':'esriMosaicLockRaster','lockRasterIds':[attrs['OBJECTID']]})}
+            try:
+                asset = cog_crop(attrs, crs, [min(xx), min(yy), max(xx), max(yy)], left, top, width, height, pixel,
+                                 output/'served-crop.tif')
+                via = 'Planetary Computer COG of the selected capture, same pixel grid'
+            except Exception as error:  # noqa: BLE001 - the ImageServer serves every capture; it is only slower
+                (output/'served-crop.tif').unlink(missing_ok=True)
+                raw, asset = request(SERVICE+'/exportImage?'+urllib.parse.urlencode(params), output/'served-crop.tif', 10*2**20)
+                asset['cog_unavailable'] = f'{type(error).__name__}: {error}'[:300]
+                via = 'USGS locked-raster served crop, rendering None'
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:  # USGS down (502/504 seen for hours)
+            usgs_error = f'{type(error).__name__}: {error}'[:300]
+            if not str(error).startswith('<urlopen error USGS NAIP skipped'):
+                _USGS.update(down_until=time.time() + USGS_BACKOFF, reason=usgs_error[:120])
+            for name in ('rights.json', 'service.json', 'catalog.json', 'served-crop.tif'):
+                (output/name).unlink(missing_ok=True)
+            assets = [{'url': RIGHTS, 'unavailable': usgs_error, 'bytes': 0}]
+            rights = {'accessInformation': 'USDA Farm Service Agency, National Agriculture Imagery Program (NAIP)',
+                      'description': 'NAIP imagery is in the public domain (USDA FSA).'}
+            attrs, href = stac_choose(meta, [min(xx), min(yy), max(xx), max(yy)], preferred_year, target_capture)
+            selected = {'attributes': attrs}
+            crs = int(attrs['epsg'])
+            transformer = Transformer.from_crs(meta['crs'], crs, always_xy=True)
+            x, y = transformer.transform([west,west+size,west,west+size],[north,north,north-size,north-size])
+            left, top, pixel, width, height, asset = cog_grid_crop(href, crs, x, y, output/'served-crop.tif')
+            asset['stac_item'] = attrs['stac_item']
+            via = 'Planetary Computer COG (USGS service unavailable), capture chosen from its catalog'
     assets.append(asset)
     with rasterio.open(output/'served-crop.tif') as raster:
         if raster.dtypes[0] != 'uint8':
@@ -357,7 +378,7 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
     arrays=normalize_crop(output/'served-crop.tif',meta)
     bands,valid=arrays['bands'],arrays['valid']
     shadow,vegetation,usable=(arrays[key] for key in ('shadow_candidate','vegetation_candidate','usable_candidate'))
-    np.savez_compressed(output/'metric-imagery.npz',**arrays)
+    np.savez(output/'metric-imagery.npz',**arrays)
     Image.fromarray(bands[:3].transpose(1,2,0)).save(output/'metric-rgb.png')
     report = {'status':'source_crop_acquired_not_admitted_to_world',
               'source_grid':{key:meta[key] for key in ('crs','west','north','size')},

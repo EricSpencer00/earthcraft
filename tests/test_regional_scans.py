@@ -23,20 +23,20 @@ class RegionalScanTests(unittest.TestCase):
     def test_transient_reset_retries_but_truncation_and_missing_sources_stay_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'scan.laz';url='https://publisher.example/scan'
-            with patch('regional_scans.urllib.request.urlopen',side_effect=[urllib.error.URLError('reset'),io.BytesIO(b'complete')]) as fetch,\
+            with patch('regional_scans.keepalive.get',side_effect=[urllib.error.URLError('reset'),b'complete']) as fetch,\
                  patch('regional_scans.time.sleep') as sleep:
                 self.assertEqual(frozen_get(url,path),b'complete')
                 self.assertEqual(fetch.call_count,2);sleep.assert_called_once_with(1)
             partial=Path(directory)/'other.laz';partial.write_bytes(b'preserve')
-            def truncated(*args,**kwargs):
-                stream=io.BytesIO(b'short');stream.headers={'Content-Length':'100'};return stream
-            with patch('regional_scans.urllib.request.urlopen',side_effect=truncated) as fetch,\
+            def truncated(*args,**kwargs):  # keepalive.get checks Content-Length itself
+                raise http.client.IncompleteRead(b'short')
+            with patch('regional_scans.keepalive.get',side_effect=truncated) as fetch,\
                  patch('regional_scans.time.sleep'):
                 with self.assertRaises(http.client.IncompleteRead):frozen_get(url,partial)
                 self.assertEqual(fetch.call_count,3)
             self.assertEqual(partial.read_bytes(),b'preserve')
             self.assertFalse(partial.with_name(partial.name+'.receipt.json').exists())
-            with patch('regional_scans.urllib.request.urlopen',side_effect=urllib.error.HTTPError(url,404,'missing',{},None)) as fetch,\
+            with patch('regional_scans.keepalive.get',side_effect=urllib.error.HTTPError(url,404,'missing',{},None)) as fetch,\
                  patch('regional_scans.time.sleep') as sleep:
                 with self.assertRaises(urllib.error.HTTPError):frozen_get(url,Path(directory)/'missing')
                 self.assertEqual(fetch.call_count,1);sleep.assert_not_called()
@@ -44,7 +44,7 @@ class RegionalScanTests(unittest.TestCase):
     def test_verified_file_reuse_and_same_size_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'scan.laz'
-            with patch('regional_scans.urllib.request.urlopen',return_value=io.BytesIO(b'original')):
+            with patch('regional_scans.keepalive.get',return_value=b'original'):
                 record=frozen_file('https://publisher.example/scan',path)
             frozen_file('https://publisher.example/scan',path)
             with patch('regional_scans.sha',side_effect=AssertionError('Unchanged source was reread')):
@@ -65,10 +65,10 @@ class RegionalScanTests(unittest.TestCase):
     def test_interrupted_source_receipt_requires_identical_publisher_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'original.laz';path.write_bytes(b'original survey')
-            with patch('regional_scans.urllib.request.urlopen',return_value=io.BytesIO(b'changed survey')):
+            with patch('regional_scans.keepalive.get',return_value=b'changed survey'):
                 with self.assertRaisesRegex(ValueError,'differs from publisher'):frozen_get('https://publisher.example/scan',path)
             self.assertEqual(path.read_bytes(),b'original survey')
-            with patch('regional_scans.urllib.request.urlopen',return_value=io.BytesIO(b'original survey')):
+            with patch('regional_scans.keepalive.get',return_value=b'original survey'):
                 self.assertEqual(frozen_get('https://publisher.example/scan',path),b'original survey')
             self.assertTrue(path.with_name('original.laz.receipt.json').exists())
             self.assertEqual(frozen_get('https://publisher.example/scan',path),b'original survey')
