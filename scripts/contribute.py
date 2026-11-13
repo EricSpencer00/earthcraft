@@ -12,8 +12,8 @@ Inputs, all obtainable by anyone:
   * plan, journal and catalogs: the dataset's archive/mini-worker-20260929/
   * world templates: the dataset's sources/templates/v1/ (player-free)
   * source indexes: the dataset's sources/indexes/
-  * Minecraft 1.21.10 client JAR: from your own launcher install (or Mojang's
-    official download); used locally for block colours, never uploaded
+  * Minecraft 1.21.10 client JAR: from your own launcher install, or fetched
+    from Mojang's official download; used locally for block colours, never uploaded
 
   python scripts/contribute.py                  build until Ctrl-C on every spare core
   python scripts/contribute.py --tiles 20 [--cores N] [--shard i/N] [--client-jar PATH] [--dry-run]
@@ -71,12 +71,48 @@ def default_client_jar():
     return next((path for path in candidates if path.is_file()), None)
 
 
-def client_jar(path):
-    path = Path(path) if path else (Path(os.environ['EARTHCRAFT_CLIENT_JAR']) if os.environ.get('EARTHCRAFT_CLIENT_JAR')
-                                    else default_client_jar())
+def download_client_jar(target, url=None, fetch=None):
+    """The official client.jar from Mojang's own download server, kept only on this machine.
+
+    The URL is the one the Minecraft launcher uses (piston-data, addressed by the file's SHA-1), so
+    nothing is redistributed. The caller checks the SHA-1.
+    """
+    import urllib.request
+    url = url or contributions.CLIENT_URL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f'{target.name}.{os.getpid()}.part')
+    log(event='client_jar_download', url=url)
+    try:
+        with (fetch or urllib.request.urlopen)(urllib.request.Request(url, headers={'User-Agent': 'earthcraft-contribute/1'}),
+                                               timeout=120) as response, partial.open('wb') as out:
+            copied = 0
+            while chunk := response.read(1 << 20):
+                copied += len(chunk)
+                if copied > contributions.CLIENT_MAX_BYTES:
+                    raise SystemExit('The client JAR download is larger than expected; stopped.')
+                out.write(chunk)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return target
+
+
+def client_jar(path, workdir=None):
+    explicit = Path(path) if path else (Path(os.environ['EARTHCRAFT_CLIENT_JAR'])
+                                        if os.environ.get('EARTHCRAFT_CLIENT_JAR') else None)
+    path = explicit or default_client_jar()
+    if path is None and workdir is not None:
+        path = workdir / f'minecraft-client-{contributions.CLIENT_VERSION}.jar'
+        if not path.is_file():
+            try:
+                download_client_jar(path)
+            except OSError as error:
+                raise SystemExit(f'Could not download the Minecraft {contributions.CLIENT_VERSION} client JAR '
+                                 f'({error}). Start that version once in the official launcher, or pass '
+                                 '--client-jar PATH (see CONTRIBUTING.md).')
     if path is None or not path.is_file():
-        raise SystemExit(f'Minecraft {contributions.CLIENT_VERSION} client JAR not found. Start that version once '
-                         'in the official launcher, or pass --client-jar PATH (see CONTRIBUTING.md).')
+        raise SystemExit(f'Minecraft {contributions.CLIENT_VERSION} client JAR not found at {path}. '
+                         'Pass --client-jar PATH (see CONTRIBUTING.md).')
     digest = hashlib.sha1(path.read_bytes()).hexdigest()
     if digest != contributions.CLIENT_SHA1:
         raise SystemExit(f'{path} is not the official {contributions.CLIENT_VERSION} client.jar '
@@ -382,7 +418,7 @@ def main(argv=None):
     shard = parse_shard(args.shard)
     workdir = args.workdir.resolve()
     workdir.mkdir(parents=True, exist_ok=True)
-    os.environ['EARTHCRAFT_CLIENT_JAR'] = str(client_jar(args.client_jar))
+    os.environ['EARTHCRAFT_CLIENT_JAR'] = str(client_jar(args.client_jar, workdir))
     reader = DatasetReader(args.repo)
     if args.worker:
         control, frame = workdir / 'control', workdir / 'frame.json'

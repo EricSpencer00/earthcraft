@@ -1,0 +1,49 @@
+name: Validate contributions
+
+# Checks open contribution pull requests on the Hugging Face dataset and comments PASS or FAIL.
+# It never merges. Needs the repository secret HF_TOKEN (a token that may comment on the dataset).
+
+on:
+  schedule:
+    - cron: '8,38 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-contributions
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Count open contribution pull requests
+        id: open
+        run: |
+          count=$(curl -fsS 'https://huggingface.co/api/datasets/EricSpencer00/earthcraft/discussions?type=pull_request&status=open' \
+            | python3 -c 'import json,sys; print(sum(1 for d in json.load(sys.stdin).get("discussions", []) if d.get("isPullRequest") and d.get("status") == "open"))')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ -z "$HF_TOKEN" ]; then echo "::warning::HF_TOKEN is not set; contributions are not being validated."; fi
+      - name: Check out the repository
+        if: steps.open.outputs.count != '0' && env.HF_TOKEN != ''
+        uses: actions/checkout@v4
+      - name: Set up Python
+        if: steps.open.outputs.count != '0' && env.HF_TOKEN != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-*.txt
+      - name: Install the generator's packages
+        if: steps.open.outputs.count != '0' && env.HF_TOKEN != ''
+        run: python -m pip install -r requirements-contribute.txt
+      - name: Validate and comment
+        if: steps.open.outputs.count != '0' && env.HF_TOKEN != ''
+        # No regeneration here: a rebuild needs the Minecraft client JAR and gigabytes of source indexes.
+        run: python scripts/validate_contributions.py --spot-check-rate 0

@@ -167,6 +167,25 @@ class ContributionTests(unittest.TestCase):
         commits = SimpleNamespace(events=[SimpleNamespace(type='comment', oid=None), SimpleNamespace(type='commit', oid='c1')])
         self.assertEqual(contributions.pull_request_diff(commits, REPO, fetch=lambda r, b, h, t: f'{b}..{h}'), 'c1~1..c1')
 
+    def test_client_jar_is_fetched_from_mojang_when_no_launcher_copy_exists(self):
+        from unittest import mock
+        body = b'not the real jar'
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(contribute, 'default_client_jar', return_value=None), \
+                mock.patch.dict(contribute.os.environ, {}, clear=False), \
+                mock.patch.object(contributions, 'CLIENT_SHA1', __import__('hashlib').sha1(body).hexdigest()), \
+                mock.patch('urllib.request.urlopen', return_value=io.BytesIO(body)) as fetch:
+            contribute.os.environ.pop('EARTHCRAFT_CLIENT_JAR', None)
+            path = contribute.client_jar(None, Path(tmp))
+            self.assertEqual(path.read_bytes(), body)
+            self.assertEqual(fetch.call_args[0][0].full_url, contributions.CLIENT_URL)
+            self.assertIn('piston-data.mojang.com', contributions.CLIENT_URL)
+            self.assertEqual(contribute.client_jar(None, Path(tmp)), path)  # kept: no second download
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], [path.name])  # no partial file left
+            with self.assertRaises(SystemExit):  # a named path that is missing is never replaced by a download
+                contribute.client_jar(Path(tmp) / 'absent.jar', Path(tmp))
+
     def test_spot_check_selection_is_deterministic_about_one_in_n(self):
         due = [vc.spot_check_due(pr, 'head', 20) for pr in range(2000)]
         self.assertEqual(due, [vc.spot_check_due(pr, 'head', 20) for pr in range(2000)])

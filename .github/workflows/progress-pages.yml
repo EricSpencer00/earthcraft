@@ -50,7 +50,7 @@ jobs:
       - name: Assemble the static observatory
         run: |
           mkdir -p site/progress
-          cp dashboard/*.html dashboard/*.js dashboard/*.mjs dashboard/*.css dashboard/places.json site/
+          cp dashboard/*.html dashboard/*.js dashboard/*.mjs dashboard/*.css dashboard/*.sh dashboard/places.json site/
           cp -R dashboard/assets site/assets
           cp -R dashboard/cache site/cache
           cp progress/earth.json site/progress/earth.json

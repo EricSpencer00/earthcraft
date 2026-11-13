@@ -34,8 +34,10 @@ This copies the plan and job list from the dataset's
 
 Anyone can also contribute compute through dataset pull requests:
 `scripts/contribute.py` (see [CONTRIBUTING.md](../CONTRIBUTING.md)). A
-validator on the AWS host (`earthcraft-validate.timer`, every 30 min) checks
-each open pull request and comments PASS or FAIL; it never merges.
+validator in GitHub Actions (`validate.yml`, every 30 min, repository secret
+`HF_TOKEN`) checks each open pull request and comments PASS or FAIL; it never
+merges. A Linux host can also run it with a regeneration spot check
+(`earthcraft-validate.timer`).
 
 Run, check, stop:
 

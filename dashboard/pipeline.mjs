@@ -139,7 +139,7 @@ export function installPipeline(doc=document){
         text('published-tiles','Checking');
         if(journalTiles!==null){
           text('published-tiles',count(journalTiles));
-          text('published-basis','Distinct 512 × 512 m v2 tiles the AWS worker\'s journal records as published, from its latest report.');
+          text('published-basis','Distinct 512 × 512 m v2 tiles the worker\'s journal records as published, from its latest report.');
         }else void publishedTileCount(latest.revision).then(result=>{
           if(shown!==latest.revision)return;
           text('published-tiles',(result.complete?'':'At least ')+count(result.count));
