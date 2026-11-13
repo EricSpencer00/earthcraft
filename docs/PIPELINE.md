@@ -113,6 +113,17 @@ It renders random chunks from the dataset through the 3D viewer. Score them
 with `.claude/commands/qa-chunks.md`, then upload the run with
 `hf_store.py push-files`.
 
+## 5. Game load check
+
+```sh
+PYTHONPATH=scripts .venv/bin/python scripts/load_check.py --accept-eula --count 3
+```
+
+It puts published tiles in an empty world, starts Mojang's 1.21.10 dedicated server (Java 21+),
+force-loads every chunk and asks the server whether sampled positions hold the generator's
+blocks. `load-check.yml` runs it nightly once the repository variable `MINECRAFT_EULA` is `true`
+(running the server means agreeing to the Minecraft EULA).
+
 ## Disk rules
 
 - Every write goes through a guard with a byte cap and a free-space floor,
