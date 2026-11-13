@@ -10,6 +10,7 @@ import json
 import math
 import re
 from pathlib import Path
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -50,6 +51,11 @@ def request(url, output, limit, timeout=None):
     return raw, {'url': url, 'file': output.name, 'bytes': len(raw),
                  'sha256': hashlib.sha256(raw).hexdigest()}
 
+
+# After a USGS failure every tile in this process goes straight to Planetary Computer for a while,
+# instead of each waiting out the same timeout (that cost 11-44 s a tile on 2026-11-13).
+USGS_BACKOFF = 600
+_USGS = {'down_until': 0.0, 'reason': ''}
 
 # Responses that never change between tiles (rights statement, service description) are fetched
 # once per process; each tile still writes and hashes its own copy as provenance.
@@ -289,18 +295,14 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
     assets = []
     usgs_error = None
     try:
+        if time.time() < _USGS['down_until']:
+            raise urllib.error.URLError(f"USGS NAIP skipped after a failure: {_USGS['reason']}")
         raw, asset = request_static(RIGHTS, output/'rights.json', 2**20); assets.append(asset)
         rights = json.loads(raw)
         if 'public domain' not in (rights.get('description','')+rights.get('summary','')).lower():
             raise ValueError('USGS public-domain source declaration unavailable')
-        try:  # a sanity check only: the crop itself is verified to be four U8 bands below
-            raw, asset = request_static(SERVICE+'?f=pjson', output/'service.json', 2**20); assets.append(asset)
-            service = json.loads(raw)
-            if service.get('bandCount') != 4 or service.get('pixelType') != 'U8':
-                raise ValueError('Unexpected NAIP bands or pixel encoding')
-        except (urllib.error.URLError, TimeoutError) as error:  # this endpoint alone has returned 504 for hours
-            (output/'service.json').unlink(missing_ok=True)
-            assets.append({'url': SERVICE+'?f=pjson', 'unavailable': f'{type(error).__name__}: {error}'[:200], 'bytes': 0})
+        # No service-description request: it returned 504 for hours (2026-11-13) and only restated
+        # what the crop check below verifies (four U8 bands).
         raw, asset = request(SERVICE+'/query?'+urllib.parse.urlencode(params), output/'catalog.json', 2**20)
         assets.append(asset); catalog = json.loads(raw)
         if 'error' in catalog or catalog.get('exceededTransferLimit'):
@@ -329,6 +331,8 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
             via = 'USGS locked-raster served crop, rendering None'
     except (urllib.error.URLError, TimeoutError, ConnectionError) as error:  # USGS down (502/504 seen for hours)
         usgs_error = f'{type(error).__name__}: {error}'[:300]
+        if not str(error).startswith('<urlopen error USGS NAIP skipped'):
+            _USGS.update(down_until=time.time() + USGS_BACKOFF, reason=usgs_error[:120])
         for name in ('rights.json', 'service.json', 'catalog.json', 'served-crop.tif'):
             (output/name).unlink(missing_ok=True)
         assets = [{'url': RIGHTS, 'unavailable': usgs_error, 'bytes': 0}]
