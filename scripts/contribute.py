@@ -268,6 +268,41 @@ class PullRequestStore:
         return result
 
 
+class DirectStore:
+    """--direct: commit each batch straight to main, as the runners do (dataset owners and writers)."""
+
+    def __init__(self, workdir, repo, hf_dir):
+        import hf_store
+        self.workdir, self.repo, self.results = workdir, repo, []
+        guard = hf_store.DiskGuard(hf_dir, GiB, floor_bytes=2 * GiB)
+        guard.ensure_dir()
+        hf_store.bound_hf_environment(guard)
+        self.ctx = hf_store.Context(repo, guard, hf_store.Hub(), None, GiB, 400, True, None)
+        self.ctx.retry = hf_store.Retry(attempts=6, log=self.ctx.log)
+
+    def push(self, items, label):
+        import hf_store
+        items = [item for item in items if contributions.classify(item['path'])[0] == 'tile']
+        tiles = sorted({contributions.classify(item['path'])[1] for item in items})
+        result = hf_store.push_batch(self.ctx, items, label)  # main; paced by hf_store's commit budget
+        with (self.workdir / 'manifest.lock').open('a+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            path = self.workdir / DIRECT_LOG
+            done = json.loads(path.read_text()) if path.is_file() else []
+            path.write_text(json.dumps(done + tiles))
+        self.results.append(result)
+        log(event='tiles_uploaded', branch='main', tiles=tiles)
+        return result
+
+
+DIRECT_LOG = 'direct-tiles.json'
+
+
+def direct_count(workdir):
+    path = Path(workdir) / DIRECT_LOG
+    return len(json.loads(path.read_text())) if path.is_file() else 0
+
+
 PR_STATE = 'pull-request.json'
 
 
@@ -363,6 +398,10 @@ def requeue(control, tile):
 def run_child(args, workdir, control, frame, reader):
     """One worker process: build the tiles it leases from the shared journal, push each to the PR."""
     import regional_generate
+    if args.direct:
+        store = DirectStore(workdir, args.repo, workdir / f'hf-{args.worker}')
+        return regional_generate.Worker(worker_args(control, frame, workdir, args.tile_ids or [], args, args.worker,
+                                                    args.cores), reader=reader, store=store).run()
     state = load_pr_state(workdir)
     store = PullRequestStore(workdir, args.repo, state['user'], state.get('git_sha'), state.get('plan_sha256'),
                              pr=state['num'], hf_dir=workdir / f'hf-{args.worker}')
@@ -383,6 +422,8 @@ def run_round(args, workdir, chosen, cores):
         common += ['--cache-dir', str(args.cache_dir)]
     if args.no_footprints:
         common.append('--no-footprints')
+    if args.direct:
+        common.append('--direct')
     procs = [subprocess.Popen(me + common + ['--worker', str(i + 1)]) for i in range(cores)]
     try:
         return max(proc.wait() for proc in procs)
@@ -420,6 +461,8 @@ def main(argv=None):
     parser.add_argument('--keep-workdir', action='store_true', help='keep the source cache for the next run')
     parser.add_argument('--cache-dir', type=Path, default=None,
                         help='share an existing source cache (e.g. the AWS host\'s) instead of workdir/cache')
+    parser.add_argument('--direct', action='store_true',
+                        help='dataset owners and writers: commit to main as the runners do, no pull request')
     parser.add_argument('--worker', type=int, default=None, help=argparse.SUPPRESS)  # internal: child process
     args = parser.parse_args(argv)
 
@@ -460,7 +503,7 @@ def main(argv=None):
             on_hub = contributions.tiles_on_hub(api, args.repo)
             in_prs = contributions.tiles_in_open_pull_requests(api, args.repo)
             room = contributions.MAX_TILES
-            if not args.dry_run:
+            if not args.dry_run and not args.direct:
                 state, room = open_pull_request(api, args.repo, workdir, user, digest(plan), revision)
             want = min(room, left if left is not None else room, cores * args.batch_tiles)  # one batch per worker
             # Built means a tiles/v2 folder on the Hub. The seeded journal is the September Mac mini's:
@@ -478,9 +521,10 @@ def main(argv=None):
                 requeue(control, tile)
             from chicago_tiles import Journal
             Journal(control / 'jobs.sqlite', plan).close()  # migrate the schema once, before workers race to
-            before = len(load_pr_state(workdir).get('tiles', {}))
+            count = (lambda: direct_count(workdir)) if args.direct else (lambda: len(load_pr_state(workdir).get('tiles', {})))
+            before = count()
             run_round(args, workdir, chosen, cores)
-            done = len(load_pr_state(workdir).get('tiles', {})) - before
+            done = count() - before
             built += done
             if left is not None:
                 left -= done or len(chosen)  # tiles that fail still count, so this ends
@@ -488,7 +532,7 @@ def main(argv=None):
         log(event='stopped', reason='interrupted')
     if not args.keep_workdir:
         shutil.rmtree(workdir / 'gen', ignore_errors=True)
-    state = load_pr_state(workdir) or {}
+    state = {} if args.direct else (load_pr_state(workdir) or {})
     log(event='contribution_done', tiles_built=built, pull_request=state.get('num'),
         url=f'https://huggingface.co/datasets/{args.repo}/discussions/{state["num"]}' if state.get('num') else None)
     return 0 if built or args.dry_run else 1
