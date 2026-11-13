@@ -383,6 +383,27 @@ class Journal:
             self.db.execute('COMMIT');return changed
         except Exception:self.db.execute('ROLLBACK');raise
 
+    def reopen_unpublished(self,evidence_prefix='/Volumes/'):
+        """Reopen stages 0-2 of tiles whose completions point only at a local disk that is gone.
+
+        The seeded September journal records ~24k tiles as built with receipts on the retired
+        LaCie (/Volumes/LaCie/...); their output never reached the dataset. Without this they are
+        skipped forever (the unbuilt ring on the map) and their appearance stage fails fetching a
+        base that does not exist. A tile with any tiles/v2 evidence is published: left alone.
+        Idempotent: reopened stages carry no evidence. Returns the number of tiles reopened."""
+        self._begin_immediate()
+        try:
+            tiles=[row[0] for row in self.db.execute(
+                "SELECT DISTINCT tile FROM jobs WHERE stage IN (0,1,2) AND state='complete' AND evidence LIKE ? "
+                "AND tile NOT IN (SELECT tile FROM jobs WHERE evidence LIKE 'tiles/v2/%')",(evidence_prefix+'%',))]
+            for start in range(0,len(tiles),500):
+                chunk=tiles[start:start+500]
+                self.db.execute("UPDATE jobs SET state='pending',evidence=NULL,evidence_sha256=NULL,evidence_commit=NULL,"
+                                "not_before=0,attempts=0,token=NULL,owner=NULL,expires=NULL WHERE stage IN (0,1,2) "
+                                "AND state IN ('complete','failed') AND tile IN ("+','.join('?'*len(chunk))+")",chunk)
+            self.db.execute('COMMIT');return len(tiles)
+        except Exception:self.db.execute('ROLLBACK');raise
+
     def retire_tiles(self,tiles,evidence,sha256,commit,now=None,stages=(0,1,2)):
         """Complete open generation stages that need no work: tiles published another way
         (lake/v1 open water, all stages) or with nothing to scan (no buildings, appearance only).
