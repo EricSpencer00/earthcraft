@@ -482,8 +482,16 @@ mac_agent() {   # write one LaunchAgent: label, seconds between runs (0 = keep a
     printf '<key>StandardOutPath</key><string>%s/runs/regional/logs/%s.log</string>\n' "$ROOT" "$label"
     printf '<key>StandardErrorPath</key><string>%s/runs/regional/logs/%s.log</string>\n</dict></plist>\n' "$ROOT" "$label"
   } > "$plist"
-  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  mac_bootout "$label"
   launchctl bootstrap "gui/$(id -u)" "$plist"
+}
+
+mac_bootout() {   # bootout returns at once; the agent is gone only when its workers have finished their tiles
+  local label=$1 waited=0
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && [ "$waited" -lt "${EARTHCRAFT_STOP_TIMEOUT:-1800}" ]; do
+    sleep 2; waited=$((waited + 2))
+  done
 }
 
 mac_install() {
@@ -507,12 +515,8 @@ mac_install() {
 
 mac_stop() {   # SIGTERM: the supervisor's workers finish their tile and commit their batch
   [ "$MAC" = 1 ] || { echo "mac-stop runs on macOS" >&2; return 64; }
-  launchctl bootout "gui/$(id -u)/$AGENT" 2>/dev/null || true
-  launchctl bootout "gui/$(id -u)/$AGENT.status" 2>/dev/null || true
-  local waited=0
-  while pgrep -f "$ROOT/scripts/regional_supervisor.py" >/dev/null && [ "$waited" -lt "${EARTHCRAFT_STOP_TIMEOUT:-1800}" ]; do
-    sleep 5; waited=$((waited + 5))
-  done
+  mac_bootout "$AGENT.status"
+  mac_bootout "$AGENT"
   # Say so on the dataset: the monitor reads "inactive" as a deliberate stop, not an outage.
   cd "$ROOT"
   local scratch=$ROOT/runs/scratch/status
