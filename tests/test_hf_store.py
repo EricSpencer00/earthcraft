@@ -857,3 +857,26 @@ class CliTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+import hf_store  # noqa: E402
+
+
+class CommitPacerTests(unittest.TestCase):
+    def test_waits_at_budget_and_counts_own_pr_commits(self):
+        import tempfile
+        clock = [10_000.0]
+        slept = []
+        main = [clock[0] - 100] * 3   # 3 commits on main in the last hour
+        with tempfile.TemporaryDirectory() as folder:
+            pacer = hf_store.CommitPacer('o/r', budget=5, ledger=Path(folder) / 'l.json', fetch=lambda: list(main),
+                                         clock=lambda: clock[0], sleep=lambda s: (slept.append(s), clock.__setitem__(0, clock[0] + 4000)))
+            self.assertEqual(pacer.wait(), 3)
+            pacer.record('refs/pr/4'); pacer.record('refs/pr/4')
+            self.assertEqual(pacer.recent(), 5)        # 3 on main + 2 on the PR ref
+            pacer.wait()                                # at budget: sleeps until the hour rolls over
+            self.assertEqual(len(slept), 1)
+            self.assertEqual(pacer.recent(), 0)
+
+    def test_budget_is_eighty_percent_of_the_hf_limit(self):
+        self.assertEqual(hf_store.COMMIT_BUDGET, 102)
