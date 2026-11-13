@@ -104,7 +104,7 @@ in to Hugging Face the first time, and builds until you press Ctrl-C. Run it aga
 
 - It uses half your CPUs (`--cores N` to choose) and builds the tiles next to the finished
   area first, so the map grows as one piece.
-- Every tile is uploaded the moment it is built, as a commit on **your one pull request** on the
+- Finished tiles upload in small batches, as commits on **your one pull request** on the
   dataset. Stop any time; the next run adds to the same pull request until it holds 200 tiles.
 - A validator checks every file (valid regions, no player data, matching hashes, tiles in the
   plan) and comments PASS or FAIL. The owner audits the renders and merges.
