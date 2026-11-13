@@ -1,0 +1,42 @@
+name: Game load check
+
+# Loads three random published tiles in Mojang's dedicated server and asks it whether sampled
+# positions hold the blocks the generator wrote. Running the server means agreeing to the
+# Minecraft EULA (https://aka.ms/MinecraftEULA), so the job only runs once the repository
+# variable MINECRAFT_EULA is set to "true" by the owner.
+
+on:
+  schedule:
+    - cron: '43 10 * * *'
+  workflow_dispatch:
+    inputs:
+      tiles:
+        description: Tile ids, comma-separated (default: three random published tiles)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    if: github.event.repository.private == false && vars.MINECRAFT_EULA == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-*.txt
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install the region tools
+        run: python -m pip install -r requirements-chicago.txt
+      - name: Load published tiles in the game
+        env:
+          MINECRAFT_EULA: ${{ vars.MINECRAFT_EULA }}
+          TILES: ${{ inputs.tiles }}
+        run: PYTHONPATH=scripts python scripts/load_check.py ${TILES:+--tiles="$TILES"}

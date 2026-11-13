@@ -14,11 +14,21 @@
 #   aws_pipeline_setup.sh update                    timer: fast-forward, reinstall, graceful restart
 #   aws_pipeline_setup.sh validate                  timer: check open contribution PRs, comment (never merges)
 #   aws_pipeline_setup.sh status [--json FILE]      tiles done, tiles/hour, last commit, disk, spot
+# On a Mac that builds tiles (docs/MAC_RUNNER.md); everything lives in the checkout, no root:
+#   scripts/aws_pipeline_setup.sh mac-install       venv, packages, public inputs, two LaunchAgents; starts
+#   scripts/aws_pipeline_setup.sh mac-stop          finish the tile in hand, stop, publish "inactive"
+#   scripts/aws_pipeline_setup.sh status
 set -euo pipefail
 
 REPO_URL=https://github.com/EricSpencer00/earthcraft
-ROOT=/opt/earthcraft
-ENV_FILE=/etc/earthcraft/pipeline.env
+MAC=0; [ "$(uname -s)" = Darwin ] && MAC=1
+if [ "$MAC" = 1 ]; then   # a Mac runner keeps code, settings and token under the user's own checkout
+  ROOT=${EARTHCRAFT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+  ENV_FILE=${EARTHCRAFT_ENV_FILE:-$HOME/.config/earthcraft/pipeline.env}
+else
+  ROOT=/opt/earthcraft
+  ENV_FILE=/etc/earthcraft/pipeline.env
+fi
 REGION=${EARTHCRAFT_AWS_REGION:-us-west-2}
 CONTROL=$ROOT/runs/regional/control
 FRAME=$ROOT/runs/chicago-adaptation-city-001/frame.json
@@ -27,11 +37,14 @@ PY=$ROOT/.venv/bin/python
 REQS=(requirements-chicago.txt requirements-lidar.txt requirements-footprints.txt)
 EXTRA_PKGS=(huggingface_hub==1.8.0 hf_xet boto3)
 SVC_USER=ubuntu
+[ "$MAC" = 1 ] && SVC_USER=$(id -un)
 
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 BRANCH=${EARTHCRAFT_BRANCH:-main}
-PROVIDER=${EARTHCRAFT_PROVIDER:-aws}   # aws: token from SSM, inputs from S3. oci: both copied by push
-TOKEN_FILE=/etc/earthcraft/hf_token
+# aws: token from SSM, inputs from S3. oci: both copied by push. local (a Mac): token file, public inputs
+PROVIDER=${EARTHCRAFT_PROVIDER:-$([ "$MAC" = 1 ] && echo local || echo aws)}
+TOKEN_FILE=${EARTHCRAFT_TOKEN_FILE:-$(dirname "$ENV_FILE")/hf_token}
+AGENT=com.earthcraft.pipeline
 
 as_user() { if [ "$(id -un)" = "$SVC_USER" ]; then "$@"; else runuser -u "$SVC_USER" -- "$@"; fi; }
 
@@ -95,8 +108,32 @@ sys.stdout.write(value.strip())
 PY
 }
 
+fetch_public() {   # the same inputs a contributor gets: plan and player-free templates from the dataset, JAR from Mojang
+  mkdir -p "$CONTROL" "$(dirname "$FRAME")" "$(dirname "$JAR")"
+  JAR="$JAR" FRAME="$FRAME" CONTROL="$CONTROL" PYTHONPATH="$ROOT/scripts" "$PY" - <<'PYEOF'
+import hashlib, json, os
+from pathlib import Path
+import contribute, contributions, clean_templates
+from hf_store import DEFAULT_REPO, DatasetReader
+jar, frame, control = Path(os.environ['JAR']), Path(os.environ['FRAME']), Path(os.environ['CONTROL'])
+reader = DatasetReader(DEFAULT_REPO)
+if not jar.is_file():
+    contribute.download_client_jar(jar)
+if hashlib.sha1(jar.read_bytes()).hexdigest() != contributions.CLIENT_SHA1:
+    raise SystemExit(f'{jar} is not the official {contributions.CLIENT_VERSION} client.jar')
+if not frame.is_file():
+    plan = control / 'plan.json'
+    if not plan.exists():
+        reader.download(f'{contribute.LEGACY_CONTROL}/plan.json', plan)
+    frame.write_text(json.dumps(json.loads(plan.read_text())['frame']))
+if not (control / 'templates').is_dir():
+    clean_templates.fetch(control / 'templates', reader)
+PYEOF
+}
+
 fetch_private() {   # client JAR, world templates and frame from the private S3 bucket, via the instance role
   [ -f "$JAR" ] && [ -f "$FRAME" ] && [ -d "$CONTROL/templates" ] && return 0
+  if [ "$PROVIDER" = local ]; then fetch_public; return; fi
   [ "$PROVIDER" = aws ] || { echo "private inputs missing: run 'aws_pipeline_setup.sh push <host>' from the coordinator" >&2; return 1; }
   BUCKET=${EARTHCRAFT_PRIVATE_BUCKET:-earthcraft-pipeline-private-971966099666} \
   JAR="$JAR" FRAME="$FRAME" TEMPLATES="$CONTROL/templates" "$PY" - <<'PYEOF'
@@ -131,8 +168,12 @@ run() {
   export EARTHCRAFT_CLIENT_JAR=$JAR EARTHCRAFT_HF_PYTHON=$PY
   export EARTHCRAFT_STATUS_FILE=$ROOT/runs/status/pipeline.json
   export EARTHCRAFT_STOP_TIMEOUT=${EARTHCRAFT_STOP_TIMEOUT:-1800}
-  [ -f "$CONTROL/plan.json" ] || "$PY" scripts/regional_generate.py --control "$CONTROL" --frame "$FRAME" \
+  [ -f "$CONTROL/jobs.sqlite" ] || "$PY" scripts/regional_generate.py --control "$CONTROL" --frame "$FRAME" \
       --min-free 10GiB --seed-control
+  if [ "$MAC" = 1 ]; then
+    mkdir -p "$ROOT/runs/status"
+    caffeinate -i -w $$ &   # no idle sleep while the supervisor (this PID after exec) lives
+  fi
   # Source cache: ~10 GiB of way/footprint indexes plus room for ~8 inflated ArcGrid strips (1.2 GB each).
   # Footprint = cache + per worker (3 GiB tile + 1 GiB batch + 1 GiB upload scratch) + control.
   local workers=${EARTHCRAFT_WORKERS:-1} cache_gib=${EARTHCRAFT_CACHE_GIB:-20}
@@ -214,13 +255,24 @@ imds() {
   curl -sf -m 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$1" || true
 }
 
+service_state() {   # systemd's words on every host: active, inactive or failed
+  if [ "$MAC" = 1 ]; then
+    if launchctl print "gui/$(id -u)/$AGENT" 2>/dev/null | grep -q 'state = running'; then echo active; else echo inactive; fi
+  else
+    systemctl is-active earthcraft-pipeline 2>/dev/null || true
+  fi
+}
+
+status_python() { if [ -x "$PY" ]; then echo "$PY"; else echo python3; fi; }
+
 status() {
   local out=${2:-}
   [ "${1:-}" = "--json" ] || out=""
   CONTROL=$CONTROL ROOT=$ROOT PROVIDER=$PROVIDER OCI=$(oci_md instance/) LIFECYCLE=$(imds instance-life-cycle) ACTION=$(imds spot/instance-action) \
   INSTANCE=$(imds instance-id) AZ=$(imds placement/availability-zone) OUT=$out SHARD=$(shard) \
   WORKERS=${EARTHCRAFT_WORKERS:-1} \
-  SERVICE=$(systemctl is-active earthcraft-pipeline 2>/dev/null || true) python3 - <<'PY'
+  HOST_LABEL=${EARTHCRAFT_HOST_LABEL:-mac} \
+  SERVICE=$(service_state) "$(status_python)" - <<'PY'
 import base64, json, os, re, shutil, sqlite3, subprocess, time, zlib
 from datetime import datetime
 from pathlib import Path
@@ -297,6 +349,9 @@ def bitmap(ids):
 
 
 def host_info():
+    if os.environ['PROVIDER'] == 'local':
+        return {'provider': 'local', 'instance': os.environ['HOST_LABEL'], 'az': '', 'lifecycle': 'owner-machine',
+                'spot_interruption': None}
     if os.environ['PROVIDER'] == 'oci':
         try:
             md = json.loads(os.environ['OCI'] or '{}')
@@ -316,7 +371,8 @@ result = {
     'schema': 'earthcraft.pipeline-status.v1', 'time_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
     'host': host_info(),
     'service': os.environ['SERVICE'], 'git_sha': sha,
-    'shard': os.environ['SHARD'] or None, 'workers': int(os.environ['WORKERS']),
+    'shard': os.environ['SHARD'] or None,
+    'workers': int(os.environ['WORKERS']) if os.environ['SERVICE'] == 'active' else 0,  # none run while stopped
     'tiles_published_journal': len(tiles), 'tiles_last_hour': hour, 'tiles_last_24h': day,
     'tiles_per_hour_24h': round(day / 24, 2), 'tiles_complete_journal': journal.get('2', {}).get('complete'),
     'last_commit': last_commit, 'last_tile': published[-1][1] if published else None,
@@ -405,8 +461,74 @@ launch() {   # on the coordinator: N more identical boxes from the existing key,
   echo "each box bootstraps itself (private inputs from S3) and claims only its shard; check with: ssh <ip> earthcraft-status"
 }
 
+mac_agent() {   # write one LaunchAgent: label, seconds between runs (0 = keep alive), then the command
+  local label=$1 every=$2 plist; shift 2
+  plist=$HOME/Library/LaunchAgents/$label.plist
+  mkdir -p "$(dirname "$plist")" "$ROOT/runs/regional/logs"
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    printf '<plist version="1.0"><dict>\n<key>Label</key><string>%s</string>\n<key>ProgramArguments</key><array>\n' "$label"
+    local arg; for arg in "$@"; do printf '<string>%s</string>\n' "$arg"; done
+    printf '</array>\n<key>WorkingDirectory</key><string>%s</string>\n' "$ROOT"
+    printf '<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>\n'
+    # Standard, not Background: the Background type also throttles networking (Hub downloads fell to 0.3 MB/s).
+    printf '<key>ProcessType</key><string>Standard</string>\n<key>Nice</key><integer>10</integer>\n<key>LowPriorityIO</key><true/>\n'
+    if [ "$every" = 0 ]; then
+      printf '<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/>\n<key>ThrottleInterval</key><integer>60</integer>\n'
+      printf '<key>ExitTimeOut</key><integer>%s</integer>\n' "${EARTHCRAFT_STOP_TIMEOUT:-1800}"
+    else
+      printf '<key>RunAtLoad</key><true/>\n<key>StartInterval</key><integer>%s</integer>\n' "$every"
+    fi
+    printf '<key>StandardOutPath</key><string>%s/runs/regional/logs/%s.log</string>\n' "$ROOT" "$label"
+    printf '<key>StandardErrorPath</key><string>%s/runs/regional/logs/%s.log</string>\n</dict></plist>\n' "$ROOT" "$label"
+  } > "$plist"
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+}
+
+mac_install() {
+  [ "$MAC" = 1 ] || { echo "mac-install runs on macOS" >&2; return 64; }
+  [ -r "$TOKEN_FILE" ] || { echo "no Hugging Face write token at $TOKEN_FILE (mode 600)" >&2; return 1; }
+  cd "$ROOT"
+  mkdir -p "$(dirname "$ENV_FILE")"
+  [ -f "$ENV_FILE" ] || printf 'EARTHCRAFT_WORKERS=2\nEARTHCRAFT_LANE=quality\nEARTHCRAFT_BATCH_TILES=8\n' > "$ENV_FILE"
+  if [ ! -x "$PY" ]; then
+    local python; python=$(command -v python3.11 || command -v python3.12 || command -v python3)
+    "$python" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || { echo "Python 3.11+ is needed" >&2; return 1; }
+    "$python" -m venv "$ROOT/.venv"
+  fi
+  install_requirements
+  fetch_private
+  local self=$ROOT/scripts/aws_pipeline_setup.sh
+  mac_agent "$AGENT" 0 /bin/bash "$self" run
+  mac_agent "$AGENT.status" 900 /bin/bash "$self" status --json "$ROOT/runs/status/pipeline.json"
+  sleep 5; status
+}
+
+mac_stop() {   # SIGTERM: the supervisor's workers finish their tile and commit their batch
+  [ "$MAC" = 1 ] || { echo "mac-stop runs on macOS" >&2; return 64; }
+  launchctl bootout "gui/$(id -u)/$AGENT" 2>/dev/null || true
+  launchctl bootout "gui/$(id -u)/$AGENT.status" 2>/dev/null || true
+  local waited=0
+  while pgrep -f "$ROOT/scripts/regional_supervisor.py" >/dev/null && [ "$waited" -lt "${EARTHCRAFT_STOP_TIMEOUT:-1800}" ]; do
+    sleep 5; waited=$((waited + 5))
+  done
+  # Say so on the dataset: the monitor reads "inactive" as a deliberate stop, not an outage.
+  cd "$ROOT"
+  local scratch=$ROOT/runs/scratch/status
+  rm -rf "$scratch"; mkdir -p "$scratch/src" "$ROOT/runs/status"
+  status --json "$scratch/src/pipeline.json"
+  cp "$scratch/src/pipeline.json" "$ROOT/runs/status/pipeline.json"
+  HF_TOKEN=$(hf_token) "$PY" scripts/hf_store.py --scratch "$scratch/hf" --cap 1GiB --min-free 2GiB \
+    push-files --src "$scratch/src" --dest status
+  rm -rf "$scratch"
+  status
+}
+
 cmd=${1:-}; shift || true
 case "$cmd" in
+  mac-install) mac_install "$@" ;;
+  mac-stop) mac_stop "$@" ;;
   bootstrap|run|update|launch|push|validate) "$cmd" "$@" ;;
   status) status "$@" ;;
   *) if [ "$(basename "$0")" = earthcraft-status ]; then status "$cmd" "$@"; else sed -n 2,12p "$0"; exit 64; fi ;;

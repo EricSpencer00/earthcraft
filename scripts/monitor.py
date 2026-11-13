@@ -78,10 +78,28 @@ def fetch_url(url: str, headers: Optional[Dict[str, str]] = None) -> Tuple[Optio
         return None, None
 
 
+STATUS_URL = "https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/status/pipeline.json"
+
+
+def stopped_on_purpose(status: Any) -> bool:
+    """True when the last host report says the service is stopped, not crashed.
+
+    systemd reports a clean stop as "inactive" and a crash as "failed"; a bounded local run writes
+    "inactive" when it finishes. A host that dies keeps its last "active" report, which goes stale.
+    """
+    return (isinstance(status, dict) and status.get('schema') == 'earthcraft.pipeline-status.v1'
+            and status.get('service') == 'inactive' and not status.get('workers'))
+
+
 def check_pipeline_freshness(report: MonitorReport) -> None:
-    """Check if pipeline commits are fresh (within 3 hours)."""
+    """Check that a running pipeline publishes (within 3 hours). A host that reported a clean stop is idle."""
     url = "https://huggingface.co/api/datasets/EricSpencer00/earthcraft/commits/main"
     data = fetch_json(url)
+    status_data = fetch_json(STATUS_URL)
+    if stopped_on_purpose(status_data):
+        report.add_check("Pipeline freshness", True,
+                         f"Idle: the host reported a clean stop at {status_data.get('time_utc')}")
+        return
 
     commits = data if isinstance(data, list) else (data or {}).get("commits") or []
     if not commits:
@@ -130,9 +148,6 @@ def check_pipeline_freshness(report: MonitorReport) -> None:
         return
 
     # Check status/pipeline.json
-    status_url = "https://huggingface.co/datasets/EricSpencer00/earthcraft/resolve/main/status/pipeline.json"
-    status_data = fetch_json(status_url)
-
     if not isinstance(status_data, dict) or status_data.get('schema') != 'earthcraft.pipeline-status.v1':
         report.add_check('Pipeline status', False, 'Worker report is missing or has an unsupported format')
         return

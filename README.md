@@ -92,24 +92,25 @@ shows the live numbers.
 ## Contribute your compute
 
 Lend your computer to the map. One command builds tiles on your spare cores and adds each
-finished tile to the dataset as you go. You need Python 3.11+, git, about 30 GB of free disk,
-Minecraft 1.21.10 (started once, for its block colours) and a free Hugging Face account.
+finished tile to the dataset as you go. You need macOS or Linux, git, 20 GB of free disk and a
+free Hugging Face account.
 
 ```sh
-git clone https://github.com/EricSpencer00/earthcraft && cd earthcraft
-python3 -m venv .venv && .venv/bin/pip install -r requirements-contribute.txt
-.venv/bin/hf auth login                      # a token with write access
-.venv/bin/python scripts/contribute.py       # build until you press Ctrl-C
+curl -fsSL https://ericspencer.us/earthcraft/contribute.sh | sh
 ```
+
+The script keeps everything in `~/.earthcraft` (code, its own Python, working files), signs you
+in to Hugging Face the first time, and builds until you press Ctrl-C. Run it again to continue.
 
 - It uses half your CPUs (`--cores N` to choose) and builds the tiles next to the finished
   area first, so the map grows as one piece.
 - Every tile is uploaded the moment it is built, as a commit on **your one pull request** on the
   dataset. Stop any time; the next run adds to the same pull request until it holds 200 tiles.
 - A validator checks every file (valid regions, no player data, matching hashes, tiles in the
-  plan) and rebuilds one tile now and then to compare. The owner audits the renders and merges.
+  plan) and comments PASS or FAIL. The owner audits the renders and merges.
 
-`--tiles 20` builds twenty and stops; `--dry-run` shows which tiles you would build. The full
+Add options after `sh -s --`: `--tiles 20` builds twenty and stops; `--dry-run` shows which tiles
+you would build. The full
 guide is in [CONTRIBUTING.md](CONTRIBUTING.md#contribute-compute).
 
 ## How it works

@@ -34,8 +34,10 @@ This copies the plan and job list from the dataset's
 
 Anyone can also contribute compute through dataset pull requests:
 `scripts/contribute.py` (see [CONTRIBUTING.md](../CONTRIBUTING.md)). A
-validator on the AWS host (`earthcraft-validate.timer`, every 30 min) checks
-each open pull request and comments PASS or FAIL; it never merges.
+validator in GitHub Actions (`validate.yml`, every 30 min, repository secret
+`HF_TOKEN`) checks each open pull request and comments PASS or FAIL; it never
+merges. A Linux host can also run it with a regeneration spot check
+(`earthcraft-validate.timer`).
 
 Run, check, stop:
 
@@ -110,6 +112,17 @@ node scripts/qa_sample.mjs --count 24 --out runs/scratch/qa/<run-id>
 It renders random chunks from the dataset through the 3D viewer. Score them
 with `.claude/commands/qa-chunks.md`, then upload the run with
 `hf_store.py push-files`.
+
+## 5. Game load check
+
+```sh
+PYTHONPATH=scripts .venv/bin/python scripts/load_check.py --accept-eula --count 3
+```
+
+It puts published tiles in an empty world, starts Mojang's 1.21.10 dedicated server (Java 21+),
+force-loads every chunk and asks the server whether sampled positions hold the generator's
+blocks. `load-check.yml` runs it nightly once the repository variable `MINECRAFT_EULA` is `true`
+(running the server means agreeing to the Minecraft EULA).
 
 ## Disk rules
 

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Build Earthcraft map tiles on your own computer with one command.">
+  <title>Earthcraft · Help build</title>
+  <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+  <link rel="preload" href="./assets/fonts/source-serif-4-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/libre-franklin-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./style.css?v=pipeline-1">
+  <link rel="stylesheet" href="./pipeline.css?v=pipeline-1">
+  <link rel="stylesheet" href="./contribute.css?v=contribute-1">
+  <script type="module" src="./contribute.mjs?v=contribute-1"></script>
+</head>
+<body class="pipeline-page contribute-page">
+  <a class="skip-link" href="#contribute">Skip to the command</a>
+  <header class="site-header">
+    <a href="./" class="brand" aria-label="Earthcraft home">Earthcraft</a>
+    <h1>Help build</h1>
+    <nav aria-label="Main navigation"><a href="./">World map</a><a href="./blocks.html">3D viewer</a><a href="./pipeline.html">Pipeline</a><a href="./contribute.html" aria-current="page">Help build</a></nav>
+  </header>
+  <main id="contribute" class="pipeline-main contribute-main">
+    <div class="pipeline-heading"><div><h2>Lend your computer to the map.</h2><p id="tiles-left" role="status">Counting the tiles left…</p></div></div>
+    <section aria-labelledby="command-heading">
+      <h3 id="command-heading">Paste this into a terminal</h3>
+      <div class="command"><pre><code id="command">curl -fsSL https://ericspencer.us/earthcraft/contribute.sh | sh</code></pre><button id="copy" type="button">Copy</button></div>
+      <fieldset class="amount"><legend>How much</legend>
+        <label><input type="radio" name="amount" value="" checked> Until I press Ctrl-C</label>
+        <label><input type="radio" name="amount" value="20"> 20 tiles</label>
+        <label><input type="radio" name="amount" value="1"> 1 tile</label>
+      </fieldset>
+      <dl class="pipeline-metrics">
+        <div><dt>Works on</dt><dd>macOS and Linux (Windows: WSL)</dd></div>
+        <div><dt>Free disk</dt><dd>20 GB</dd></div>
+        <div><dt>Account</dt><dd><a href="https://huggingface.co/join">Hugging Face, free</a></dd></div>
+        <div><dt>One tile</dt><dd>about a minute</dd></div>
+      </dl>
+    </section>
+    <section aria-labelledby="after-heading">
+      <h3 id="after-heading">What happens to your tiles</h3>
+      <ol class="pipeline-stages">
+        <li><span>Each finished tile is uploaded to your one pull request on the dataset.</span></li>
+        <li><span>A validator checks every file and comments PASS or FAIL.</span></li>
+        <li><span>The owner merges it, and the tiles appear on the <a href="./">map</a>.</span></li>
+      </ol>
+      <p class="muted">Everything stays in <code>~/.earthcraft</code>. Delete that folder to remove it. <a href="./contribute.sh">Read the script</a> · <a href="https://github.com/EricSpencer00/earthcraft/blob/main/CONTRIBUTING.md#contribute-compute">Full guide</a></p>
+    </section>
+    <footer class="pipeline-footer"><p>Map data © OpenStreetMap contributors, ODbL. LiDAR: USGS 3DEP and county surveys. <a href="https://github.com/EricSpencer00/earthcraft/blob/main/NOTICE">Credits and licences</a>.</p><p>Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p></footer>
+  </main>
+</body>
+</html>

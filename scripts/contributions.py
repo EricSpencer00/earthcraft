@@ -17,6 +17,8 @@ CLIENT_VERSION = '1.21.10'
 # Mojang's published SHA-1 of the official 1.21.10 client.jar (piston-meta version manifest). Block
 # colours are read from it, so the same JAR gives byte-identical tiles. It is never redistributed.
 CLIENT_SHA1 = 'd3bdf582a7fa723ce199f3665588dcfe6bf9aca8'
+CLIENT_URL = f'https://piston-data.mojang.com/v1/objects/{CLIENT_SHA1}/client.jar'
+CLIENT_MAX_BYTES = 64 * 2**20
 VALIDATOR_MARKER = 'earthcraft-validator'
 
 TILE = r'(-?\d+)_(-?\d+)'

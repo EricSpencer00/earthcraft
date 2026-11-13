@@ -22,14 +22,24 @@ Say what changed, why, and how you tested it.
 You can generate map tiles on your own computer and offer them to the dataset.
 Your computer does the work; the owner checks it and adds it.
 
+The short way is one command, on macOS or Linux with git and 20 GB of free disk:
+
+```sh
+curl -fsSL https://ericspencer.us/earthcraft/contribute.sh | sh
+```
+
+It does steps 1 to 4 below in `~/.earthcraft` (set `EARTHCRAFT_DIR` to move it) and passes
+any options on: `... | sh -s -- --tiles 20`. The steps by hand:
+
 1. **Get the code and tools.** Install Python 3.11 or newer and git. Then run
    `git clone https://github.com/EricSpencer00/earthcraft && cd earthcraft`,
    `python3 -m venv .venv` and `.venv/bin/pip install -r requirements-contribute.txt`.
    Keep about 30 GB of disk free.
-2. **Have Minecraft 1.21.10.** Open the official Minecraft launcher, pick
-   version 1.21.10 and start it once. That puts the game file the tool reads
-   block colours from on your computer. The tool never uploads it. If it is
-   somewhere unusual, pass `--client-jar /path/to/1.21.10.jar`.
+2. **Minecraft 1.21.10's game file.** The tool reads block colours from the
+   official client JAR. It uses the one in your Minecraft launcher if you have
+   started 1.21.10 once; otherwise it downloads the file from Mojang's own
+   server and checks its hash. The tool never uploads it. If it is somewhere
+   unusual, pass `--client-jar /path/to/1.21.10.jar`.
 3. **Log in to Hugging Face.** Make a free account, create an access token with
    write access at huggingface.co/settings/tokens, and run
    `.venv/bin/hf auth login` (or set `HF_TOKEN`).
@@ -56,5 +66,5 @@ open pull request, renders four of its tiles and has the local Claude Code CLI j
 them, and writes a report. Then open the pull request on the dataset's Community tab,
 read the validator's comment, and look at the files: only `tiles/v2/<tile>/...` and one
 `contributions/<name>.json`. If it says PASS, press **Merge**. The bot never
-merges. After the merge the AWS hosts adopt those tiles instead of making them
+merges. After the merge the runners adopt those tiles instead of making them
 again. Close failing or stale requests with a short note.

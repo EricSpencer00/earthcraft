@@ -2,16 +2,20 @@
 
 These apply to every agent (Codex, Claude, scripts) working on Earthcraft.
 
-## Budget (2026-10-23)
+## Runner and budget (2026-11-13)
 
-Earthcraft is Eric's separate personal project, not HorneSci. Its AWS spend is capped at **$35/month
-all in** (compute, disks, public IPv4), confirmed by Eric after a same-day pause note that set
-$10/month. The runner is the m5a.large spot `i-0f3b8770dfbc726a4` (us-west-2, max $0.040/h); the
-older t3a.micro `i-01ebb8cc2839b2d5d` stays stopped. Use free, keyless open data only.
+Earthcraft is Eric's separate personal project, not HorneSci. Tiles are built on **mb16**, Eric's
+16-inch Intel MacBook Pro (`ssh mb16`, 12 threads, 16 GB), at no cost ([docs/MAC_RUNNER.md](docs/MAC_RUNNER.md)).
+Use free, keyless open data only.
 
-Preserve existing disks, snapshots, checkpoints and published Hugging Face data. For the persistent
-Spot request `sir-faiznjrj`, manual stop disables the request. Do not cancel a disabled request:
-AWS would terminate its stopped instance.
+- **No paid compute.** Both AWS instances (`i-0f3b8770dfbc726a4` m5a.large spot,
+  `i-01ebb8cc2839b2d5d` t3a.micro, us-west-2) stay stopped. Start one only on Eric's explicit word;
+  the ceiling then is $35/month all in (compute, disks, public IPv4).
+- **Oracle Always Free** (`docs/ORACLE_PIPELINE.md`) joins as a second runner when its A1 capacity
+  request is granted. Give each runner a share (`EARTHCRAFT_SHARD=i/N`) while both run.
+- Preserve existing disks, snapshots, checkpoints and published Hugging Face data. For the persistent
+  Spot request `sir-faiznjrj`, manual stop disables the request. Do not cancel a disabled request:
+  AWS would terminate its stopped instance.
 
 ## One of everything
 
