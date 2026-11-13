@@ -100,3 +100,29 @@ class CogCropTests(unittest.TestCase):
             naip_imagery.cog_crop(attrs, 26916, [0, 0, 1, 1], 1000.3, 2000.0, 10, 8, 0.6, out)
         with self.search(gsd=0.3), self.assertRaises(LookupError):
             naip_imagery.cog_crop(attrs, 26916, [0, 0, 1, 1], 1000.0, 2000.0, 10, 8, 0.6, out)
+
+
+class StacFallbackTests(CogCropTests):
+    def items(self, *specs):
+        import io, json as j
+        from unittest import mock
+        # footprints in lon/lat covering the whole test area
+        feats = [{'id': i, 'properties': {'gsd': g, 'datetime': d, 'proj:epsg': 26916},
+                  'geometry': {'type': 'Polygon', 'coordinates': [[[-89, 41], [-87.5, 41], [-87.5, 42], [-89, 42], [-89, 41]]]},
+                  'assets': {'image': {'href': str(self.cog)}}} for i, g, d in specs]
+        return mock.patch.object(naip_imagery.urllib.request, 'urlopen', return_value=io.BytesIO(j.dumps({'features': feats}).encode()))
+
+    def test_closest_year_within_the_crop_budget(self):
+        meta = {'crs': 'EPSG:26916', 'west': 400000, 'north': 4600000, 'size': 512}
+        with self.items(('a', 0.6, '2019-08-09T00:00:00Z'), ('b', 0.6, '2021-09-08T00:00:00Z'), ('c', 0.3, '2023-07-01T00:00:00Z')):
+            attrs, href = naip_imagery.stac_choose(meta, [0, 0, 1, 1], preferred_year=2022)
+        self.assertEqual((attrs['stac_item'], attrs['Year'], attrs['resolution_value']), ('b', 2021, 0.6))  # 0.3 m is over budget
+
+    def test_grid_crop_snaps_to_the_cog_grid(self):
+        out = Path(self.dir.name) / 'grid.tif'
+        left, top, pixel, width, height, asset = naip_imagery.cog_grid_crop(str(self.cog), 26916, [1005.0, 1010.0], [1985.0, 1990.0], out)
+        self.assertAlmostEqual((left - 1000.0) / 0.6, round((left - 1000.0) / 0.6))
+        with rasterio.open(out) as crop:
+            self.assertEqual((crop.width, crop.height), (width, height))
+            col, row = round((left - 1000.0) / 0.6), round((2000.0 - top) / 0.6)
+            self.assertTrue((crop.read() == self.data[:, row:row + height, col:col + width]).all())

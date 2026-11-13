@@ -340,6 +340,8 @@ def worker_args(control, frame, workdir, tiles, args, worker=1, workers=1):
         argv.append('--no-adopt')  # regenerate even though the tile may be on the Hub
     if not args.no_footprints:
         argv.append('--footprints')
+    # The runners' quality lane (scripts/aws_pipeline_setup.sh): contributed tiles match theirs.
+    argv += ['--lane', 'quality', '--trees', '--facades', '--ground']
     parsed = regional_generate.build_parser().parse_args(argv)
     parsed.prefetch = False  # only the picked tiles are generated here; never fetch sources for others
     if args.source_revision:
