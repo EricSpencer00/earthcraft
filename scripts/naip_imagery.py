@@ -10,6 +10,7 @@ import json
 import math
 import re
 from pathlib import Path
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -46,6 +47,75 @@ def request(url, output, limit):
     output.write_bytes(raw)
     return raw, {'url': url, 'file': output.name, 'bytes': len(raw),
                  'sha256': hashlib.sha256(raw).hexdigest()}
+
+
+# Responses that never change between tiles (rights statement, service description) are fetched
+# once per process; each tile still writes and hashes its own copy as provenance.
+_STATIC = {}
+
+
+def request_static(url, output, limit):
+    if url not in _STATIC:
+        _STATIC[url] = request(url, output, limit)
+        return _STATIC[url]
+    raw, asset = _STATIC[url]
+    if output.exists(): raise FileExistsError(output)
+    output.write_bytes(raw)
+    return raw, {**asset, 'file': output.name}
+
+
+# The USGS ImageServer renders each crop on request: 5-35 s for one tile, varying run to run
+# (measured 2026-11-13), and it dominated tile time on the runners. The same USDA NAIP rasters
+# are published as Cloud-Optimized GeoTIFFs on Microsoft Planetary Computer (keyless; an
+# anonymous read token). When the capture the catalog selected is there, with the same date,
+# pixel size and projection, the crop is read straight from it on the identical pixel grid.
+PC_STAC = 'https://planetarycomputer.microsoft.com/api/stac/v1/search'
+PC_TOKEN = 'https://planetarycomputer.microsoft.com/api/sas/v1/token/naip'
+_PC = {'token': None, 'expires': 0.0}
+
+
+def pc_token():
+    import time
+    if not _PC['token'] or time.time() > _PC['expires']:
+        with urllib.request.urlopen(PC_TOKEN, timeout=30) as response:
+            _PC['token'] = json.loads(response.read(64 * 1024))['token']
+        _PC['expires'] = time.time() + 40 * 60  # tokens last about an hour
+    return _PC['token']
+
+
+def cog_crop(attrs, crs, lonlat_bounds, left, top, width, height, pixel, output):
+    """Read the selected capture's crop from its NAIP COG; returns the asset record or raises."""
+    captured = datetime.fromtimestamp(attrs['acquisition_date'] / 1000, timezone.utc).date().isoformat()
+    body = json.dumps({'collections': ['naip'], 'bbox': lonlat_bounds, 'limit': 20,
+                       'datetime': f'{captured}T00:00:00Z/{captured}T23:59:59Z'}).encode()
+    search = urllib.request.Request(PC_STAC, data=body, headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(search, timeout=60) as response:
+        items = json.loads(response.read(4 * 2**20))['features']
+    items = [i for i in items if i['properties'].get('proj:epsg') == crs and
+             abs(float(i['properties'].get('gsd', 0)) - pixel) < 1e-9]
+    if not items:
+        raise LookupError(f'No Planetary Computer NAIP item for {captured} at {pixel} m, EPSG:{crs}')
+    href = items[0]['assets']['image']['href']
+    from rasterio.windows import Window
+    env = {'GDAL_DISABLE_READDIR_ON_OPEN': 'EMPTY_DIR', 'GDAL_HTTP_MULTIRANGE': 'YES',
+           'GDAL_HTTP_MERGE_CONSECUTIVE_RANGES': 'YES', 'GDAL_HTTP_TIMEOUT': '60'}
+    signed = href + '?' + pc_token() if href.startswith('https://') else href  # tests read a local file
+    with rasterio.Env(**env), rasterio.open(signed) as cog:
+        t = cog.transform
+        col, row = (left - t.c) / pixel, (t.f - top) / pixel
+        if (cog.count != 4 or cog.crs.to_epsg() != crs or abs(t.a - pixel) > 1e-9 or abs(t.e + pixel) > 1e-9
+                or abs(col - round(col)) > 1e-6 or abs(row - round(row)) > 1e-6):
+            raise ValueError('COG grid differs from the selected capture grid')
+        col, row = round(col), round(row)
+        if col < 0 or row < 0 or col + width > cog.width or row + height > cog.height:
+            raise ValueError('Crop runs past this COG (a neighbouring quarter-quad covers it)')
+        data = cog.read(window=Window(col, row, width, height))
+    with rasterio.open(output, 'w', driver='GTiff', width=width, height=height, count=4, dtype='uint8',
+                       crs=f'EPSG:{crs}', transform=from_origin(left, top, pixel, pixel)) as out:
+        out.write(data)
+    raw = Path(output).read_bytes()
+    return {'url': href, 'file': Path(output).name, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(),
+            'via': 'planetary-computer-cog', 'stac_item': items[0]['id']}
 
 
 def choose_source(records, meta, preferred_year=2022, target_capture=None):
@@ -156,14 +226,18 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
               'outFields':'*', 'outSR':4326, 'returnGeometry':'true', 'resultRecordCount':50}
     output.mkdir(parents=True)
     assets = []
-    raw, asset = request(RIGHTS, output/'rights.json', 2**20); assets.append(asset)
+    raw, asset = request_static(RIGHTS, output/'rights.json', 2**20); assets.append(asset)
     rights = json.loads(raw)
     if 'public domain' not in (rights.get('description','')+rights.get('summary','')).lower():
         raise ValueError('USGS public-domain source declaration unavailable')
-    raw, asset = request(SERVICE+'?f=pjson', output/'service.json', 2**20); assets.append(asset)
-    service = json.loads(raw)
-    if service.get('bandCount') != 4 or service.get('pixelType') != 'U8':
-        raise ValueError('Unexpected NAIP bands or pixel encoding')
+    try:  # a sanity check only: the crop itself is verified to be four U8 bands below
+        raw, asset = request_static(SERVICE+'?f=pjson', output/'service.json', 2**20); assets.append(asset)
+        service = json.loads(raw)
+        if service.get('bandCount') != 4 or service.get('pixelType') != 'U8':
+            raise ValueError('Unexpected NAIP bands or pixel encoding')
+    except (urllib.error.URLError, TimeoutError) as error:  # this endpoint alone has returned 504 for hours
+        (output/'service.json').unlink(missing_ok=True)
+        assets.append({'url': SERVICE+'?f=pjson', 'unavailable': f'{type(error).__name__}: {error}'[:200], 'bytes': 0})
     raw, asset = request(SERVICE+'/query?'+urllib.parse.urlencode(params), output/'catalog.json', 2**20)
     assets.append(asset); catalog = json.loads(raw)
     if 'error' in catalog or catalog.get('exceededTransferLimit'):
@@ -181,9 +255,19 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
               'size':f'{width},{height}', 'format':'tiff', 'pixelType':'U8', 'bandIds':'0,1,2,3',
               'renderingRule':json.dumps({'rasterFunction':'None'}), 'interpolation':'RSP_NearestNeighbor',
               'mosaicRule':json.dumps({'mosaicMethod':'esriMosaicLockRaster','lockRasterIds':[attrs['OBJECTID']]})}
-    raw, asset = request(SERVICE+'/exportImage?'+urllib.parse.urlencode(params), output/'served-crop.tif', 10*2**20)
+    try:
+        asset = cog_crop(attrs, crs, [min(xx), min(yy), max(xx), max(yy)], left, top, width, height, pixel,
+                         output/'served-crop.tif')
+        via = 'Planetary Computer COG of the selected capture, same pixel grid'
+    except Exception as error:  # noqa: BLE001 - the ImageServer serves every capture; it is only slower
+        (output/'served-crop.tif').unlink(missing_ok=True)
+        raw, asset = request(SERVICE+'/exportImage?'+urllib.parse.urlencode(params), output/'served-crop.tif', 10*2**20)
+        asset['cog_unavailable'] = f'{type(error).__name__}: {error}'[:300]
+        via = 'USGS locked-raster served crop, rendering None'
     assets.append(asset)
     with rasterio.open(output/'served-crop.tif') as raster:
+        if raster.dtypes[0] != 'uint8':
+            raise ValueError('Served NAIP crop is not 8-bit')
         if raster.count != 4 or raster.width != width or raster.height != height or raster.crs.to_epsg() != crs:
             raise ValueError('Served NAIP crop changed projection, dimensions or bands')
         if not raster.transform.almost_equals(from_origin(left,top,pixel,pixel)):
@@ -201,7 +285,7 @@ def acquire(source, output, preferred_year=2022, target_capture=None):
               'temporal_relation':temporal_relation(datetime.fromtimestamp(attrs['acquisition_date']/1000,timezone.utc).isoformat(), target_capture) if target_capture else None,
               'source_pixel_resolution_m':pixel, 'served_crop_crs':crs, 'served_crop_pixel_size_m':pixel,
               'source_band_order':['red','green','blue','near_infrared'],
-              'processing':'USGS locked-raster served crop, rendering None; local nearest-neighbor sample at metre-grid cell centres',
+              'processing':via+'; local nearest-neighbor sample at metre-grid cell centres',
               'attribution':rights.get('accessInformation'), 'license':'Public domain per USGS NAIP service description',
               'rights_url':RIGHTS,'assets':assets,'download_bytes':sum(a['bytes'] for a in assets),
               'valid_cells':int(valid.sum()),'total_cells':size*size,

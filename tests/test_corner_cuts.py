@@ -52,6 +52,22 @@ class QualityLaneTests(unittest.TestCase):
         self.assertEqual((state['0_0'], state['1_0']), ('pending', 'complete'))
         self.assertEqual(self.journal.reopen_stage(2, '#no-buildings'), 0)
 
+    def test_reopen_unpublished_lost_disk_tiles_only(self):
+        lost = '/Volumes/LaCie/Earthcraft/runs/x/tiles/t/sources-receipt.json'
+        complete(self.journal, '0_0', (0, 1), lost)                                   # the ring: lost, never published
+        self.journal.db.execute("UPDATE jobs SET state='failed' WHERE tile='0_0' AND stage=2");self.journal.db.commit()
+        complete(self.journal, '1_0', (0, 1), lost);complete(self.journal, '1_0', (2,))  # published since: adopted
+        complete(self.journal, '2_0', (0, 1, 2))                                      # published
+        self.assertEqual(self.journal.reopen_unpublished(), 1)
+        rows = self.journal.db.execute('SELECT tile,stage,state FROM jobs WHERE stage<3').fetchall()
+        state = {(tile, stage): s for tile, stage, s in rows}
+        self.assertEqual([state[('0_0', i)] for i in range(3)], ['pending'] * 3)
+        self.assertEqual([state[('1_0', i)] for i in range(3)], ['complete'] * 3)
+        self.assertEqual([state[('2_0', i)] for i in range(3)], ['complete'] * 3)
+        self.assertEqual(self.journal.reopen_unpublished(), 0)
+        job = self.journal.claim_tile('w', 'quality', now=1)
+        self.assertEqual((job['tile'], job['stages']), ('0_0', ['sources', 'geometry', 'appearance']))
+
     def test_reopen_named_tiles_only_their_completed_appearance(self):
         complete(self.journal, '0_0', (0, 1, 2));complete(self.journal, '1_0', (0, 1, 2));complete(self.journal, '2_0', (0, 1))
         self.assertEqual(self.journal.reopen_stage(2, tiles=['0_0', '2_0']), 1)

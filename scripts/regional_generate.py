@@ -1322,6 +1322,9 @@ class Worker:
             batch = Batch(self, journal, keeper)
             try:
                 journal.requeue_owner_leases(self.worker_id)
+                reopened = journal.reopen_unpublished()
+                if reopened:
+                    self.log(event='unpublished_tiles_reopened', tiles=reopened)
                 self.retire_lake(journal)
                 if a.footprints and not a.trees:
                     self.retire_empty_scans(journal, indexes)

@@ -6,6 +6,9 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from naip_imagery import choose_source, spectral_masks, source_crs,normalize_crop
+import naip_imagery
+import rasterio
+from rasterio.transform import from_origin
 
 
 class NaipTests(unittest.TestCase):
@@ -57,3 +60,43 @@ class NaipTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class CogCropTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.cog = Path(self.dir.name) / 'quad.tif'
+        data = (np.arange(4 * 50 * 60).reshape(4, 50, 60) % 251).astype(np.uint8)
+        with rasterio.open(self.cog, 'w', driver='GTiff', width=60, height=50, count=4, dtype='uint8',
+                           crs='EPSG:26916', transform=from_origin(1000.0, 2000.0, 0.6, 0.6)) as out:
+            out.write(data)
+        self.data = data
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def search(self, gsd=0.6, epsg=26916):
+        import io, json as j
+        from unittest import mock
+        body = j.dumps({'features': [{'id': 'quad', 'properties': {'gsd': gsd, 'proj:epsg': epsg},
+                                      'assets': {'image': {'href': str(self.cog)}}}]}).encode()
+        return mock.patch.object(naip_imagery.urllib.request, 'urlopen', return_value=io.BytesIO(body))
+
+    def test_reads_the_exact_window_on_the_selected_grid(self):
+        attrs = {'acquisition_date': 1565308800000}
+        out = Path(self.dir.name) / 'crop.tif'
+        with self.search():
+            asset = naip_imagery.cog_crop(attrs, 26916, [0, 0, 1, 1], 1000.0 + 6 * 0.6, 2000.0 - 3 * 0.6, 10, 8, 0.6, out)
+        with rasterio.open(out) as crop:
+            self.assertTrue((crop.read() == self.data[:, 3:11, 6:16]).all())
+            self.assertTrue(crop.transform.almost_equals(from_origin(1000.0 + 3.6, 2000.0 - 1.8, 0.6, 0.6)))
+        self.assertEqual(asset['via'], 'planetary-computer-cog')
+
+    def test_refuses_another_grid_or_pixel_size(self):
+        attrs = {'acquisition_date': 1565308800000}
+        out = Path(self.dir.name) / 'crop.tif'
+        with self.search(), self.assertRaises(ValueError):  # half a pixel off the COG grid
+            naip_imagery.cog_crop(attrs, 26916, [0, 0, 1, 1], 1000.3, 2000.0, 10, 8, 0.6, out)
+        with self.search(gsd=0.3), self.assertRaises(LookupError):
+            naip_imagery.cog_crop(attrs, 26916, [0, 0, 1, 1], 1000.0, 2000.0, 10, 8, 0.6, out)
