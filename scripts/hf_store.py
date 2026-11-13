@@ -52,6 +52,7 @@ import sys
 import tarfile
 import threading
 import time
+import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from world_snapshot import inventory, save_lock  # noqa: E402  (POSIX record lock, as Minecraft)
@@ -518,6 +519,105 @@ class Retry:
 # Hub adapter (the only place huggingface_hub is touched)
 
 
+# Hugging Face allows about 128 commits an hour per repository, shared by every writer (runners and
+# contributors). Each writer paces itself to 80% of that, so a burst can never stall everyone for an
+# hour again (2026-11-13: 118 commits in 40 minutes, HF answered 429 with a 3,601 s wait).
+HF_COMMITS_PER_HOUR = 128
+COMMIT_BUDGET = int(os.environ.get('EARTHCRAFT_COMMIT_BUDGET', int(HF_COMMITS_PER_HOUR * 0.8)))  # 102
+
+
+class CommitPacer:
+    """Waits before a commit while the repository already has COMMIT_BUDGET commits in the last hour.
+
+    Counts the commits on main (Hugging Face commits API, cached two minutes: every runner's work
+    lands there) plus this machine's own commits to pull-request refs (a ledger shared by its
+    processes), which the main history does not show.
+    """
+
+    WINDOW = 3600
+
+    def __init__(self, repo, repo_type='dataset', budget=None, ledger=None, fetch=None, clock=time.time,
+                 sleep=time.sleep, log=None):
+        self.repo, self.repo_type, self.clock, self.sleep = repo, repo_type, clock, sleep
+        self.budget = COMMIT_BUDGET if budget is None else budget
+        self.ledger = Path(ledger or Path.home() / '.cache' / 'earthcraft' / 'hf-commit-ledger.json')
+        self.fetch = fetch or self._main_commit_times
+        self.log = log or (lambda **_: None)
+        self._main, self._main_at = [], -1e18
+
+    def _main_commit_times(self):
+        times, page = [], 0
+        while page < 3:  # 3 x 50 covers the 102-commit budget
+            url = (f'https://huggingface.co/api/{self.repo_type}s/{self.repo}/commits/main?p={page}&limit=50')
+            request = urllib.request.Request(url, headers={'User-Agent': 'earthcraft-hf-store'})
+            token = os.environ.get('HF_TOKEN')
+            if token:
+                request.add_header('Authorization', f'Bearer {token}')
+            with urllib.request.urlopen(request, timeout=30) as response:
+                rows = json.loads(response.read(8 * 2**20))
+            stamps = [datetime.fromisoformat(row['date'].replace('Z', '+00:00')).timestamp() for row in rows]
+            times += stamps
+            if len(rows) < 50 or (stamps and min(stamps) < self.clock() - self.WINDOW):
+                break
+            page += 1
+        return times
+
+    def _ledger(self, add=None):
+        import fcntl
+        self.ledger.parent.mkdir(parents=True, exist_ok=True)
+        with self.ledger.open('a+') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            handle.seek(0)
+            try:
+                rows = json.loads(handle.read() or '[]')
+            except ValueError:
+                rows = []
+            cutoff = self.clock() - self.WINDOW
+            rows = [row for row in rows if row[0] > cutoff and row[1] == self.repo]
+            if add:
+                rows.append([self.clock(), self.repo, add])
+                handle.seek(0); handle.truncate(); handle.write(json.dumps(rows))
+            return rows
+
+    def recent(self):
+        now = self.clock()
+        if now - self._main_at > 120:
+            try:
+                self._main, self._main_at = self.fetch(), now
+            except Exception as error:  # noqa: BLE001 - unknown is treated as the last known count
+                self.log(event='commit_pacer_unavailable', reason=str(error)[:200])
+                self._main_at = now - 60  # retry in a minute
+        main = sum(1 for t in self._main if t > now - self.WINDOW)
+        own = self._ledger()
+        # Own main commits made since the last fetch are not in it yet; PR-ref commits never are.
+        pending = sum(1 for t, _, rev in own if rev != 'main' or t > self._main_at)
+        return main + pending
+
+    def wait(self):
+        logged = False
+        while True:
+            count = self.recent()
+            if count < self.budget:
+                return count
+            if not logged:
+                self.log(event='commit_paced', recent=count, budget=self.budget)
+                logged = True
+            self.sleep(60)
+
+    def record(self, revision):
+        self._ledger(add=str(revision or 'main'))
+
+
+_PACERS = {}
+
+
+def pacer_for(repo, repo_type='dataset', log=None):
+    key = (repo, repo_type)
+    if key not in _PACERS:
+        _PACERS[key] = CommitPacer(repo, repo_type, log=log)
+    return _PACERS[key]
+
+
 class Hub:
     def __init__(self, repo_type='dataset'):
         from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
@@ -567,8 +667,11 @@ class Hub:
             if operation.upload_info.sha256.hex() != item.digest.sha256:
                 raise RuntimeError(f'File changed before commit: {item.path_in_repo}')
             operations.append(operation)
+        pacer = pacer_for(repo, self.repo_type)
+        pacer.wait()
         info = self.api.create_commit(repo, operations, commit_message=message, repo_type=self.repo_type,
                                       revision=revision, create_pr=create_pr)
+        pacer.record(f'refs/pr/{info.pr_num}' if getattr(info, 'pr_num', None) else (revision or 'main'))
         return {'oid': info.oid, 'url': info.commit_url, 'pr_url': getattr(info, 'pr_url', None),
                 'pr_num': getattr(info, 'pr_num', None)}
 
