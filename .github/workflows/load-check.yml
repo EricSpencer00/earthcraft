@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tiles:
-        description: Tile ids, comma-separated (default: three random published tiles)
+        description: "Tile ids, comma-separated; empty picks three random published tiles"
         required: false
 
 permissions:
