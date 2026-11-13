@@ -51,7 +51,8 @@ any options on: `... | sh -s -- --tiles 20`. The steps by hand:
    stop: workers finish the tile in hand. The next run adds to the same pull
    request until it holds 200 tiles, then opens a new one. `--tiles 20` stops
    after twenty, `--dry-run` only shows the picks, and `--shard i/N` splits the
-   work between several computers.
+   work between several computers. Dataset owners and writers can pass `--direct`
+   to commit to `main` as the runners do, with no pull request.
 5. **Wait for the check.** Within about half an hour a validator comments
    **PASS** or **FAIL** on your pull request, with the reason for any failure.
    The owner audits the renders (`scripts/audit.py`) and merges passing requests.
