@@ -46,6 +46,7 @@ class LayerBuilder:
         self.name, self.frame, self.description = name, frame, description
         self.sources = []
         self.palette = {}
+        self._raw = {}
         self.edits = {}  # (x, y, z) -> (priority, state, expect, source)
         self.rejected = 0
 
@@ -57,8 +58,10 @@ class LayerBuilder:
         return len(self.sources) - 1
 
     def _state(self, key):
-        key = canonical(key)
-        return self.palette.setdefault(key, len(self.palette))
+        index = self._raw.get(key)
+        if index is None:  # canonicalise each distinct spelling once, not per edit
+            index = self._raw[key] = self.palette.setdefault(canonical(key), len(self.palette))
+        return index
 
     def add(self, x, y, z, state, source, expect=None, priority=0):
         """Queue one edit. ``expect=None`` requires air; otherwise a block name/state."""

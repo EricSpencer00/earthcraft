@@ -138,3 +138,26 @@ queries in `empty_tiles` for every open scan in the plan.
 
 Roof colour is dominated by the first NAIP download in an area (17–25 s); neighbours reuse it
 (0.1–2 s). Remaining CPU: `scan_build` (metric world build + verify) ~6 s.
+
+## Where tile time went, Nov 2026 (2026-11-13)
+
+Output was ~1,200 tiles/day Oct 28 - Nov 2 (AWS spot, 2 vCPU), then 0 after Nov 3: the spot runner
+was stopped by a user on Nov 1 and its persistent request disabled. The free mb16 runner (Nov 12, 3
+workers) built ~15 tiles/h at ~700 s a tile: roof colour 49-138 s, survey 51-72 s, trees 22-105 s.
+
+* **Lost tiles (#101).** 23,978 tiles were "complete" in the seeded journal with receipts on the
+  retired LaCie only; runners skipped them and their appearance stage failed with HTTP 404.
+  `Journal.reopen_unpublished()` reopens them at worker start.
+* **NAIP (#101, this PR).** The USGS ImageServer rendered each crop on request (10.7-32.9 s measured;
+  its endpoints returned 502/504 for hours). Crops now come from the capture's Planetary Computer
+  COG on the identical grid (2-6 s; mean 2 DN difference, no offset). When USGS cannot answer at
+  all, the capture is chosen from Planetary Computer's catalog by the same rules (newer captures
+  exist there, so outage tiles may use e.g. 2021 where USGS picks 2019). USGS metadata calls time
+  out after 20 s instead of 60 s.
+* **Block-state parsing.** `LayerBuilder._state` canonicalises each distinct spelling once and
+  `parse_state`/`canonical` are memoised: 505k edits 2.21 s -> 0.36 s, chunk output unchanged.
+* **Contributors** now build the runners' quality lane (`--trees --facades --ground`), so
+  contributed tiles match.
+
+Rural tiles on an M-series Mac, quality lane, warm indexes: 24-40 s, of which ground cover (NAIP +
+classification) and the lidar survey are most; the build itself is ~4 s.

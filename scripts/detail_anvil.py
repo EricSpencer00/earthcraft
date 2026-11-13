@@ -13,6 +13,7 @@ bits per column.
 import copy
 import io
 import math
+import functools
 import re
 import zlib
 from pathlib import Path
@@ -48,7 +49,14 @@ def state_key(entry):
 
 
 def parse_state(key):
-    """Inverse of :func:`state_key`; validates the canonical form."""
+    """Inverse of :func:`state_key`; validates the canonical form. Returns a fresh props dict."""
+    name, items = _parse_state(key)
+    return name, dict(items)
+
+
+@functools.lru_cache(maxsize=65536)
+def _parse_state(key):
+    # A tile has a few hundred distinct states but parses ~760k of them (2026-11-13 profile).
     match = re.fullmatch(r'([a-z0-9_.-]+:[a-z0-9_/.-]+)(?:\[([a-z0-9_=,.-]*)\])?', key)
     if not match:
         raise ValueError(f'Invalid block state {key!r}')
@@ -60,9 +68,10 @@ def parse_state(key):
             if not k or not v or k in props:
                 raise ValueError(f'Invalid block state property in {key!r}')
             props[k] = v
-    return name, props
+    return name, tuple(props.items())
 
 
+@functools.lru_cache(maxsize=65536)
 def canonical(key):
     name, props = parse_state(key)
     return name if not props else name + '[' + ','.join(f'{k}={props[k]}' for k in sorted(props)) + ']'
