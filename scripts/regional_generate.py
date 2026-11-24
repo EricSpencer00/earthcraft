@@ -71,6 +71,7 @@ EX_TEMPFAIL = 75  # the guard refused; the supervisor waits and retries
 STATUS_PATH = 'status/pipeline.json'  # optional host status, committed with a tile batch
 STATUS_INTERVAL = 900  # the status file carries the published-tile bitmap the map reads
 CONTROL_ALLOWANCE = 512 * MiB
+FOOTPRINT_TTL = 10.0  # seconds check() reuses a walk of gen/control; the 5 s watch still walks every sample
 LAKE_INDEX = 'lake/v1/index.json'
 EMPTY_PAD = 16  # metres: a building just over the tile edge still sends the tile to the scans
 SPARSE_BUILDINGS = 25  # mapped footprints at or below which a tile skips the scan (LQ shells + trees)
@@ -1018,8 +1019,8 @@ class Worker:
         self.control.mkdir(parents=True, exist_ok=True)
         self.gen.mkdir(parents=True, exist_ok=True)
         self.cache = SourceCache(self.cache_root, a.cache_cap, None, log=self.log)
-        self.footprint = Footprint({'cache': self.cache.used, 'gen': self.gen, 'control': self.control},
-                                   a.footprint_cap, a.min_free, volume=self.scratch)
+        self.footprint = Footprint({'cache': self.cache.tracked, 'gen': self.gen, 'control': self.control},
+                                   a.footprint_cap, a.min_free, volume=self.scratch, ttl=FOOTPRINT_TTL)
         self.cache.footprint = self.footprint
         regional_cache.activate(self.cache)
         self.footprint.check(0, 'start')  # refuse to start (EX_TEMPFAIL) rather than fill the disk
