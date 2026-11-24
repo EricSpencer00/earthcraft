@@ -424,6 +424,15 @@ class SourceCache:
         incoming = max(0, int(incoming))
         what = what or Path(path).name
         unit = self.unit_of(path)
+        # The footprint guard walks this process's scratch roots; under the shared lock it serialized
+        # every worker's LAZ fetches (mb16, 2026-11-24: half the fetch threads queued here). Check it
+        # first; only a refusal, which an eviction below may cure, is rechecked under the lock.
+        recheck = False
+        if self.footprint is not None:
+            try:
+                self.footprint.check(incoming, f'cache {what}')
+            except DiskGuardError:
+                recheck = True
         with self._exclusive():
             # Far from the cap the shared tally (every process's admits since the last full walk) is
             # enough. Walking 100k cached files on every admit (250 LAZ nodes a tile) made the lidar crop
@@ -446,7 +455,7 @@ class SourceCache:
                 raise CacheCapacityError(
                     f'Cache cap refuses {what}: {human(used)} pinned/in use + {human(incoming)} > cap '
                     f'{human(self.cap)}; the running tile needs more source cache than the cap allows')
-            if self.footprint is not None:
+            if recheck:
                 self.footprint.check(incoming, f'cache {what}')
             self._stamp(unit)
             self._used = used + incoming  # conservative until the next walk
