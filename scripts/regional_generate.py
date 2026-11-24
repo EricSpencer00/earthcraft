@@ -1486,7 +1486,7 @@ class Batch:
         if len(data) > 64 * 1024:
             return None
         self.worker.footprint.check(len(data), 'status snapshot')
-        local = self.worker.gen / '_status-pipeline.json'
+        local = self.worker.gen / f'_status-pipeline-{self.worker.worker_id}.json'  # one per worker: a shared name raced
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_bytes(data)
         shard = self.worker.args.shard
