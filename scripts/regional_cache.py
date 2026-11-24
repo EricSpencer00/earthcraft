@@ -105,8 +105,14 @@ class Footprint:
     and refused at the next check instead of filling the disk.
     """
 
-    def __init__(self, roots, cap=DEFAULT_FOOTPRINT_CAP, floor=DEFAULT_MIN_FREE, statvfs=os.statvfs, volume=None):
-        """roots: {name: path or zero-argument callable returning bytes (e.g. a cache's tracked size)}."""
+    def __init__(self, roots, cap=DEFAULT_FOOTPRINT_CAP, floor=DEFAULT_MIN_FREE, statvfs=os.statvfs, volume=None,
+                 ttl=0.0):
+        """roots: {name: path or zero-argument callable returning bytes (e.g. a cache's tracked size)}.
+
+        ttl > 0 lets ``check`` reuse a walk of the path roots for that many seconds, adding every byte
+        it admitted since, so concurrent writers stop re-walking the same trees. The watch, the report
+        and clear_breach always walk.
+        """
         self.roots = {name: (path if callable(path) else Path(path).absolute()) for name, path in dict(roots).items()}
         if cap <= 0 or floor < 0:
             raise ValueError('A positive footprint cap and a non-negative floor are required')
@@ -118,10 +124,21 @@ class Footprint:
         self.peak_used, self.min_free, self.peak_detail = 0, None, {}
         self.breach, self.breach_kind = None, None
         self._lock = threading.Lock()
+        self.ttl, self._walk_lock, self._walked, self._walked_at, self._since = float(ttl), threading.Lock(), None, 0.0, 0
 
-    def used(self, detail=False):
-        parts = {name: (int(path()) if callable(path) else entry_bytes(path)) for name, path in self.roots.items()}
-        total = sum(parts.values())
+    def _walk(self):
+        return {name: entry_bytes(path) for name, path in self.roots.items() if not callable(path)}
+
+    def used(self, detail=False, cached=False):
+        if cached and self.ttl > 0:
+            with self._walk_lock:  # single flight: one thread walks, the rest reuse its result
+                if self._walked is None or time.monotonic() - self._walked_at > self.ttl:
+                    self._walked, self._walked_at, self._since = self._walk(), time.monotonic(), 0
+                walked, since = dict(self._walked), self._since
+        else:
+            walked, since = self._walk(), 0
+        parts = {name: (int(path()) if callable(path) else walked[name]) for name, path in self.roots.items()}
+        total = sum(parts.values()) + since
         return (total, parts) if detail else total
 
     def free(self):
@@ -138,7 +155,7 @@ class Footprint:
     def check(self, incoming=0, what='write'):
         if self.breach:
             raise DiskGuardError(self.breach)
-        used, detail = self.used(detail=True)
+        used, detail = self.used(detail=True, cached=True)
         free = self.free()
         self._record(used, free, detail)
         if used + incoming > self.cap:
@@ -147,6 +164,8 @@ class Footprint:
         if free - incoming < self.floor:
             raise DiskGuardError(f'Free-space floor refuses {what}: {human(free)} free - {human(incoming)} '
                                  f'< floor {human(self.floor)}')
+        with self._walk_lock:
+            self._since += max(0, int(incoming))  # written before the next walk counts it
         return {'used': used, 'free': free, 'detail': detail}
 
     def clear_breach(self):
@@ -214,6 +233,7 @@ class SourceCache:
         self.log = log or (lambda **_: None)
         self.owner = f'{os.uname().nodename}:{os.getpid()}:{id(self):x}'
         self.used_ttl, self._used, self._used_at = used_ttl, None, 0.0
+        self._walk_lock = threading.Lock()
         self.peak_used, self.evicted_bytes, self.evicted_units = 0, 0, 0
         self._db = sqlite3.connect(self.root / '.lru.sqlite', timeout=30, isolation_level=None,
                                    check_same_thread=False)
@@ -282,11 +302,25 @@ class SourceCache:
         return found
 
     def used(self, fresh=False):
-        now = time.monotonic()
-        if fresh or self._used is None or now - self._used_at > self.used_ttl:
-            self._used, self._used_at = entry_bytes(self.root), now
-        self.peak_used = max(self.peak_used, self._used)
-        return self._used
+        with self._walk_lock:  # single flight: concurrent fetch threads reuse one walk
+            if fresh or self._used is None or time.monotonic() - self._used_at > self.used_ttl:
+                self._used, self._used_at = entry_bytes(self.root), time.monotonic()
+            self.peak_used = max(self.peak_used, self._used)
+            return self._used
+
+    def tracked(self):
+        """Cache bytes for the footprint: the shared tally while a walk refreshed it within used_ttl.
+
+        Every admit adds to the tally under the cache lock and any process walks when it goes stale,
+        so 8 workers share one walk a minute instead of each walking 100k files.
+        """
+        try:
+            row = json.loads((self.root / '.lru.tally').read_text())
+            if time.time() - float(row['walked']) <= self.used_ttl:
+                return int(row['bytes'])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return self.used()
 
     # -- bookkeeping
     def _stamp(self, unit, when=None):

@@ -68,6 +68,20 @@ class FootprintTests(unittest.TestCase):
         with self.assertRaisesRegex(DiskGuardError, 'Footprint cap'):
             footprint.check(0)
 
+    def test_check_reuses_a_walk_within_the_ttl_and_counts_what_it_admitted(self):
+        put(self.root / 'gen' / 'a', 4 * KiB, time.time())
+        footprint = rc.Footprint({'gen': self.root / 'gen'}, cap=64 * KiB, floor=0, statvfs=statvfs(2**40), ttl=60)
+        walks = []
+        real = rc.entry_bytes
+        with patch('regional_cache.entry_bytes', lambda path: walks.append(path) or real(path)):
+            for _ in range(5):
+                footprint.check(10 * KiB)  # 4 walked + 10 per earlier admit: the fifth reaches 44 + 10 < 64
+            with self.assertRaisesRegex(DiskGuardError, 'Footprint cap'):
+                footprint.check(11 * KiB)  # 54 + 11 > 64 without walking again
+            self.assertEqual(len(walks), 1)
+            self.assertGreater(footprint.used(), 0)  # the watch and report always walk
+            self.assertEqual(len(walks), 2)
+
 
 class SourceCacheTests(unittest.TestCase):
     def setUp(self):
@@ -218,6 +232,16 @@ class AdmitWalkTests(unittest.TestCase):
                 near = sum(1 for p in walks if p == cache.root)
             self.assertLessEqual(far, 1)
             self.assertEqual(near, far + 1)
+
+    def test_tracked_reads_the_shared_tally_and_walks_when_it_is_stale(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cache = rc.SourceCache(Path(folder) / 'cache', cap=10 * 2**20, used_ttl=60)
+            tally = cache.root / '.lru.tally'
+            tally.write_text(json.dumps({'bytes': 7 * 2**20, 'walked': time.time()}))
+            self.assertEqual(cache.tracked(), 7 * 2**20)
+            tally.write_text(json.dumps({'bytes': 7 * 2**20, 'walked': time.time() - 120}))
+            self.assertLess(cache.tracked(), 2**20)  # stale: this process walks the (nearly empty) root
+            cache.close()
 
     def test_an_eviction_frees_down_to_the_low_water_mark(self):
         import regional_cache
