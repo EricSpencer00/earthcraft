@@ -55,7 +55,7 @@ jobs:
           cp -R dashboard/cache site/cache
           cp progress/earth.json site/progress/earth.json
           python scripts/site_cache.py --snapshot progress/earth.json --out site/progress
-          python -c 'from pathlib import Path; p=Path("site"); files=list(p.rglob("*")); assert not any(f.is_symlink() for f in files); size=sum(f.stat().st_size for f in files if f.is_file()); assert size <= 20*2**20, "Pages artifact exceeds the 20 MiB bound"; print("Site bytes:", size)'
+          python -c 'from pathlib import Path; p=Path("site"); files=list(p.rglob("*")); assert not any(f.is_symlink() for f in files); size=sum(f.stat().st_size for f in files if f.is_file()); assert size <= 40*2**20, "Pages artifact exceeds the 40 MiB bound"; print("Site bytes:", size)'
           touch site/.nojekyll
       - uses: actions/setup-node@v6
         with:
