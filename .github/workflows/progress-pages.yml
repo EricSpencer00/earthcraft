@@ -82,8 +82,11 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
+          name: github-pages-${{ github.run_attempt }}  # re-runs keep earlier attempts' artifacts
           path: site
           retention-days: 1
       - name: Deploy Pages artifact
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
